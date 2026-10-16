@@ -59,6 +59,29 @@ pulpo fmt my-api --check            # fail CI if a file is not canonical
 pulpo send GET https://example.com  # send a one-off request
 ```
 
+## Environments and secrets
+
+Environments live in `environments/<name>.yaml`. Plain values are committed; secrets are only *declared* there and their values stay in your OS keychain (Windows Credential Manager, macOS Keychain, Secret Service on Linux).
+
+```yaml
+version: 1
+name: "Local"
+variables:
+  - name: "base"
+    value: "http://localhost:8888"
+  - name: "token"
+    secret: true
+```
+
+Use them anywhere as `{{base}}`, plus dynamic values: `{{$guid}}`, `{{$timestamp}}`, `{{$isoTimestamp}}`, `{{$randomInt}}`.
+
+```bash
+pulpo env my-api                              # list environments (secrets masked)
+pulpo secret set my-api local token           # store a secret, read from stdin
+pulpo send GET "{{base}}/health" -w my-api -e local
+PULPO_SECRET_TOKEN=... pulpo send ...         # in CI, secrets come from env vars
+```
+
 ## Roadmap
 
 | Phase | Goal |

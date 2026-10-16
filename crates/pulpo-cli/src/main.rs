@@ -1,7 +1,11 @@
 use pulpo_core::collection::{self, TreeNode};
+use pulpo_core::environment::{self, Environment, SecretStore};
 use pulpo_core::http::{self, Header, HttpRequest};
+use pulpo_core::keychain::Keychain;
+use pulpo_core::variables::{self, Variables};
 use pulpo_core::{HttpMethod, Protocol};
 use std::env;
+use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -18,12 +22,17 @@ COMMANDS:
     fmt [DIR] [--check]
                Rewrite workspace files in canonical form
                (--check only lists them and fails if any would change)
-    send <METHOD> <URL> [-H 'Name: value']... [-d BODY] [-i]
+    env [DIR]  List environments and their variables (secrets are masked)
+    secret set <DIR> <ENV> <NAME>
+               Store a secret in the OS keychain, reading the value from stdin
+    send <METHOD> <URL> [-H 'Name: value']... [-d BODY] [-i] [-w DIR -e ENV]
                Send one HTTP request and print the response body
-               (-i also prints the status line and headers)
+               -i  also print the status line and headers
+               -w/-e  resolve {{variables}} with an environment of a workspace
     version    Print the version
     help       Print this help
 
+Secrets can also come from PULPO_SECRET_<NAME> variables (handy in CI).
 More commands (run, scan) are coming. See https://github.com/pulpo-api/pulpo";
 
 fn main() -> ExitCode {
@@ -38,12 +47,14 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Some("send") => match parse_send(&args[1..]) {
-            Ok((request, include_headers)) => run_send(&request, include_headers),
+            Ok(options) => run_send(&options),
             Err(message) => usage_error(&message),
         },
         Some("init") => run_init(&args[1..]),
         Some("ls") => run_ls(&args[1..]),
         Some("fmt") => run_fmt(&args[1..]),
+        Some("env") => run_env(&args[1..]),
+        Some("secret") => run_secret(&args[1..]),
         Some(other) => usage_error(&format!("unknown command: {other}")),
     }
 }
@@ -66,6 +77,11 @@ fn dir_and_flags(args: &[String]) -> (PathBuf, Vec<&str>) {
 fn fail(message: impl std::fmt::Display) -> ExitCode {
     eprintln!("error: {message}");
     ExitCode::FAILURE
+}
+
+fn usage_error(message: &str) -> ExitCode {
+    eprintln!("{message}\n\n{HELP}");
+    ExitCode::from(2)
 }
 
 fn run_init(args: &[String]) -> ExitCode {
@@ -165,20 +181,121 @@ fn run_fmt(args: &[String]) -> ExitCode {
     }
 }
 
-fn usage_error(message: &str) -> ExitCode {
-    eprintln!("{message}\n\n{HELP}");
-    ExitCode::from(2)
+/// Finds an environment by its name (case-insensitive), file name or id.
+fn find_environment(
+    dir: &Path,
+    wanted: &str,
+    store: &dyn SecretStore,
+) -> Result<Environment, String> {
+    let all = environment::list_environments(dir, store).map_err(|e| e.to_string())?;
+    let wanted_lower = wanted.to_lowercase();
+    all.iter()
+        .find(|e| {
+            e.name.to_lowercase() == wanted_lower
+                || e.id == wanted
+                || e.id == format!("{}/{wanted}.yaml", environment::ENVIRONMENTS_DIR)
+        })
+        .cloned()
+        .ok_or_else(|| {
+            let names: Vec<_> = all.iter().map(|e| e.name.as_str()).collect();
+            format!(
+                "no environment '{wanted}' (available: {})",
+                if names.is_empty() {
+                    "none".to_string()
+                } else {
+                    names.join(", ")
+                }
+            )
+        })
 }
 
-fn parse_send(args: &[String]) -> Result<(HttpRequest, bool), String> {
+fn run_env(args: &[String]) -> ExitCode {
+    let (dir, flags) = dir_and_flags(args);
+    if !flags.is_empty() {
+        return usage_error("env: expected [DIR]");
+    }
+    match environment::list_environments(&dir, &Keychain) {
+        Ok(envs) if envs.is_empty() => {
+            println!("No environments. Create one in the app or add environments/<name>.yaml.");
+            ExitCode::SUCCESS
+        }
+        Ok(envs) => {
+            for env in envs {
+                println!("{}  ({})", env.name, env.id);
+                for var in env.variables {
+                    let value = match (var.secret, var.has_value) {
+                        (true, true) => "•••• (in keychain)".to_string(),
+                        (true, false) => "(secret not set)".to_string(),
+                        (false, _) => var.value,
+                    };
+                    println!("    {} = {value}", var.name);
+                }
+            }
+            ExitCode::SUCCESS
+        }
+        Err(e) => fail(e),
+    }
+}
+
+fn run_secret(args: &[String]) -> ExitCode {
+    let [action, dir, env_name, name] = args else {
+        return usage_error("secret: expected set <DIR> <ENV> <NAME>");
+    };
+    if action != "set" {
+        return usage_error("secret: expected set <DIR> <ENV> <NAME>");
+    }
+    let dir = Path::new(dir);
+    let mut env = match find_environment(dir, env_name, &Keychain) {
+        Ok(env) => env,
+        Err(e) => return fail(e),
+    };
+    let Some(var) = env.variables.iter_mut().find(|v| &v.name == name) else {
+        return fail(format!("'{name}' is not a variable of {}", env.name));
+    };
+    if !var.secret {
+        return fail(format!(
+            "'{name}' is not marked secret in {}; set `secret: true` first",
+            env.id
+        ));
+    }
+    eprintln!("Value for {name} (input is not stored in your shell history):");
+    let mut value = String::new();
+    if std::io::stdin().lock().read_line(&mut value).is_err() {
+        return fail("could not read the value");
+    }
+    var.value = value.trim_end_matches(['\r', '\n']).to_string();
+    if var.value.is_empty() {
+        return fail("empty value, nothing stored");
+    }
+    match environment::save_environment(dir, &env, &Keychain) {
+        Ok(()) => {
+            println!("Stored {name} for {} in the OS keychain.", env.name);
+            ExitCode::SUCCESS
+        }
+        Err(e) => fail(e),
+    }
+}
+
+struct SendOptions {
+    request: HttpRequest,
+    include_headers: bool,
+    workspace: Option<PathBuf>,
+    environment: Option<String>,
+}
+
+fn parse_send(args: &[String]) -> Result<SendOptions, String> {
     let method: HttpMethod = args
         .first()
         .ok_or("send: missing METHOD")?
         .parse()
         .map_err(|e| format!("send: {e}"))?;
     let url = args.get(1).ok_or("send: missing URL")?;
-    let mut request = HttpRequest::new(method, url.clone());
-    let mut include_headers = false;
+    let mut options = SendOptions {
+        request: HttpRequest::new(method, url.clone()),
+        include_headers: false,
+        workspace: None,
+        environment: None,
+    };
     let mut rest = args[2..].iter();
     while let Some(flag) = rest.next() {
         match flag.as_str() {
@@ -187,32 +304,57 @@ fn parse_send(args: &[String]) -> Result<(HttpRequest, bool), String> {
                 let (name, value) = raw
                     .split_once(':')
                     .ok_or_else(|| format!("send: header must be 'Name: value', got '{raw}'"))?;
-                request.headers.push(Header::new(name.trim(), value.trim()));
+                options
+                    .request
+                    .headers
+                    .push(Header::new(name.trim(), value.trim()));
             }
             "-d" | "--data" => {
-                request.body = Some(rest.next().ok_or("send: -d needs a body")?.clone());
+                options.request.body = Some(rest.next().ok_or("send: -d needs a body")?.clone());
             }
-            "-i" | "--include" => include_headers = true,
+            "-i" | "--include" => options.include_headers = true,
+            "-w" | "--workspace" => {
+                options.workspace = Some(PathBuf::from(rest.next().ok_or("send: -w needs a DIR")?));
+            }
+            "-e" | "--env" => {
+                options.environment = Some(rest.next().ok_or("send: -e needs an ENV")?.clone());
+            }
             other => return Err(format!("send: unknown option {other}")),
         }
     }
-    Ok((request, include_headers))
+    if options.environment.is_some() && options.workspace.is_none() {
+        options.workspace = Some(PathBuf::from("."));
+    }
+    Ok(options)
 }
 
-fn run_send(request: &HttpRequest, include_headers: bool) -> ExitCode {
+fn run_send(options: &SendOptions) -> ExitCode {
+    let vars = match (&options.workspace, &options.environment) {
+        (Some(dir), Some(name)) => {
+            match find_environment(dir, name, &Keychain).and_then(|env| {
+                environment::variables_for(dir, &env.id, &Keychain).map_err(|e| e.to_string())
+            }) {
+                Ok(vars) => vars,
+                Err(e) => return fail(e),
+            }
+        }
+        _ => Variables::new(),
+    };
+    let request = match variables::resolve_request(&options.request, &vars) {
+        Ok(request) => request,
+        Err(missing) => return fail(format!("unresolved variables: {}", missing.join(", "))),
+    };
+
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
     {
         Ok(runtime) => runtime,
-        Err(e) => {
-            eprintln!("could not start the runtime: {e}");
-            return ExitCode::FAILURE;
-        }
+        Err(e) => return fail(format!("could not start the runtime: {e}")),
     };
-    match runtime.block_on(http::send(request)) {
+    match runtime.block_on(http::send(&request)) {
         Ok(response) => {
-            if include_headers {
+            if options.include_headers {
                 println!(
                     "{} {} {}",
                     response.http_version, response.status, response.status_text
@@ -233,10 +375,7 @@ fn run_send(request: &HttpRequest, include_headers: bool) -> ExitCode {
                 ExitCode::SUCCESS
             }
         }
-        Err(e) => {
-            eprintln!("error: {e}");
-            ExitCode::FAILURE
-        }
+        Err(e) => fail(e),
     }
 }
 
@@ -250,21 +389,28 @@ mod tests {
 
     #[test]
     fn parses_a_full_send_command() {
-        let (request, include) = parse_send(&args(&[
+        let options = parse_send(&args(&[
             "post",
-            "http://localhost/orders",
+            "{{base}}/orders",
             "-H",
             "X-Tenant-ID: test",
             "-d",
             "{}",
             "-i",
+            "-e",
+            "Local",
         ]))
         .unwrap();
-        assert_eq!(request.method, HttpMethod::Post);
-        assert_eq!(request.url, "http://localhost/orders");
-        assert_eq!(request.headers, vec![Header::new("X-Tenant-ID", "test")]);
-        assert_eq!(request.body.as_deref(), Some("{}"));
-        assert!(include);
+        assert_eq!(options.request.method, HttpMethod::Post);
+        assert_eq!(options.request.url, "{{base}}/orders");
+        assert_eq!(
+            options.request.headers,
+            vec![Header::new("X-Tenant-ID", "test")]
+        );
+        assert_eq!(options.request.body.as_deref(), Some("{}"));
+        assert!(options.include_headers);
+        assert_eq!(options.environment.as_deref(), Some("Local"));
+        assert_eq!(options.workspace, Some(PathBuf::from(".")));
     }
 
     #[test]
@@ -275,5 +421,24 @@ mod tests {
     #[test]
     fn rejects_unknown_methods() {
         assert!(parse_send(&args(&["FETCH", "http://x"])).is_err());
+    }
+
+    #[test]
+    fn finds_environments_by_name_or_file() {
+        let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/jsonplaceholder");
+        let store = environment::MemoryStore::default();
+        assert_eq!(
+            find_environment(&example, "public", &store).unwrap().name,
+            "Public"
+        );
+        assert_eq!(
+            find_environment(&example, "environments/public.yaml", &store)
+                .unwrap()
+                .name,
+            "Public"
+        );
+        assert!(find_environment(&example, "prod", &store)
+            .unwrap_err()
+            .contains("Public"));
     }
 }

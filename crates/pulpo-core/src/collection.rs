@@ -202,7 +202,7 @@ fn parse_yaml<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, Collection
 // ---------------------------------------------------------------- canonical writer
 
 /// Quotes a string as a YAML double-quoted scalar.
-fn quote(value: &str) -> String {
+pub(crate) fn quote(value: &str) -> String {
     let mut out = String::with_capacity(value.len() + 2);
     out.push('"');
     for c in value.chars() {
@@ -541,6 +541,7 @@ pub fn format_workspace(root: &Path, check: bool) -> Result<Vec<String>, Collect
         &mut changed,
     )?;
     format_nodes(root, &workspace.tree, check, &mut changed)?;
+    changed.extend(crate::environment::format_environments(root, check)?);
     Ok(changed)
 }
 

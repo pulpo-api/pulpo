@@ -13,6 +13,11 @@ rust-version.workspace = true
 serde.workspace = true
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2", "gzip", "brotli", "deflate"] }
 serde_norway = "0.9"
+uuid = { version = "1", features = ["v4"] }
+keyring = { version = "3.6", optional = true, features = ["apple-native", "windows-native", "linux-native-sync-persistent", "crypto-rust"] }
+
+[features]
+keychain = ["dep:keyring"]
 
 [dev-dependencies]
 tempfile = "3"

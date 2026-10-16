@@ -3,12 +3,15 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue"
 import Sidebar from "./components/Sidebar.vue";
 import RequestEditor from "./components/RequestEditor.vue";
 import ResponseViewer from "./components/ResponseViewer.vue";
+import EnvironmentPanel from "./components/EnvironmentPanel.vue";
+import { resolveText } from "./variables";
 import { asSendError, coreInfo, sendHttp, type CoreInfo, type HttpResponse, type SendError } from "./core";
 import {
   asCollectionError,
   backend,
   toEntry,
   type CollectionError,
+  type Environment,
   type RequestEntry,
   type TreeNode,
   type Workspace,
@@ -31,6 +34,86 @@ const folderId = ref("");
 const results = reactive<Record<string, Result>>({});
 const problem = ref<CollectionError | null>(null);
 const confirmDelete = ref(false);
+const environments = ref<Environment[]>([]);
+const activeEnvId = ref("");
+const showEnvironments = ref(false);
+
+const envKey = () => `pulpo.env:${workspace.value?.root ?? ""}`;
+watch(activeEnvId, (id) => {
+  if (workspace.value) localStorage.setItem(envKey(), id);
+});
+
+/** Values shown in previews. Secrets are masked; in the app their real values never reach the UI. */
+const previewVars = computed(() => {
+  const env = environments.value.find((e) => e.id === activeEnvId.value);
+  const vars: Record<string, string> = {};
+  for (const v of env?.variables ?? []) {
+    if (v.secret) {
+      if (v.hasValue) vars[v.name] = "••••••";
+    } else {
+      vars[v.name] = v.value;
+    }
+  }
+  return vars;
+});
+
+const preview = computed(() => {
+  const node = selected.value;
+  if (!node) return null;
+  const missing = new Set<string>();
+  const url = resolveText(node.request.url, previewVars.value, missing, true);
+  for (const h of node.request.headers.filter((h) => h.enabled)) {
+    resolveText(h.name, previewVars.value, missing, true);
+    resolveText(h.value, previewVars.value, missing, true);
+  }
+  if (node.request.body) resolveText(node.request.body, previewVars.value, missing, true);
+  return { url, changed: url !== node.request.url, missing: [...missing].sort() };
+});
+
+async function loadEnvironments() {
+  if (!workspace.value) return;
+  try {
+    environments.value = await backend.listEnvironments(workspace.value.root);
+    const remembered = localStorage.getItem(envKey());
+    const ids = environments.value.map((e) => e.id);
+    activeEnvId.value =
+      remembered !== null && (remembered === "" || ids.includes(remembered)) ? remembered : (ids[0] ?? "");
+  } catch (e) {
+    problem.value = asCollectionError(e);
+  }
+}
+
+async function saveEnvironment(env: Environment) {
+  if (!workspace.value) return;
+  try {
+    await backend.saveEnvironment(workspace.value.root, env);
+    environments.value = await backend.listEnvironments(workspace.value.root);
+  } catch (e) {
+    problem.value = asCollectionError(e);
+  }
+}
+
+async function createEnvironment(name: string) {
+  if (!workspace.value) return;
+  try {
+    const env = await backend.createEnvironment(workspace.value.root, name);
+    environments.value = await backend.listEnvironments(workspace.value.root);
+    activeEnvId.value = env.id;
+  } catch (e) {
+    problem.value = asCollectionError(e);
+  }
+}
+
+async function deleteEnvironment(id: string) {
+  if (!workspace.value) return;
+  try {
+    await backend.deleteEnvironment(workspace.value.root, id);
+    environments.value = await backend.listEnvironments(workspace.value.root);
+    if (activeEnvId.value === id) activeEnvId.value = environments.value[0]?.id ?? "";
+  } catch (e) {
+    problem.value = asCollectionError(e);
+  }
+}
 const info = ref<CoreInfo | null>(null);
 const theme = ref<"light" | "dark">(window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
 
@@ -75,6 +158,7 @@ function adopt(ws: Workspace) {
   selectedId.value = requests.value[0]?.id ?? "";
   folderId.value = "";
   problem.value = null;
+  void loadEnvironments();
 }
 
 async function openRoot(root: string) {
@@ -180,7 +264,13 @@ async function send() {
   if (!node || node.protocol !== "http" || results[node.id]?.sending) return;
   results[node.id] = { response: null, error: null, sending: true };
   try {
-    results[node.id] = { response: await sendHttp(node.request), error: null, sending: false };
+    const environmentId = activeEnvId.value || undefined;
+    const response = await sendHttp(node.request, {
+      root: workspace.value?.root,
+      environmentId,
+      browserVars: environmentId ? backend.browserVariables?.(environmentId) : {},
+    });
+    results[node.id] = { response, error: null, sending: false };
   } catch (e) {
     results[node.id] = { response: null, error: asSendError(e), sending: false };
   }
@@ -230,6 +320,11 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
           <input v-model="selected.name" class="title" spellcheck="false" />
         </div>
         <div class="actions">
+          <select v-model="activeEnvId" class="env" title="Environment used to resolve variables">
+            <option value="">No environment</option>
+            <option v-for="env in environments" :key="env.id" :value="env.id">{{ env.name }}</option>
+          </select>
+          <button class="ghost" title="Manage environments" @click="showEnvironments = true">⚙</button>
           <button class="ghost danger" :class="{ armed: confirmDelete }" @click="deleteSelected">
             {{ confirmDelete ? "Click again to delete" : "Delete" }}
           </button>
@@ -253,6 +348,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         :request="selected.request"
         :sending="result.sending"
         :supported="selected.protocol === 'http'"
+        :preview="preview"
         @send="send"
       />
 
@@ -264,7 +360,18 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       </footer>
     </main>
 
-    <main v-else class="welcome">
+    <EnvironmentPanel
+      v-if="showEnvironments && workspace"
+      :environments="environments"
+      :active-id="activeEnvId"
+      :persistent="backend.persistent"
+      @close="showEnvironments = false"
+      @save="saveEnvironment"
+      @create="createEnvironment"
+      @remove="deleteEnvironment"
+    />
+
+    <main v-if="!(workspace && selected)" class="welcome">
       <div class="hello card">
         <img src="/pulpo.svg" width="72" height="72" alt="" />
         <h1>{{ workspace ? workspace.name : "Welcome to Pulpo" }}</h1>
@@ -324,6 +431,14 @@ main {
 .title:focus {
   border-color: var(--border);
   outline: none;
+}
+.env {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: 8px;
+  padding: 6px 8px;
+  cursor: pointer;
+  max-width: 180px;
 }
 .ghost {
   border: 1px solid var(--border);

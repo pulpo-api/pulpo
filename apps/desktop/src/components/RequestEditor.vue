@@ -2,7 +2,12 @@
 import { computed, ref } from "vue";
 import { HTTP_METHODS, type HttpRequest } from "../core";
 
-const props = defineProps<{ request: HttpRequest; sending: boolean; supported: boolean }>();
+const props = defineProps<{
+  request: HttpRequest;
+  sending: boolean;
+  supported: boolean;
+  preview: { url: string; changed: boolean; missing: string[] } | null;
+}>();
 const emit = defineEmits<{ send: [] }>();
 
 const tab = ref<"body" | "headers">("body");
@@ -39,6 +44,12 @@ function formatBody() {
       </button>
     </div>
     <p v-if="!supported" class="hint">This protocol arrives in phase 4. HTTP works today.</p>
+    <p v-else-if="preview && (preview.changed || preview.missing.length)" class="resolved">
+      <span v-if="preview.changed" class="url" :title="preview.url">→ {{ preview.url }}</span>
+      <span v-if="preview.missing.length" class="missing">
+        Missing: <code v-for="name in preview.missing" :key="name">{{ name }}</code>
+      </span>
+    </p>
 
     <div class="tabs">
       <button :class="{ on: tab === 'body' }" @click="tab = 'body'">Body</button>
@@ -131,6 +142,32 @@ textarea:focus,
   margin: 8px 2px 0;
   color: var(--muted);
   font-size: 12px;
+}
+.resolved {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin: 8px 2px 0;
+  font-size: 12px;
+  min-width: 0;
+}
+.resolved .url {
+  color: var(--muted);
+  font-family: var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.missing {
+  color: var(--m-post);
+  white-space: nowrap;
+}
+.missing code {
+  margin-left: 4px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(217, 130, 43, 0.14);
 }
 .tabs {
   display: flex;

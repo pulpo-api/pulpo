@@ -2,7 +2,7 @@ FROM rust:1-bookworm
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf file ca-certificates curl gnupg \
+      libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev pkg-config file ca-certificates curl gnupg \
  && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
  && apt-get install -y --no-install-recommends nodejs \
  && rm -rf /var/lib/apt/lists/*

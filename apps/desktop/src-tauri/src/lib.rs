@@ -1,5 +1,8 @@
 use pulpo_core::collection::{self, CollectionError, RequestEntry, Workspace};
+use pulpo_core::environment::{self, Environment};
 use pulpo_core::http::{self, HttpRequest, HttpResponse, SendError};
+use pulpo_core::keychain::Keychain;
+use pulpo_core::variables::{self, Variables};
 use pulpo_core::Protocol;
 use serde::Serialize;
 use std::path::Path;
@@ -18,9 +21,41 @@ fn core_info() -> CoreInfo {
     }
 }
 
+/// Resolves `{{variables}}` with the chosen environment (if any) and sends the request.
 #[tauri::command]
-async fn send_http(request: HttpRequest) -> Result<HttpResponse, SendError> {
-    http::send(&request).await
+async fn send_http(
+    request: HttpRequest,
+    root: Option<String>,
+    environment_id: Option<String>,
+) -> Result<HttpResponse, SendError> {
+    let vars = match (root, environment_id) {
+        (Some(root), Some(id)) => environment::variables_for(Path::new(&root), &id, &Keychain)
+            .map_err(|e| SendError::Other(e.to_string()))?,
+        _ => Variables::new(),
+    };
+    let resolved = variables::resolve_request(&request, &vars)
+        .map_err(|missing| SendError::Unresolved(missing.join(", ")))?;
+    http::send(&resolved).await
+}
+
+#[tauri::command]
+async fn list_environments(root: String) -> Result<Vec<Environment>, CollectionError> {
+    environment::list_environments(Path::new(&root), &Keychain)
+}
+
+#[tauri::command]
+async fn save_environment(root: String, env: Environment) -> Result<(), CollectionError> {
+    environment::save_environment(Path::new(&root), &env, &Keychain)
+}
+
+#[tauri::command]
+async fn create_environment(root: String, name: String) -> Result<Environment, CollectionError> {
+    environment::create_environment(Path::new(&root), &name, &Keychain)
+}
+
+#[tauri::command]
+async fn delete_environment(root: String, id: String) -> Result<(), CollectionError> {
+    environment::delete_environment(Path::new(&root), &id, &Keychain)
 }
 
 #[tauri::command]
@@ -74,7 +109,11 @@ pub fn run() {
             save_request,
             create_request,
             create_folder,
-            delete_request
+            delete_request,
+            list_environments,
+            save_environment,
+            create_environment,
+            delete_environment
         ])
         .run(tauri::generate_context!())
         .expect("error while running Pulpo");

@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { insideTauri, type HttpRequest } from "./core";
-import { sampleWorkspace } from "./sample";
+import { sampleEnvironments, sampleWorkspace } from "./sample";
 
 export type Protocol = "http" | "graphql" | "grpc" | "websocket" | "soap" | "sse";
 
@@ -17,6 +17,20 @@ export interface Workspace {
   root: string;
   name: string;
   tree: TreeNode[];
+}
+
+export interface Variable {
+  name: string;
+  value: string;
+  secret: boolean;
+  /** For secrets: whether a value is stored in the keychain. */
+  hasValue: boolean;
+}
+
+export interface Environment {
+  id: string;
+  name: string;
+  variables: Variable[];
 }
 
 export interface CollectionError {
@@ -49,6 +63,12 @@ export interface WorkspaceBackend {
   createRequest(root: string, folderId: string, name: string): Promise<RequestEntry>;
   createFolder(root: string, parentId: string, name: string): Promise<string>;
   deleteRequest(root: string, id: string): Promise<void>;
+  listEnvironments(root: string): Promise<Environment[]>;
+  saveEnvironment(root: string, env: Environment): Promise<void>;
+  createEnvironment(root: string, name: string): Promise<Environment>;
+  deleteEnvironment(root: string, id: string): Promise<void>;
+  /** Only in the browser preview: the values used to resolve requests (secrets included). */
+  browserVariables?(environmentId: string): Record<string, string>;
 }
 
 const tauriBackend: WorkspaceBackend = {
@@ -64,6 +84,10 @@ const tauriBackend: WorkspaceBackend = {
   createRequest: (root, folderId, name) => invoke<RequestEntry>("create_request", { root, folderId, name }),
   createFolder: (root, parentId, name) => invoke<string>("create_folder", { root, parentId, name }),
   deleteRequest: (root, id) => invoke<void>("delete_request", { root, id }),
+  listEnvironments: (root) => invoke<Environment[]>("list_environments", { root }),
+  saveEnvironment: (root, env) => invoke<void>("save_environment", { root, env }),
+  createEnvironment: (root, name) => invoke<Environment>("create_environment", { root, name }),
+  deleteEnvironment: (root, id) => invoke<void>("delete_environment", { root, id }),
 };
 
 function slugify(name: string): string {
@@ -78,6 +102,9 @@ function slugify(name: string): string {
 
 function memoryBackend(): WorkspaceBackend {
   let workspace = sampleWorkspace();
+  const environments: Environment[] = sampleEnvironments();
+  const secrets = new Map<string, string>();
+  const secretKey = (envId: string, name: string) => `${envId}|${name}`;
 
   function childrenOf(folderId: string): TreeNode[] {
     if (!folderId) return workspace.tree;
@@ -145,6 +172,43 @@ function memoryBackend(): WorkspaceBackend {
         return nodes.some((n) => n.type === "folder" && remove(n.children));
       };
       remove(workspace.tree);
+    },
+    async listEnvironments() {
+      return clone(environments).map((env) => ({
+        ...env,
+        variables: env.variables.map((v) =>
+          v.secret ? { ...v, value: "", hasValue: secrets.has(secretKey(env.id, v.name)) } : { ...v, hasValue: true },
+        ),
+      }));
+    },
+    async saveEnvironment(_root, env) {
+      for (const v of env.variables) {
+        if (v.secret && v.value) secrets.set(secretKey(env.id, v.name), v.value);
+      }
+      const index = environments.findIndex((e) => e.id === env.id);
+      const stored = { ...clone(env), variables: env.variables.map((v) => ({ ...v, value: v.secret ? "" : v.value })) };
+      if (index >= 0) environments[index] = stored;
+      else environments.push(stored);
+    },
+    async createEnvironment(_root, name) {
+      let id = `environments/${slugify(name)}.yaml`;
+      for (let n = 2; environments.some((e) => e.id === id); n++) id = `environments/${slugify(name)}-${n}.yaml`;
+      const env: Environment = { id, name, variables: [] };
+      environments.push(clone(env));
+      return env;
+    },
+    async deleteEnvironment(_root, id) {
+      const index = environments.findIndex((e) => e.id === id);
+      if (index >= 0) environments.splice(index, 1);
+    },
+    browserVariables(environmentId) {
+      const env = environments.find((e) => e.id === environmentId);
+      const vars: Record<string, string> = {};
+      for (const v of env?.variables ?? []) {
+        const value = v.secret ? secrets.get(secretKey(environmentId, v.name)) : v.value;
+        if (value !== undefined) vars[v.name] = value;
+      }
+      return vars;
     },
   };
 }

@@ -1,5 +1,5 @@
 {
   "title": "Hello from Pulpo",
   "body": "Eight arms, one client.",
-  "userId": 1
+  "userId": {{userId}}
 }

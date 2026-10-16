@@ -14,5 +14,5 @@ name = "pulpo"
 path = "src/main.rs"
 
 [dependencies]
-pulpo-core.workspace = true
+pulpo-core = { workspace = true, features = ["keychain"] }
 tokio = { workspace = true, features = ["rt"] }

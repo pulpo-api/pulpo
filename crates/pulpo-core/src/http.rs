@@ -79,6 +79,7 @@ pub enum SendError {
     InvalidHeader(String),
     Timeout(String),
     Connect(String),
+    Unresolved(String),
     Other(String),
 }
 
@@ -89,6 +90,7 @@ impl fmt::Display for SendError {
             SendError::InvalidHeader(m) => write!(f, "invalid header: {m}"),
             SendError::Timeout(m) => write!(f, "timed out: {m}"),
             SendError::Connect(m) => write!(f, "could not connect: {m}"),
+            SendError::Unresolved(m) => write!(f, "unresolved variables: {m}"),
             SendError::Other(m) => f.write_str(m),
         }
     }

@@ -1,5 +1,5 @@
 import type { HttpRequest } from "./core";
-import type { Protocol, TreeNode, Workspace } from "./workspace";
+import type { Environment, Protocol, TreeNode, Workspace } from "./workspace";
 
 const json = [{ name: "Content-Type", value: "application/json", enabled: true }];
 
@@ -25,21 +25,21 @@ export function sampleWorkspace(): Workspace {
         children: [
           request("01-posts/01-list-posts.pulpo.yaml", "List posts", {
             method: "GET",
-            url: "https://jsonplaceholder.typicode.com/posts?_limit=5",
+            url: "{{base}}/posts?_limit=5",
           }),
           request("01-posts/02-get-a-post.pulpo.yaml", "Get a post", {
             method: "GET",
-            url: "https://jsonplaceholder.typicode.com/posts/1",
+            url: "{{base}}/posts/1",
           }),
           request("01-posts/03-create-a-post.pulpo.yaml", "Create a post", {
             method: "POST",
-            url: "https://jsonplaceholder.typicode.com/posts",
+            url: "{{base}}/posts",
             headers: json,
-            body: '{\n  "title": "Hello from Pulpo",\n  "body": "Eight arms, one client.",\n  "userId": 1\n}\n',
+            body: '{\n  "title": "Hello from Pulpo",\n  "body": "Eight arms, one client.",\n  "userId": {{userId}}\n}\n',
           }),
           request("01-posts/04-delete-a-post.pulpo.yaml", "Delete a post", {
             method: "DELETE",
-            url: "https://jsonplaceholder.typicode.com/posts/1",
+            url: "{{base}}/posts/1",
           }),
         ],
       },
@@ -50,10 +50,23 @@ export function sampleWorkspace(): Workspace {
         children: [
           request("02-users/01-list-users.pulpo.yaml", "List users", {
             method: "GET",
-            url: "https://jsonplaceholder.typicode.com/users",
+            url: "{{base}}/users",
           }),
         ],
       },
     ],
   };
+}
+
+export function sampleEnvironments(): Environment[] {
+  return [
+    {
+      id: "environments/public.yaml",
+      name: "Public",
+      variables: [
+        { name: "base", value: "https://jsonplaceholder.typicode.com", secret: false, hasValue: true },
+        { name: "userId", value: "1", secret: false, hasValue: true },
+      ],
+    },
+  ];
 }

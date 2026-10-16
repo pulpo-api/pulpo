@@ -34,6 +34,7 @@ const errorTitle: Record<SendError["kind"], string> = {
   invalidHeader: "Invalid header",
   timeout: "Timed out",
   connect: "Could not connect",
+  unresolved: "Missing variables",
   other: "Request failed",
 };
 </script>
@@ -45,6 +46,7 @@ const errorTitle: Record<SendError["kind"], string> = {
     <div v-else-if="error" class="error">
       <strong>{{ errorTitle[error.kind] }}</strong>
       <p>{{ error.message }}</p>
+      <p v-if="error.kind === 'unresolved'" class="tip">Pick an environment that defines them, or add them with ⚙.</p>
     </div>
 
     <template v-else-if="response">
@@ -166,6 +168,9 @@ const errorTitle: Record<SendError["kind"], string> = {
 .error {
   border-left: 3px solid var(--m-delete);
   padding: 4px 12px;
+}
+.error .tip {
+  font-family: var(--sans);
 }
 .error p {
   margin: 6px 0 0;

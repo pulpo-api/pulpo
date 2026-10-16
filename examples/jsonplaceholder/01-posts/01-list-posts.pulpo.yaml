@@ -3,4 +3,4 @@ version: 1
 name: "List posts"
 protocol: "http"
 method: "GET"
-url: "https://jsonplaceholder.typicode.com/posts?_limit=5"
+url: "{{base}}/posts?_limit=5"

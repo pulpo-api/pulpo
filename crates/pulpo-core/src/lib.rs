@@ -8,7 +8,11 @@ use std::fmt;
 use std::str::FromStr;
 
 pub mod collection;
+pub mod environment;
 pub mod http;
+#[cfg(feature = "keychain")]
+pub mod keychain;
+pub mod variables;
 
 /// Version of the Pulpo core engine.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

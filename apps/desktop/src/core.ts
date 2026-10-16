@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { resolveText, type Vars } from "./variables";
 
 export interface CoreInfo {
   version: string;
@@ -35,7 +36,7 @@ export interface HttpResponse {
 }
 
 export interface SendError {
-  kind: "invalidUrl" | "invalidHeader" | "timeout" | "connect" | "other";
+  kind: "invalidUrl" | "invalidHeader" | "timeout" | "connect" | "unresolved" | "other";
   message: string;
 }
 
@@ -48,11 +49,29 @@ export async function coreInfo(): Promise<CoreInfo> {
   return invoke<CoreInfo>("core_info");
 }
 
-export async function sendHttp(request: HttpRequest): Promise<HttpResponse> {
+/** Sends a request. In the app, variables are resolved by pulpo-core with the chosen
+ * environment (secrets come from the OS keychain). In the browser preview, `browserVars` is used. */
+export async function sendHttp(
+  request: HttpRequest,
+  context: { root?: string; environmentId?: string; browserVars?: Vars } = {},
+): Promise<HttpResponse> {
   if (insideTauri) {
-    return invoke<HttpResponse>("send_http", { request });
+    return invoke<HttpResponse>("send_http", { request, root: context.root, environmentId: context.environmentId });
   }
-  return sendWithFetch(request);
+  const missing = new Set<string>();
+  const vars = context.browserVars ?? {};
+  const resolved: HttpRequest = {
+    ...request,
+    url: resolveText(request.url, vars, missing),
+    headers: request.headers.map((h) =>
+      h.enabled ? { ...h, name: resolveText(h.name, vars, missing), value: resolveText(h.value, vars, missing) } : h,
+    ),
+    body: request.body === null ? null : resolveText(request.body, vars, missing),
+  };
+  if (missing.size) {
+    throw { kind: "unresolved", message: [...missing].sort().join(", ") } satisfies SendError;
+  }
+  return sendWithFetch(resolved);
 }
 
 async function sendWithFetch(request: HttpRequest): Promise<HttpResponse> {

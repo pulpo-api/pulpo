@@ -1,0 +1,7 @@
+version: 1
+name: "Public"
+variables:
+  - name: "base"
+    value: "https://jsonplaceholder.typicode.com"
+  - name: "userId"
+    value: "1"
