@@ -423,6 +423,7 @@ pub(super) fn document(doc: &Value) -> Result<ImportPlan, ImportError> {
                         body,
                         timeout_ms: None,
                     },
+                    scripts: Default::default(),
                 },
             );
         }
@@ -475,9 +476,14 @@ pub(super) fn document(doc: &Value) -> Result<ImportPlan, ImportError> {
     Ok(ImportPlan {
         format: ImportFormat::OpenApi,
         folder: Some(title.clone()),
+        folder_scripts: Default::default(),
         nodes: folders
             .into_iter()
-            .map(|(name, children)| ImportNode::Folder { name, children })
+            .map(|(name, children)| ImportNode::Folder {
+                name,
+                children,
+                scripts: Default::default(),
+            })
             .collect(),
         environments: vec![Environment {
             id: String::new(),
@@ -577,7 +583,7 @@ components:
             .nodes
             .iter()
             .map(|n| match n {
-                ImportNode::Folder { name, children } => format!("{name}:{}", children.len()),
+                ImportNode::Folder { name, children, .. } => format!("{name}:{}", children.len()),
                 ImportNode::Request { name, .. } => name.clone(),
             })
             .collect();
@@ -586,7 +592,7 @@ components:
         let ImportNode::Folder { children, .. } = &plan.nodes[0] else {
             panic!()
         };
-        let ImportNode::Request { name, request } = &children[0] else {
+        let ImportNode::Request { name, request, .. } = &children[0] else {
             panic!()
         };
         assert_eq!(name, "List orders");
@@ -600,7 +606,7 @@ components:
             .iter()
             .any(|h| h.name == "X-Tenant-ID" && h.value == "{{X-Tenant-ID}}"));
 
-        let ImportNode::Request { name, request } = &children[1] else {
+        let ImportNode::Request { name, request, .. } = &children[1] else {
             panic!()
         };
         assert_eq!(name, "createOrder");
@@ -610,7 +616,7 @@ components:
             json!({"storeId": "{{$guid}}", "items": [{"sku": "SKU-1", "quantity": 1}], "mode": "PICKUP"})
         );
 
-        let ImportNode::Request { name, request } = &children[2] else {
+        let ImportNode::Request { name, request, .. } = &children[2] else {
             panic!()
         };
         assert_eq!(name, "DELETE /orders/{orderId}");

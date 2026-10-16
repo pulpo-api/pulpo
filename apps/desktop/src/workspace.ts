@@ -1,14 +1,36 @@
 import { invoke } from "@tauri-apps/api/core";
-import { insideTauri, type HttpRequest } from "./core";
+import { insideTauri, sendHttp, asSendError, type HttpRequest, type HttpResponse, type SendError } from "./core";
 import { sampleEnvironments, sampleWorkspace } from "./sample";
 
 export type Protocol = "http" | "graphql" | "grpc" | "websocket" | "soap" | "sse";
+
+export interface Scripts {
+  pre: string;
+  test: string;
+}
 
 export interface RequestEntry {
   id: string;
   name: string;
   protocol: Protocol;
   request: HttpRequest;
+  scripts: Scripts;
+}
+
+export interface TestResult {
+  name: string;
+  passed: boolean;
+  error: string | null;
+}
+
+export interface RunReport {
+  id: string;
+  name: string;
+  response: HttpResponse | null;
+  error: SendError | null;
+  tests: TestResult[];
+  logs: string[];
+  scriptErrors: string[];
 }
 
 export type TreeNode = ({ type: "request" } & RequestEntry) | { type: "folder"; id: string; name: string; children: TreeNode[] };
@@ -58,8 +80,8 @@ export function clone<T>(value: T): T {
 }
 
 export function toEntry(node: Extract<TreeNode, { type: "request" }>): RequestEntry {
-  const { id, name, protocol, request } = node;
-  return clone({ id, name, protocol, request });
+  const { id, name, protocol, request, scripts } = node;
+  return clone({ id, name, protocol, request, scripts: scripts ?? { pre: "", test: "" } });
 }
 
 /** Where the workspace lives: real files in the desktop app, memory in the browser preview. */
@@ -79,6 +101,8 @@ export interface WorkspaceBackend {
   /** Desktop only: imports a file (or pasted text) with the Rust importers. */
   importInto?(root: string, folderId: string, source: { path?: string; text?: string }): Promise<ImportSummary>;
   pickImportFile?(): Promise<string | null>;
+  /** Sends the request with its scripts; `entry` may contain unsaved edits. */
+  run(root: string, entry: RequestEntry, environmentId: string | undefined): Promise<RunReport>;
   /** Only in the browser preview: the values used to resolve requests (secrets included). */
   browserVariables?(environmentId: string): Record<string, string>;
 }
@@ -100,6 +124,7 @@ const tauriBackend: WorkspaceBackend = {
   saveEnvironment: (root, env) => invoke<void>("save_environment", { root, env }),
   createEnvironment: (root, name) => invoke<Environment>("create_environment", { root, name }),
   deleteEnvironment: (root, id) => invoke<void>("delete_environment", { root, id }),
+  run: (root, entry, environmentId) => invoke<RunReport>("run_request", { root, entry, environmentId }),
   importInto: (root, folderId, source) => invoke<ImportSummary>("import_into", { root, folderId, ...source }),
   async pickImportFile() {
     const { open } = await import("@tauri-apps/plugin-dialog");
@@ -174,6 +199,7 @@ function memoryBackend(): WorkspaceBackend {
         name,
         protocol: "http",
         request: { method: "GET", url: "https://", headers: [], body: null },
+        scripts: { pre: "", test: "" },
       };
       children.push({ type: "request", ...clone(entry) });
       return entry;
@@ -222,6 +248,28 @@ function memoryBackend(): WorkspaceBackend {
     async deleteEnvironment(_root, id) {
       const index = environments.findIndex((e) => e.id === id);
       if (index >= 0) environments.splice(index, 1);
+    },
+    async run(_root, entry, environmentId) {
+      const report: RunReport = {
+        id: entry.id,
+        name: entry.name,
+        response: null,
+        error: null,
+        tests: [],
+        logs: [],
+        scriptErrors: [],
+      };
+      const hasScripts = !!(entry.scripts.pre.trim() || entry.scripts.test.trim());
+      if (hasScripts) report.scriptErrors.push("Scripts run in the desktop app; the browser preview only sends the request.");
+      try {
+        report.response = await sendHttp(entry.request, {
+          environmentId,
+          browserVars: environmentId ? this.browserVariables!(environmentId) : {},
+        });
+      } catch (e) {
+        report.error = asSendError(e);
+      }
+      return report;
     },
     browserVariables(environmentId) {
       const env = environments.find((e) => e.id === environmentId);

@@ -98,7 +98,28 @@ pub struct RequestEntry {
     pub name: String,
     pub protocol: Protocol,
     pub request: HttpRequest,
+    #[serde(default)]
+    pub scripts: Scripts,
 }
+
+/// Pre-request and test scripts, stored next to the request (or folder) as
+/// `<stem>.pre.js` and `<stem>.test.js`. Empty scripts mean "no file".
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Scripts {
+    #[serde(default)]
+    pub pre: String,
+    #[serde(default)]
+    pub test: String,
+}
+
+impl Scripts {
+    pub fn is_empty(&self) -> bool {
+        self.pre.trim().is_empty() && self.test.trim().is_empty()
+    }
+}
+
+pub const FOLDER_SCRIPT_STEM: &str = "_folder";
 
 /// A node of the collection tree.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -294,6 +315,70 @@ fn stem_of(request_file: &Path) -> String {
         .to_string()
 }
 
+fn script_path(stem_file: &Path, stem: &str, phase: &str) -> PathBuf {
+    stem_file.with_file_name(format!("{stem}.{phase}.js"))
+}
+
+fn read_script(path: &Path) -> Result<String, CollectionError> {
+    match fs::read_to_string(path) {
+        Ok(text) => Ok(text),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(io_error(path, e)),
+    }
+}
+
+fn write_script(path: &Path, source: &str) -> Result<(), CollectionError> {
+    if source.trim().is_empty() {
+        if path.exists() {
+            fs::remove_file(path).map_err(|e| io_error(path, e))?;
+        }
+        Ok(())
+    } else {
+        fs::write(path, source).map_err(|e| io_error(path, e))
+    }
+}
+
+fn read_scripts(file: &Path, stem: &str) -> Result<Scripts, CollectionError> {
+    Ok(Scripts {
+        pre: read_script(&script_path(file, stem, "pre"))?,
+        test: read_script(&script_path(file, stem, "test"))?,
+    })
+}
+
+fn write_scripts(file: &Path, stem: &str, scripts: &Scripts) -> Result<(), CollectionError> {
+    write_script(&script_path(file, stem, "pre"), &scripts.pre)?;
+    write_script(&script_path(file, stem, "test"), &scripts.test)
+}
+
+/// Scripts of a folder (`""` = workspace root), from `_folder.pre.js` and `_folder.test.js`.
+pub fn folder_scripts(root: &Path, folder_id: &str) -> Result<Scripts, CollectionError> {
+    let dir = resolve(root, folder_id)?;
+    read_scripts(&dir.join(FOLDER_FILE), FOLDER_SCRIPT_STEM)
+}
+
+/// Writes the scripts of a folder (`""` = workspace root). Empty scripts remove the files.
+pub fn save_folder_scripts(
+    root: &Path,
+    folder_id: &str,
+    scripts: &Scripts,
+) -> Result<(), CollectionError> {
+    let dir = resolve(root, folder_id)?;
+    if !dir.is_dir() {
+        return Err(CollectionError::InvalidPath(folder_id.to_string()));
+    }
+    write_scripts(&dir.join(FOLDER_FILE), FOLDER_SCRIPT_STEM, scripts)
+}
+
+/// The folders a request lives in, from the workspace root down: `["", "a", "a/b"]`.
+pub fn ancestor_folders(request_id: &str) -> Vec<String> {
+    let mut folders = vec![String::new()];
+    let parts: Vec<&str> = request_id.split('/').collect();
+    for i in 1..parts.len() {
+        folders.push(parts[..i].join("/"));
+    }
+    folders
+}
+
 fn body_path(request_file: &Path, kind: BodyKind) -> PathBuf {
     request_file.with_file_name(format!(
         "{}.body.{}",
@@ -437,6 +522,7 @@ fn load_request_file(root: &Path, path: &Path) -> Result<RequestEntry, Collectio
             body,
             timeout_ms: file.timeout_ms,
         },
+        scripts: read_scripts(path, &stem_of(path))?,
     })
 }
 
@@ -474,6 +560,7 @@ pub fn save_request(root: &Path, entry: &RequestEntry) -> Result<(), CollectionE
         let sidecar = body_path(&path, kind);
         fs::write(&sidecar, body).map_err(|e| io_error(&sidecar, e))?;
     }
+    write_scripts(&path, &stem_of(&path), &entry.scripts)?;
     fs::write(&path, request_yaml(entry, kind)).map_err(|e| io_error(&path, e))
 }
 
@@ -497,6 +584,7 @@ pub fn create_request(
         name: name.to_string(),
         protocol: Protocol::Http,
         request: HttpRequest::new(HttpMethod::Get, "https://"),
+        scripts: Scripts::default(),
     };
     save_request(root, &entry)?;
     Ok(entry)
@@ -515,7 +603,7 @@ pub fn create_folder(root: &Path, parent_id: &str, name: &str) -> Result<String,
     Ok(relative_id(root, &dir))
 }
 
-/// Deletes a request and its body file.
+/// Deletes a request and its body and script files.
 pub fn delete_request(root: &Path, id: &str) -> Result<(), CollectionError> {
     let path = request_path(root, id)?;
     for kind in BodyKind::ALL {
@@ -524,6 +612,7 @@ pub fn delete_request(root: &Path, id: &str) -> Result<(), CollectionError> {
             fs::remove_file(&sidecar).map_err(|e| io_error(&sidecar, e))?;
         }
     }
+    write_scripts(&path, &stem_of(&path), &Scripts::default())?;
     fs::remove_file(&path).map_err(|e| io_error(&path, e))
 }
 
@@ -627,7 +716,49 @@ mod tests {
                 body: Some("{\n  \"a\": 1\n}\n".to_string()),
                 timeout_ms: Some(5000),
             },
+            scripts: Scripts::default(),
         }
+    }
+
+    #[test]
+    fn stores_request_and_folder_scripts_next_to_their_files() {
+        let ws = workspace();
+        let folder = create_folder(ws.path(), "", "Orders").unwrap();
+        let mut entry = sample(&format!("{folder}/01-create.pulpo.yaml"));
+        entry.scripts = Scripts {
+            pre: "pm.variables.set('a', 1);\n".into(),
+            test: "pm.test('ok', () => {});\n".into(),
+        };
+        save_request(ws.path(), &entry).unwrap();
+        assert!(ws.path().join(&folder).join("01-create.pre.js").is_file());
+        assert_eq!(
+            load_request(ws.path(), &entry.id).unwrap().scripts,
+            entry.scripts
+        );
+
+        entry.scripts.pre.clear();
+        save_request(ws.path(), &entry).unwrap();
+        assert!(!ws.path().join(&folder).join("01-create.pre.js").exists());
+
+        let scripts = Scripts {
+            pre: "console.log(1);".into(),
+            test: String::new(),
+        };
+        save_folder_scripts(ws.path(), &folder, &scripts).unwrap();
+        save_folder_scripts(ws.path(), "", &scripts).unwrap();
+        assert_eq!(folder_scripts(ws.path(), &folder).unwrap(), scripts);
+        assert!(ws.path().join("_folder.pre.js").is_file());
+        assert_eq!(
+            ancestor_folders(&entry.id),
+            vec![String::new(), folder.clone()]
+        );
+        assert!(
+            format_workspace(ws.path(), true).unwrap().is_empty(),
+            "scripts are not reformatted"
+        );
+
+        delete_request(ws.path(), &entry.id).unwrap();
+        assert!(!ws.path().join(&folder).join("01-create.test.js").exists());
     }
 
     #[test]

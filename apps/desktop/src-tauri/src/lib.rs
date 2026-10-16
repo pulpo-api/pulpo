@@ -1,8 +1,9 @@
-use pulpo_core::collection::{self, CollectionError, RequestEntry, Workspace};
+use pulpo_core::collection::{self, CollectionError, RequestEntry, Scripts, Workspace};
 use pulpo_core::environment::{self, Environment};
 use pulpo_core::http::{self, HttpRequest, HttpResponse, SendError};
 use pulpo_core::import::{self, ImportSummary};
 use pulpo_core::keychain::Keychain;
+use pulpo_core::run::{self, RunReport};
 use pulpo_core::variables::{self, Variables};
 use pulpo_core::Protocol;
 use serde::Serialize;
@@ -37,6 +38,44 @@ async fn send_http(
     let resolved = variables::resolve_request(&request, &vars)
         .map_err(|missing| SendError::Unresolved(missing.join(", ")))?;
     http::send(&resolved).await
+}
+
+/// Runs a request with its folder and own scripts. `entry` may contain unsaved edits.
+#[tauri::command]
+async fn run_request(
+    root: String,
+    entry: RequestEntry,
+    environment_id: Option<String>,
+) -> RunReport {
+    run::run_entry(
+        Path::new(&root),
+        &entry,
+        environment_id.as_deref(),
+        &Keychain,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn folder_scripts(root: String, folder_id: String) -> Result<Scripts, CollectionError> {
+    collection::folder_scripts(Path::new(&root), &folder_id)
+}
+
+#[tauri::command]
+async fn save_folder_scripts(
+    root: String,
+    folder_id: String,
+    scripts: Scripts,
+) -> Result<(), CollectionError> {
+    collection::save_folder_scripts(Path::new(&root), &folder_id, &scripts)
+}
+
+#[tauri::command]
+async fn clear_local_values(
+    root: String,
+    environment_id: Option<String>,
+) -> Result<(), CollectionError> {
+    pulpo_core::local::clear_local(Path::new(&root), environment_id.as_deref())
 }
 
 #[tauri::command]
@@ -133,7 +172,11 @@ pub fn run() {
             save_environment,
             create_environment,
             delete_environment,
-            import_into
+            import_into,
+            run_request,
+            folder_scripts,
+            save_folder_scripts,
+            clear_local_values
         ])
         .run(tauri::generate_context!())
         .expect("error while running Pulpo");

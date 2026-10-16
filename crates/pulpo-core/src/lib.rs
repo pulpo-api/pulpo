@@ -13,6 +13,9 @@ pub mod http;
 pub mod import;
 #[cfg(feature = "keychain")]
 pub mod keychain;
+pub mod local;
+pub mod run;
+pub mod script;
 pub mod variables;
 
 /// Version of the Pulpo core engine.

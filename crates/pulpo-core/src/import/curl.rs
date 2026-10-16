@@ -294,9 +294,11 @@ pub(super) fn plan(command: &str) -> Result<ImportPlan, ImportError> {
     Ok(ImportPlan {
         format: ImportFormat::Curl,
         folder: None,
+        folder_scripts: Default::default(),
         nodes: vec![ImportNode::Request {
             name: name_for(&request),
             request,
+            scripts: Default::default(),
         }],
         environments: Vec::new(),
         warnings,

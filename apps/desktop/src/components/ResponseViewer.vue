@@ -1,10 +1,19 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import type { HttpResponse, SendError } from "../core";
+import type { TestResult } from "../workspace";
 
-const props = defineProps<{ response: HttpResponse | null; error: SendError | null; sending: boolean }>();
+const props = defineProps<{
+  response: HttpResponse | null;
+  error: SendError | null;
+  sending: boolean;
+  tests: TestResult[];
+  logs: string[];
+  scriptErrors: string[];
+}>();
 
-const tab = ref<"body" | "headers">("body");
+const tab = ref<"body" | "headers" | "tests" | "console">("body");
+const failed = computed(() => props.tests.filter((t) => !t.passed).length);
 
 const pretty = computed(() => {
   const body = props.response?.body ?? "";
@@ -45,6 +54,9 @@ const errorTitle: Record<SendError["kind"], string> = {
 
     <div v-else-if="error" class="error">
       <strong>{{ errorTitle[error.kind] }}</strong>
+      <ul v-if="scriptErrors.length" class="script-errors">
+        <li v-for="(e, i) in scriptErrors" :key="i">{{ e }}</li>
+      </ul>
       <p>{{ error.message }}</p>
       <p v-if="error.kind === 'unresolved'" class="tip">Pick an environment that defines them, or add them with ⚙.</p>
     </div>
@@ -56,8 +68,23 @@ const errorTitle: Record<SendError["kind"], string> = {
         <span class="spacer"></span>
         <button :class="{ on: tab === 'body' }" @click="tab = 'body'">Body</button>
         <button :class="{ on: tab === 'headers' }" @click="tab = 'headers'">Headers {{ response.headers.length }}</button>
+        <button v-if="tests.length" :class="{ on: tab === 'tests', bad: failed }" @click="tab = 'tests'">
+          Tests {{ tests.length - failed }}/{{ tests.length }}
+        </button>
+        <button v-if="logs.length || scriptErrors.length" :class="{ on: tab === 'console', bad: scriptErrors.length }" @click="tab = 'console'">
+          Console
+        </button>
       </div>
       <pre v-if="tab === 'body'" class="code">{{ pretty || "(empty body)" }}</pre>
+      <ul v-else-if="tab === 'tests'" class="code list">
+        <li v-for="(t, i) in tests" :key="i" :class="t.passed ? 'pass' : 'fail'">
+          <span>{{ t.passed ? "✓" : "✗" }}</span> {{ t.name }}<em v-if="t.error"> — {{ t.error }}</em>
+        </li>
+      </ul>
+      <ul v-else-if="tab === 'console'" class="code list">
+        <li v-for="(e, i) in scriptErrors" :key="`e${i}`" class="fail">! {{ e }}</li>
+        <li v-for="(l, i) in logs" :key="`l${i}`">{{ l }}</li>
+      </ul>
       <table v-else class="code table">
         <tbody>
           <tr v-for="(h, i) in response.headers" :key="i">
@@ -102,6 +129,33 @@ const errorTitle: Record<SendError["kind"], string> = {
 }
 .spacer {
   flex: 1;
+}
+.status button.bad {
+  color: var(--m-delete);
+}
+.list {
+  list-style: none;
+}
+.list li {
+  padding: 2px 0;
+}
+.list .pass span {
+  color: var(--ok);
+}
+.list .fail,
+.list .fail span {
+  color: var(--m-delete);
+}
+.list em {
+  color: var(--muted);
+  font-style: normal;
+}
+.script-errors {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  color: var(--m-delete);
+  font-family: var(--mono);
+  font-size: 12px;
 }
 .muted {
   color: var(--muted);

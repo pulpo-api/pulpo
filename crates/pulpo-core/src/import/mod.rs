@@ -7,7 +7,7 @@ mod curl;
 mod openapi;
 mod postman;
 
-use crate::collection::{self, CollectionError, RequestEntry};
+use crate::collection::{self, CollectionError, RequestEntry, Scripts};
 use crate::environment::{self, Environment, SecretStore};
 use crate::http::HttpRequest;
 use crate::Protocol;
@@ -23,10 +23,12 @@ pub enum ImportNode {
     Folder {
         name: String,
         children: Vec<ImportNode>,
+        scripts: Scripts,
     },
     Request {
         name: String,
         request: HttpRequest,
+        scripts: Scripts,
     },
 }
 
@@ -36,6 +38,8 @@ pub struct ImportPlan {
     pub format: ImportFormat,
     /// When set, the nodes go inside a new folder with this name.
     pub folder: Option<String>,
+    /// Scripts of the top level (a Postman collection's own scripts).
+    pub folder_scripts: Scripts,
     pub nodes: Vec<ImportNode>,
     pub environments: Vec<Environment>,
     pub warnings: Vec<String>,
@@ -199,6 +203,9 @@ pub fn apply(
         None => folder_id.to_string(),
     };
     summary.folder_id = target.clone();
+    if !plan.folder_scripts.is_empty() {
+        collection::save_folder_scripts(root, &target, &plan.folder_scripts)?;
+    }
     write_nodes(root, &target, &plan.nodes, &mut summary)?;
 
     for env in &plan.environments {
@@ -234,12 +241,23 @@ fn write_nodes(
 ) -> Result<(), CollectionError> {
     for node in nodes {
         match node {
-            ImportNode::Folder { name, children } => {
+            ImportNode::Folder {
+                name,
+                children,
+                scripts,
+            } => {
                 let id = collection::create_folder(root, folder_id, name)?;
+                if !scripts.is_empty() {
+                    collection::save_folder_scripts(root, &id, scripts)?;
+                }
                 summary.folders += 1;
                 write_nodes(root, &id, children, summary)?;
             }
-            ImportNode::Request { name, request } => {
+            ImportNode::Request {
+                name,
+                request,
+                scripts,
+            } => {
                 let created = collection::create_request(root, folder_id, name)?;
                 collection::save_request(
                     root,
@@ -248,6 +266,7 @@ fn write_nodes(
                         name: name.clone(),
                         protocol: Protocol::Http,
                         request: request.clone(),
+                        scripts: scripts.clone(),
                     },
                 )?;
                 summary.requests += 1;

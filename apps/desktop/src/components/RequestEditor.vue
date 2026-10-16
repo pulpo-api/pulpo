@@ -1,16 +1,18 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { HTTP_METHODS, type HttpRequest } from "../core";
+import type { Scripts } from "../workspace";
 
 const props = defineProps<{
   request: HttpRequest;
+  scripts: Scripts;
   sending: boolean;
   supported: boolean;
   preview: { url: string; changed: boolean; missing: string[] } | null;
 }>();
 const emit = defineEmits<{ send: [] }>();
 
-const tab = ref<"body" | "headers">("body");
+const tab = ref<"body" | "headers" | "pre" | "test">("body");
 const hasBody = computed(() => !["GET", "HEAD"].includes(props.request.method));
 const activeHeaders = computed(() => props.request.headers.filter((h) => h.enabled && h.name.trim()).length);
 
@@ -56,6 +58,12 @@ function formatBody() {
       <button :class="{ on: tab === 'headers' }" @click="tab = 'headers'">
         Headers <span v-if="activeHeaders" class="count">{{ activeHeaders }}</span>
       </button>
+      <button :class="{ on: tab === 'pre' }" @click="tab = 'pre'">
+        Pre-request <span v-if="scripts.pre.trim()" class="dot"></span>
+      </button>
+      <button :class="{ on: tab === 'test' }" @click="tab = 'test'">
+        Tests <span v-if="scripts.test.trim()" class="dot"></span>
+      </button>
       <span class="spacer"></span>
       <button v-if="tab === 'body' && hasBody" class="link" @click="formatBody">Format JSON</button>
       <span class="kbd">Ctrl ↵ to send</span>
@@ -71,6 +79,23 @@ function formatBody() {
         @input="request.body = ($event.target as HTMLTextAreaElement).value || null"
       ></textarea>
       <p v-else class="empty">{{ request.method }} requests have no body.</p>
+    </template>
+
+    <template v-else-if="tab === 'pre' || tab === 'test'">
+      <textarea
+        v-model="scripts[tab]"
+        class="code"
+        spellcheck="false"
+        :placeholder="
+          tab === 'pre'
+            ? 'Runs before sending. e.g. pm.request.headers.upsert({ key: \'X-Request-Id\', value: pm.variables.replaceIn(\'{{$guid}}\') });'
+            : 'Runs after the response. e.g. pm.test(\'is 200\', () => pm.response.to.have.status(200));\npm.environment.set(\'orderId\', pm.response.json().id);'
+        "
+      ></textarea>
+      <p class="hint">
+        Saved as <code>{{ tab === "pre" ? ".pre.js" : ".test.js" }}</code> next to the request. Postman's <code>pm.*</code> API:
+        variables, request, response, <code>pm.test</code>, <code>pm.expect</code>. Values set here stay local (in <code>.pulpo/</code>).
+      </p>
     </template>
 
     <div v-else class="headers">
@@ -198,6 +223,15 @@ textarea:focus,
 }
 .spacer {
   flex: 1;
+}
+.dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+  vertical-align: middle;
 }
 .kbd {
   color: var(--muted);

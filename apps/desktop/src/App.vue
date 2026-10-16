@@ -6,7 +6,7 @@ import ResponseViewer from "./components/ResponseViewer.vue";
 import EnvironmentPanel from "./components/EnvironmentPanel.vue";
 import ImportDialog from "./components/ImportDialog.vue";
 import { resolveText } from "./variables";
-import { asSendError, coreInfo, sendHttp, type CoreInfo, type HttpResponse, type SendError } from "./core";
+import { asSendError, coreInfo, type CoreInfo, type HttpResponse, type SendError } from "./core";
 import {
   asCollectionError,
   backend,
@@ -14,6 +14,7 @@ import {
   type CollectionError,
   type Environment,
   type RequestEntry,
+  type TestResult,
   type TreeNode,
   type Workspace,
 } from "./workspace";
@@ -22,7 +23,12 @@ interface Result {
   response: HttpResponse | null;
   error: SendError | null;
   sending: boolean;
+  tests: TestResult[];
+  logs: string[];
+  scriptErrors: string[];
 }
+
+const EMPTY: Result = { response: null, error: null, sending: false, tests: [], logs: [], scriptErrors: [] };
 
 type RequestNode = Extract<TreeNode, { type: "request" }>;
 
@@ -166,7 +172,7 @@ const requests = computed(() => {
 
 const selected = computed(() => requests.value.find((n) => n.id === selectedId.value) ?? null);
 const dirty = computed(() => new Set(requests.value.filter((n) => saved.get(n.id) !== snapshot(n)).map((n) => n.id)));
-const result = computed<Result>(() => results[selectedId.value] ?? { response: null, error: null, sending: false });
+const result = computed<Result>(() => results[selectedId.value] ?? EMPTY);
 
 const folderName = computed(() => {
   const id = selectedId.value;
@@ -290,17 +296,12 @@ function select(entry: RequestEntry) {
 async function send() {
   const node = selected.value;
   if (!node || node.protocol !== "http" || results[node.id]?.sending) return;
-  results[node.id] = { response: null, error: null, sending: true };
+  results[node.id] = { ...EMPTY, sending: true };
   try {
-    const environmentId = activeEnvId.value || undefined;
-    const response = await sendHttp(node.request, {
-      root: workspace.value?.root,
-      environmentId,
-      browserVars: environmentId ? backend.browserVariables?.(environmentId) : {},
-    });
-    results[node.id] = { response, error: null, sending: false };
+    const report = await backend.run(workspace.value!.root, toEntry(node), activeEnvId.value || undefined);
+    results[node.id] = { ...report, sending: false };
   } catch (e) {
-    results[node.id] = { response: null, error: asSendError(e), sending: false };
+    results[node.id] = { ...EMPTY, error: asSendError(e) };
   }
 }
 
@@ -375,13 +376,21 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       <RequestEditor
         :key="selected.id"
         :request="selected.request"
+        :scripts="selected.scripts"
         :sending="result.sending"
         :supported="selected.protocol === 'http'"
         :preview="preview"
         @send="send"
       />
 
-      <ResponseViewer :response="result.response" :error="result.error" :sending="result.sending" />
+      <ResponseViewer
+        :response="result.response"
+        :error="result.error"
+        :sending="result.sending"
+        :tests="result.tests"
+        :logs="result.logs"
+        :script-errors="result.scriptErrors"
+      />
 
       <footer class="statusbar">
         <span>pulpo-core {{ info?.version ?? "…" }}</span>

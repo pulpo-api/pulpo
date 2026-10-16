@@ -8,8 +8,9 @@ function request(
   name: string,
   req: Partial<HttpRequest> & Pick<HttpRequest, "method" | "url">,
   protocol: Protocol = "http",
+  test = "",
 ): TreeNode {
-  return { type: "request", id, name, protocol, request: { headers: [], body: null, ...req } };
+  return { type: "request", id, name, protocol, request: { headers: [], body: null, ...req }, scripts: { pre: "", test } };
 }
 
 /** The browser preview has no file system, so it works on this in-memory copy of examples/jsonplaceholder. */
@@ -36,7 +37,7 @@ export function sampleWorkspace(): Workspace {
             url: "{{base}}/posts",
             headers: json,
             body: '{\n  "title": "Hello from Pulpo",\n  "body": "Eight arms, one client.",\n  "userId": {{userId}}\n}\n',
-          }),
+          }, "http", 'pm.test("Created", () => pm.response.to.have.status(201));\nconst post = pm.response.json();\npm.environment.set("lastPostId", post.id);\n'),
           request("01-posts/04-delete-a-post.pulpo.yaml", "Delete a post", {
             method: "DELETE",
             url: "{{base}}/posts/1",

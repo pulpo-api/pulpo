@@ -3,6 +3,7 @@ use pulpo_core::environment::{self, Environment, SecretStore};
 use pulpo_core::http::{self, Header, HttpRequest};
 use pulpo_core::import;
 use pulpo_core::keychain::Keychain;
+use pulpo_core::run::{self, RunReport};
 use pulpo_core::variables::{self, Variables};
 use pulpo_core::{HttpMethod, Protocol};
 use std::env;
@@ -26,6 +27,10 @@ COMMANDS:
     import <FILE|-> [DIR] [--into FOLDER]
                Import a Postman collection or environment, an OpenAPI 3
                document or a curl command (use - to read it from stdin)
+    run [TARGET] [-w DIR] [-e ENV] [--bail]
+               Run requests with their scripts and tests, in order. TARGET is a
+               request or folder path inside the workspace (default: all).
+               Exits with 1 if a test fails or a request cannot be sent.
     env [DIR]  List environments and their variables (secrets are masked)
     secret set <DIR> <ENV> <NAME>
                Store a secret in the OS keychain, reading the value from stdin
@@ -60,6 +65,7 @@ fn main() -> ExitCode {
         Some("env") => run_env(&args[1..]),
         Some("secret") => run_secret(&args[1..]),
         Some("import") => run_import(&args[1..]),
+        Some("run") => run_run(&args[1..]),
         Some(other) => usage_error(&format!("unknown command: {other}")),
     }
 }
@@ -354,6 +360,108 @@ fn run_import(args: &[String]) -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(e) => fail(e),
+    }
+}
+
+fn run_run(args: &[String]) -> ExitCode {
+    let mut target = String::new();
+    let mut dir = PathBuf::from(".");
+    let mut env_name: Option<String> = None;
+    let mut bail = false;
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        match arg.as_str() {
+            "-w" | "--workspace" => match rest.next() {
+                Some(d) => dir = PathBuf::from(d),
+                None => return usage_error("run: -w needs a DIR"),
+            },
+            "-e" | "--env" => match rest.next() {
+                Some(e) => env_name = Some(e.clone()),
+                None => return usage_error("run: -e needs an ENV"),
+            },
+            "--bail" => bail = true,
+            other if !other.starts_with('-') && target.is_empty() => {
+                target = other.replace('\\', "/")
+            }
+            other => return usage_error(&format!("run: unexpected {other}")),
+        }
+    }
+    let workspace = match collection::load_workspace(&dir) {
+        Ok(ws) => ws,
+        Err(e) => return fail(e),
+    };
+    let environment_id = match &env_name {
+        Some(name) => match find_environment(&dir, name, &Keychain) {
+            Ok(env) => Some(env.id),
+            Err(e) => return fail(e),
+        },
+        None => None,
+    };
+    let requests = run::requests_under(&workspace.tree, &target);
+    if requests.is_empty() {
+        return fail(format!("nothing to run at '{target}'"));
+    }
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(e) => return fail(format!("could not start the runtime: {e}")),
+    };
+
+    let (mut passed, mut failed, mut tests_ok, mut tests_ko) = (0, 0, 0, 0);
+    for entry in &requests {
+        let report = runtime.block_on(run::run_entry(
+            &dir,
+            entry,
+            environment_id.as_deref(),
+            &Keychain,
+        ));
+        print_report(&report);
+        tests_ok += report.tests.iter().filter(|t| t.passed).count();
+        tests_ko += report.tests.iter().filter(|t| !t.passed).count();
+        if report.passed() {
+            passed += 1;
+        } else {
+            failed += 1;
+            if bail {
+                break;
+            }
+        }
+    }
+    println!(
+        "
+{} requests: {passed} passed, {failed} failed · tests: {tests_ok} passed, {tests_ko} failed",
+        passed + failed
+    );
+    if failed == 0 {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
+fn print_report(report: &RunReport) {
+    let mark = if report.passed() { "✓" } else { "✗" };
+    match (&report.response, &report.error) {
+        (Some(r), _) => println!(
+            "{mark} {}  {} {} · {} ms",
+            report.name, r.status, r.status_text, r.duration_ms
+        ),
+        (None, Some(e)) => println!("{mark} {}  {e}", report.name),
+        (None, None) => println!("{mark} {}", report.name),
+    }
+    for test in &report.tests {
+        match &test.error {
+            None => println!("    ✓ {}", test.name),
+            Some(error) => println!("    ✗ {}: {error}", test.name),
+        }
+    }
+    for error in &report.script_errors {
+        println!("    ! {error}");
+    }
+    for line in &report.logs {
+        println!("    > {line}");
     }
 }
 

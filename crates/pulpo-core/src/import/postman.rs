@@ -1,6 +1,7 @@
 //! Postman collection v2.0/v2.1 and Postman environment files.
 
 use super::{base64, ImportError, ImportFormat, ImportNode, ImportPlan};
+use crate::collection::Scripts;
 use crate::environment::{Environment, Variable};
 use crate::http::{Header, HttpRequest};
 use crate::HttpMethod;
@@ -263,6 +264,55 @@ fn request_of(
     })
 }
 
+/// Joins the `exec` lines of an item's `prerequest` and `test` events.
+fn scripts_of(item: &Value) -> Scripts {
+    let mut scripts = Scripts::default();
+    for event in item
+        .get("event")
+        .and_then(|e| e.as_array())
+        .into_iter()
+        .flatten()
+    {
+        let source = match event.pointer("/script/exec") {
+            Some(Value::Array(lines)) => lines
+                .iter()
+                .map(|l| text(Some(l)))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            Some(Value::String(s)) => s.clone(),
+            _ => continue,
+        };
+        if source.trim().is_empty() {
+            continue;
+        }
+        let target = match event.get("listen").and_then(|l| l.as_str()) {
+            Some("prerequest") => &mut scripts.pre,
+            Some("test") => &mut scripts.test,
+            _ => continue,
+        };
+        if !target.is_empty() {
+            target.push('\n');
+        }
+        target.push_str(&source);
+        if !target.ends_with('\n') {
+            target.push('\n');
+        }
+    }
+    scripts
+}
+
+/// Things the script runtime cannot do yet, to warn about them once.
+fn unsupported_in(scripts: &Scripts, uses: &mut [usize; 2]) {
+    for source in [&scripts.pre, &scripts.test] {
+        if source.contains("pm.sendRequest") {
+            uses[0] += 1;
+        }
+        if source.contains("CryptoJS") {
+            uses[1] += 1;
+        }
+    }
+}
+
 fn count_scripts(item: &Value) -> usize {
     item.get("event")
         .and_then(|e| e.as_array())
@@ -289,6 +339,7 @@ fn items(
     path: &str,
     warnings: &mut Vec<String>,
     scripts: &mut usize,
+    uses: &mut [usize; 2],
 ) -> Vec<ImportNode> {
     let mut nodes = Vec::new();
     for item in list.as_array().into_iter().flatten() {
@@ -304,14 +355,21 @@ fn items(
             format!("{path} / {name}")
         };
         *scripts += count_scripts(item);
+        let own_scripts = scripts_of(item);
+        unsupported_in(&own_scripts, uses);
         if let Some(children) = item.get("item") {
             let folder_auth = parse_auth(item.get("auth"), auth, warnings, &at);
             nodes.push(ImportNode::Folder {
                 name,
-                children: items(children, &folder_auth, &at, warnings, scripts),
+                children: items(children, &folder_auth, &at, warnings, scripts, uses),
+                scripts: own_scripts,
             });
         } else if let Some(request) = request_of(item, auth, warnings, &at) {
-            nodes.push(ImportNode::Request { name, request });
+            nodes.push(ImportNode::Request {
+                name,
+                request,
+                scripts: own_scripts,
+            });
         }
     }
     nodes
@@ -330,13 +388,29 @@ pub(super) fn collection(value: &Value) -> Result<ImportPlan, ImportError> {
     let mut warnings = Vec::new();
     let mut scripts = count_scripts(value);
     let root_auth = parse_auth(value.get("auth"), &Auth::default(), &mut warnings, &name);
-    let nodes = items(item, &root_auth, "", &mut warnings, &mut scripts);
-    if scripts > 0 {
+    let mut uses = [0usize; 2];
+    let folder_scripts = scripts_of(value);
+    unsupported_in(&folder_scripts, &mut uses);
+    let nodes = items(item, &root_auth, "", &mut warnings, &mut scripts, &mut uses);
+    if uses[0] > 0 {
         warnings.insert(
             0,
-            format!("{scripts} pre-request/test scripts were not imported: scripting arrives in phase 2"),
+            format!(
+                "{} scripts use pm.sendRequest, which is not supported yet (phase 2b)",
+                uses[0]
+            ),
         );
     }
+    if uses[1] > 0 {
+        warnings.insert(
+            0,
+            format!(
+                "{} scripts use CryptoJS, which is not supported yet (phase 2b)",
+                uses[1]
+            ),
+        );
+    }
+    let _ = scripts;
 
     let variables: Vec<Variable> = value
         .get("variable")
@@ -367,6 +441,7 @@ pub(super) fn collection(value: &Value) -> Result<ImportPlan, ImportError> {
     Ok(ImportPlan {
         format: ImportFormat::PostmanCollection,
         folder: Some(name),
+        folder_scripts,
         nodes,
         environments,
         warnings,
@@ -406,6 +481,7 @@ pub(super) fn environment(value: &Value) -> Result<ImportPlan, ImportError> {
     Ok(ImportPlan {
         format: ImportFormat::PostmanEnvironment,
         folder: None,
+        folder_scripts: Default::default(),
         nodes: Vec::new(),
         environments: vec![Environment {
             id: String::new(),
@@ -453,7 +529,9 @@ mod tests {
         for node in nodes {
             match node {
                 ImportNode::Folder { children, .. } => out.extend(requests(children)),
-                ImportNode::Request { name, request } => out.push((name.clone(), request.clone())),
+                ImportNode::Request { name, request, .. } => {
+                    out.push((name.clone(), request.clone()))
+                }
             }
         }
         out
@@ -504,7 +582,14 @@ mod tests {
             .iter()
             .any(|h| h.name == "X-Key" && h.value == "{{key}}"));
 
-        assert!(plan.warnings[0].starts_with("2 pre-request/test scripts"));
+        assert_eq!(plan.folder_scripts.pre, "pm.environment.set('a', 1);\n");
+        let ImportNode::Folder { children, .. } = &plan.nodes[0] else {
+            panic!()
+        };
+        let ImportNode::Request { scripts, .. } = &children[0] else {
+            panic!()
+        };
+        assert_eq!(scripts.test, "pm.test('ok', () => {});\n");
         assert!(plan.warnings.iter().any(|w| w.contains("form-data")));
         assert!(plan.warnings.iter().any(|w| w.contains("PURGE")));
 

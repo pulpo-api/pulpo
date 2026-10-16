@@ -82,6 +82,30 @@ pulpo send GET "{{base}}/health" -w my-api -e local
 PULPO_SECRET_TOKEN=... pulpo send ...         # in CI, secrets come from env vars
 ```
 
+## Scripts and tests
+
+Pre-request and test scripts are JavaScript files next to the request, with Postman's `pm.*` API, so imported collections keep working:
+
+```
+01-orders/
+├── _folder.pre.js              runs before every request in the folder (and subfolders)
+├── 01-create-order.pulpo.yaml
+├── 01-create-order.pre.js
+└── 01-create-order.test.js
+```
+
+```js
+pm.test("created", () => pm.response.to.have.status(201));
+pm.environment.set("orderId", pm.response.json().id);   // used later as {{orderId}}
+```
+
+Values set by scripts stay on your machine in `.pulpo/` (which ignores itself in git), so tokens never end up in a commit. Scripts run in a sandboxed QuickJS engine with time and memory limits. `pm.sendRequest` and `CryptoJS` are coming next.
+
+```bash
+pulpo run -w my-api -e local              # run every request in order, fail on a failed test
+pulpo run 01-orders -w my-api -e local --bail
+```
+
 ## Import what you already have
 
 ```bash
