@@ -61,6 +61,20 @@ cargo test --workspace
 cargo run -p pulpo-api-cli -- version
 ```
 
+### Without installing Rust (Docker)
+
+Only Docker is needed. The container has Rust, Node and the Linux libraries Tauri needs.
+
+```bash
+docker compose -f docker/compose.yml build dev
+docker compose -f docker/compose.yml run --rm dev bash -c "cd apps/desktop && npm ci && npm run build"
+docker compose -f docker/compose.yml run --rm dev cargo test --workspace
+docker compose -f docker/compose.yml run --rm dev bash -c "cd apps/desktop && npx tauri build --bundles deb"
+```
+
+- Working on the UI only? `cd apps/desktop && npm install && npm run dev` runs it in the browser, no Rust needed.
+- Windows and macOS installers are built by CI on every push to `main` (see the *Installers* artifacts in the Actions tab).
+
 ## Contributing
 
 Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md). Every commit needs a `Signed-off-by` line (`git commit -s`).
