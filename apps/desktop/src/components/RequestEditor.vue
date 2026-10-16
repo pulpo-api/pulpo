@@ -4,6 +4,7 @@ import { HTTP_METHODS, bodyMode, type HttpRequest } from "../core";
 import type { InheritedAuth, InheritedSettings, Scripts } from "../workspace";
 import type { Header } from "../core";
 import HeadersEditor from "./HeadersEditor.vue";
+import { automaticHeaders } from "../autoHeaders";
 import VarInput from "./VarInput.vue";
 import SettingsEditor from "./SettingsEditor.vue";
 import AuthEditor from "./AuthEditor.vue";
@@ -22,6 +23,9 @@ const props = defineProps<{
   inheritedSettings: InheritedSettings;
   inheritedHeaders: { header: Header; from: string }[];
   root: string;
+  /** For the automatic headers: Pulpo's version and the selected environment. */
+  version: string;
+  environmentName: string;
 }>();
 const emit = defineEmits<{ send: []; save: [] }>();
 
@@ -50,6 +54,14 @@ const authBadge = computed(() => {
   return inherited.found && SHORT[inherited.auth.type] ? `${SHORT[inherited.auth.type]} ↑` : "";
 });
 const activeHeaders = computed(() => props.request.headers.filter((h) => h.enabled && h.name.trim()).length);
+const automatic = computed(() =>
+  automaticHeaders(props.request, {
+    version: props.version,
+    auth: props.request.auth ?? props.inheritedAuth.auth,
+    environment: props.environmentName,
+    url: props.preview?.url ?? props.request.url,
+  }),
+);
 const inheritedCount = computed(
   () =>
     props.inheritedHeaders.filter(
@@ -147,7 +159,13 @@ const inheritedCount = computed(
       </p>
     </template>
 
-    <HeadersEditor v-else :headers="request.headers" :inherited="inheritedHeaders">
+    <HeadersEditor
+      v-else
+      :headers="request.headers"
+      :inherited="inheritedHeaders"
+      :automatic="automatic"
+      @stop-cookies="request.cookies = false"
+    >
       <label class="toggle" title="Uses the cookie jar of the selected environment (🍪 in the top bar)">
         <input
           type="checkbox"

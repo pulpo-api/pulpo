@@ -340,6 +340,22 @@ pub fn workspace_file(root: Option<&Path>, relative: &str) -> Result<PathBuf, Se
     Ok(real)
 }
 
+/// The Content-Type of a raw body nobody set one for, guessed from its start (as Postman
+/// sends the type chosen for the raw body). Mirrors `BodyKind::detect` without a header.
+pub fn sniff_content_type(body: &str) -> &'static str {
+    let start = body.trim_start();
+    let head = start.get(..15).unwrap_or(start).to_ascii_lowercase();
+    if start.starts_with('{') || start.starts_with('[') {
+        "application/json"
+    } else if head.starts_with("<!doctype html") || head.starts_with("<html") {
+        "text/html"
+    } else if start.starts_with('<') {
+        "application/xml"
+    } else {
+        "text/plain"
+    }
+}
+
 /// A content type from the file extension, for uploads.
 pub fn mime_for(path: &str) -> &'static str {
     let ext = path
@@ -569,14 +585,27 @@ pub async fn send_with(
 
     let settings = &request.settings;
     let timeout = Duration::from_millis(settings.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS));
-    let mut client = reqwest::Client::builder()
-        .user_agent(USER_AGENT)
-        .timeout(timeout)
-        .redirect(if settings.follow_redirects == Some(false) {
+    // A disabled header named like an automatic one stops it (User-Agent, Accept-Encoding,
+    // Content-Type), as a disabled header stops an inherited one.
+    let stopped = |name: &str| {
+        request
+            .headers
+            .iter()
+            .any(|h| !h.enabled && h.name.trim().eq_ignore_ascii_case(name))
+    };
+    let mut client = reqwest::Client::builder().timeout(timeout).redirect(
+        if settings.follow_redirects == Some(false) {
             reqwest::redirect::Policy::none()
         } else {
             reqwest::redirect::Policy::limited(MAX_REDIRECTS)
-        });
+        },
+    );
+    if !stopped("user-agent") {
+        client = client.user_agent(USER_AGENT);
+    }
+    if stopped("accept-encoding") {
+        client = client.no_gzip().no_brotli().no_deflate();
+    }
     if settings.verify_ssl == Some(false) {
         client = client.danger_accept_invalid_certs(true);
     }
@@ -628,7 +657,7 @@ pub async fn send_with(
                 let pairs: Vec<String> = fields
                     .map(|f| format!("{}={}", encode_form(&f.name), encode_form(&f.value)))
                     .collect();
-                if !has_header("content-type") {
+                if !has_header("content-type") && !stopped("content-type") {
                     builder = builder.header(
                         reqwest::header::CONTENT_TYPE,
                         "application/x-www-form-urlencoded",
@@ -663,11 +692,14 @@ pub async fn send_with(
         .filter(|f| !f.trim().is_empty())
     {
         let bytes = read_file(root, file)?;
-        if !has_header("content-type") {
+        if !has_header("content-type") && !stopped("content-type") {
             builder = builder.header(reqwest::header::CONTENT_TYPE, mime_for(file));
         }
         builder = builder.body(bytes);
     } else if let Some(body) = &request.body {
+        if !body.is_empty() && !has_header("content-type") && !stopped("content-type") {
+            builder = builder.header(reqwest::header::CONTENT_TYPE, sniff_content_type(body));
+        }
         builder = builder.body(body.clone());
     }
 
@@ -1013,6 +1045,40 @@ connection: close
         let echoed = send_in(&request, Some(ws.path())).await.unwrap().body;
         assert!(echoed.contains("content-type: application/json"));
         assert!(echoed.ends_with("{\"a\":1}"));
+    }
+
+    #[tokio::test]
+    async fn sends_the_detected_type_of_a_raw_body_and_stops_automatic_headers() {
+        let url = raw_echo().await;
+        let mut request = HttpRequest::new(HttpMethod::Post, url);
+        request.body = Some("  {\"a\": 1}".into());
+        let echoed = send(&request).await.unwrap().body.to_ascii_lowercase();
+        assert!(
+            echoed.contains("content-type: application/json"),
+            "{echoed}"
+        );
+        assert!(echoed.contains("user-agent: pulpo/"));
+        assert!(echoed.contains("accept-encoding: gzip"));
+
+        let url = raw_echo().await;
+        let mut request = HttpRequest::new(HttpMethod::Post, url);
+        request.body = Some("hola".into());
+        for name in ["User-Agent", "Accept-Encoding", "content-type"] {
+            request.headers.push(Header {
+                enabled: false,
+                ..Header::new(name, "")
+            });
+        }
+        let echoed = send(&request).await.unwrap().body.to_ascii_lowercase();
+        for gone in ["user-agent:", "accept-encoding:", "content-type:"] {
+            assert!(
+                !echoed.contains(gone),
+                "{gone} should be stopped:\n{echoed}"
+            );
+        }
+        assert_eq!(sniff_content_type("<!DOCTYPE html><p>"), "text/html");
+        assert_eq!(sniff_content_type("<a/>"), "application/xml");
+        assert_eq!(sniff_content_type("hola"), "text/plain");
     }
 
     #[test]

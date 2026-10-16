@@ -1,10 +1,17 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import type { Header } from "../core";
+import type { AutoHeader } from "../autoHeaders";
 import VarInput from "./VarInput.vue";
 
 /** Edits a list of headers. Inherited ones (from folders) are shown above, read-only. */
-const props = defineProps<{ headers: Header[]; inherited?: { header: Header; from: string }[] }>();
+const props = defineProps<{
+  headers: Header[];
+  inherited?: { header: Header; from: string }[];
+  /** What Pulpo adds by itself (requests only). */
+  automatic?: AutoHeader[];
+}>();
+const emit = defineEmits<{ stopCookies: [] }>();
 
 const same = (a: Header, b: Header) => a.name.trim().toLowerCase() === b.name.trim().toLowerCase();
 
@@ -12,6 +19,30 @@ const same = (a: Header, b: Header) => a.name.trim().toLowerCase() === b.name.tr
 const shownInherited = computed(() =>
   (props.inherited ?? []).map((i) => ({ ...i, replaced: props.headers.find((h) => same(h, i.header)) })),
 );
+
+/** Automatic headers are hidden until asked for, as in Postman: they are noise most days. */
+const showAutomatic = ref(false);
+
+const shownAutomatic = computed(() =>
+  (props.automatic ?? []).map((a) => {
+    const own = props.headers.find((h) => same(h, { name: a.name, value: "", enabled: true }));
+    const state =
+      own?.enabled && a.override ? "replaced" : own && !own.enabled && a.stop === "header" ? "stopped" : "sent";
+    return { ...a, state };
+  }),
+);
+const sentAutomatic = computed(() => shownAutomatic.value.filter((a) => a.state === "sent").length);
+
+function overrideAuto(a: AutoHeader) {
+  // Descriptions like "calculated when sending" are not values to start from.
+  const real = !/ when |\(|…/.test(a.value);
+  add({ name: a.name, value: real ? a.value : "", enabled: true });
+}
+
+function stopAuto(a: AutoHeader) {
+  if (a.stop === "cookies") emit("stopCookies");
+  else add({ name: a.name, value: "", enabled: false });
+}
 
 function add(header: Header = { name: "", value: "", enabled: true }) {
   props.headers.push({ ...header });
@@ -24,6 +55,33 @@ function remove(index: number) {
 
 <template>
   <div class="headers">
+    <template v-if="shownAutomatic.length">
+      <button class="head toggle-auto" :aria-expanded="showAutomatic" @click="showAutomatic = !showAutomatic">
+        {{ showAutomatic ? "▾" : "▸" }} Automatic ({{ sentAutomatic }})
+        <span class="hint">added when sending</span>
+      </button>
+      <template v-if="showAutomatic">
+        <div v-for="a in shownAutomatic" :key="a.name" class="row inherited" :class="{ replaced: a.state !== 'sent' }">
+          <span class="lock" :title="`Added by ${a.from}`">⚙</span>
+          <code class="name">{{ a.name }}</code>
+          <code class="value" :title="a.value">{{ a.value }}</code>
+          <span class="from">
+            <template v-if="a.state === 'replaced'">replaced below</template>
+            <template v-else-if="a.state === 'stopped'">stopped below</template>
+            <template v-else>
+              {{ a.from }}
+              <template v-if="a.override">
+                · <button class="link" title="Send your own value instead" @click="overrideAuto(a)">override</button>
+              </template>
+              <template v-if="a.stop">
+                · <button class="link" :title="a.stop === 'cookies' ? 'Turn the cookie jar off for this request' : 'Do not send it'" @click="stopAuto(a)">stop</button>
+              </template>
+            </template>
+          </span>
+        </div>
+      </template>
+    </template>
+
     <template v-if="shownInherited.length">
       <p class="head">Inherited</p>
       <div v-for="i in shownInherited" :key="i.header.name" class="row inherited" :class="{ replaced: i.replaced }">
@@ -62,6 +120,21 @@ function remove(index: number) {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+.toggle-auto {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+.toggle-auto .hint {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
 }
 .head {
   margin: 4px 0 0;

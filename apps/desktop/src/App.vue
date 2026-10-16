@@ -682,6 +682,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         :inherited-auth="selectedInheritedAuth"
         :inherited-settings="selectedInheritedSettings"
         :inherited-headers="selectedInheritedHeaders"
+        :version="info?.version ?? ''"
+        :environment-name="environments.find((e) => e.id === activeEnvId)?.name ?? ''"
         :root="workspace?.root ?? ''"
         @send="send"
         @save="save()"

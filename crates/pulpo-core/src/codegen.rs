@@ -8,7 +8,8 @@
 use crate::collection::{self, CollectionError, RequestEntry};
 use crate::environment::{self, SecretStore};
 use crate::http::{
-    encode_form, encode_query, mime_for, ApiKeyLocation, Auth, FormKind, HttpRequest,
+    encode_form, encode_query, mime_for, sniff_content_type, ApiKeyLocation, Auth, FormKind,
+    HttpRequest,
 };
 use crate::local;
 use crate::variables::{self, Variables, DYNAMIC};
@@ -219,7 +220,17 @@ pub fn prepare(request: &HttpRequest) -> Prepared {
         Body::File(file.to_string())
     } else {
         match request.body.as_deref().filter(|b| !b.is_empty()) {
-            Some(body) => Body::Text(body.to_string()),
+            Some(body) => {
+                // Pulpo sends the detected type when none is set; so does the code.
+                let stopped = request
+                    .headers
+                    .iter()
+                    .any(|h| !h.enabled && h.name.trim().eq_ignore_ascii_case("content-type"));
+                if !has(&headers, "content-type") && !stopped {
+                    headers.push(("Content-Type".into(), sniff_content_type(body).into()));
+                }
+                Body::Text(body.to_string())
+            }
             None => Body::None,
         }
     };
