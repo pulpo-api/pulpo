@@ -55,7 +55,10 @@ jobs:
         run: cargo test --workspace
 
       - name: CLI smoke test
-        run: cargo run -p pulpo-api-cli -- version
+        run: |
+          cargo run -p pulpo-api-cli -- version
+          cargo run -p pulpo-api-cli -- ls examples/jsonplaceholder
+          cargo run -p pulpo-api-cli -- fmt examples/jsonplaceholder --check
 
   bundle:
     name: Installers (${{ matrix.os }})

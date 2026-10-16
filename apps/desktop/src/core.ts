@@ -39,7 +39,7 @@ export interface SendError {
   message: string;
 }
 
-const insideTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+export const insideTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 export async function coreInfo(): Promise<CoreInfo> {
   if (!insideTauri) {

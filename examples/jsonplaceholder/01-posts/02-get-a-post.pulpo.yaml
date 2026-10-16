@@ -1,0 +1,6 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/pulpo-api/pulpo/main/schemas/request.v1.schema.json
+version: 1
+name: "Get a post"
+protocol: "http"
+method: "GET"
+url: "https://jsonplaceholder.typicode.com/posts/1"

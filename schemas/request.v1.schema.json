@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/pulpo-api/pulpo/main/schemas/request.v1.schema.json",
+  "title": "Pulpo request (version 1)",
+  "description": "One request of a Pulpo collection, stored as <order>-<name>.pulpo.yaml. The body lives next to it in <order>-<name>.body.<ext>.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "name", "protocol", "url"],
+  "properties": {
+    "version": { "const": 1, "description": "File format version." },
+    "name": { "type": "string", "minLength": 1, "description": "Name shown in the collection tree." },
+    "protocol": {
+      "enum": ["http", "graphql", "grpc", "websocket", "soap", "sse"],
+      "description": "Protocol used to send the request."
+    },
+    "method": {
+      "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
+      "description": "HTTP method. Required when protocol is http."
+    },
+    "url": { "type": "string", "description": "Target URL. May contain {{variables}}." },
+    "headers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "value"],
+        "properties": {
+          "name": { "type": "string" },
+          "value": { "type": "string" },
+          "enabled": { "type": "boolean", "default": true, "description": "Disabled headers are kept but not sent." }
+        }
+      }
+    },
+    "body": {
+      "enum": ["json", "xml", "graphql", "text"],
+      "description": "Kind of the body file next to this one (.body.json, .body.xml, .body.graphql or .body.txt)."
+    },
+    "timeoutMs": { "type": "integer", "minimum": 1, "description": "Request timeout in milliseconds (default 30000)." }
+  },
+  "if": { "properties": { "protocol": { "const": "http" } } },
+  "then": { "required": ["method"] }
+}

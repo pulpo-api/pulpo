@@ -24,6 +24,41 @@ API clients have gone the wrong way: accounts, forced cloud sync and paid team f
 - **Secrets never touch the repo.** They live in your OS keychain.
 - **Small and fast.** A native desktop app for Windows, macOS and Linux, built with Tauri.
 
+## Collections are files
+
+A workspace is a folder with a `pulpo.yaml`. Folders are folders, requests are YAML files, and bodies live next to them so your editor highlights them and pull requests show clean diffs. See [`examples/jsonplaceholder`](examples/jsonplaceholder).
+
+```
+my-api/
+├── pulpo.yaml
+└── 01-posts/
+    ├── _folder.yaml
+    ├── 03-create-a-post.pulpo.yaml
+    └── 03-create-a-post.body.json
+```
+
+```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/pulpo-api/pulpo/main/schemas/request.v1.schema.json
+version: 1
+name: "Create a post"
+protocol: "http"
+method: "POST"
+url: "https://jsonplaceholder.typicode.com/posts"
+headers:
+  - name: "Content-Type"
+    value: "application/json"
+body: "json"
+```
+
+Pulpo always writes files in one canonical form. The [JSON Schema](schemas/request.v1.schema.json) gives you autocompletion in VS Code and IntelliJ.
+
+```bash
+pulpo init my-api --name "My API"   # create a workspace
+pulpo ls my-api                     # print the tree
+pulpo fmt my-api --check            # fail CI if a file is not canonical
+pulpo send GET https://example.com  # send a one-off request
+```
+
 ## Roadmap
 
 | Phase | Goal |

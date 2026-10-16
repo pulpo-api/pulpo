@@ -1,15 +1,39 @@
 <script setup lang="ts">
-import type { Folder, RequestItem } from "../sample";
+import { nextTick, ref } from "vue";
+import TreeView from "./TreeView.vue";
+import type { RequestEntry, Workspace } from "../workspace";
 
-defineProps<{ folders: Folder[]; selectedId: string }>();
-const emit = defineEmits<{ select: [item: RequestItem] }>();
+defineProps<{
+  workspace: Workspace | null;
+  selectedId: string;
+  folderId: string;
+  dirty: Set<string>;
+  persistent: boolean;
+}>();
+const emit = defineEmits<{
+  select: [entry: RequestEntry];
+  folder: [id: string];
+  open: [];
+  newRequest: [name: string];
+  newFolder: [name: string];
+}>();
 
-function badge(item: RequestItem): string {
-  return item.protocol === "http" ? item.request.method : item.protocol.toUpperCase().slice(0, 4);
+const creating = ref<"request" | "folder" | null>(null);
+const draft = ref("");
+const input = ref<HTMLInputElement | null>(null);
+
+async function start(kind: "request" | "folder") {
+  creating.value = kind;
+  draft.value = "";
+  await nextTick();
+  input.value?.focus();
 }
 
-function badgeClass(item: RequestItem): string {
-  return item.protocol === "http" ? `m-${item.request.method.toLowerCase()}` : `p-${item.protocol}`;
+function confirm() {
+  const name = draft.value.trim();
+  if (name && creating.value === "request") emit("newRequest", name);
+  if (name && creating.value === "folder") emit("newFolder", name);
+  creating.value = null;
 }
 </script>
 
@@ -19,26 +43,42 @@ function badgeClass(item: RequestItem): string {
       <img src="/pulpo.svg" alt="" width="28" height="28" />
       <span>Pulpo</span>
     </div>
-    <input class="search" placeholder="Search requests…" />
-    <nav>
-      <section v-for="folder in folders" :key="folder.name">
-        <h3>{{ folder.name }}</h3>
-        <button
-          v-for="item in folder.items"
-          :key="item.id"
-          class="item"
-          :class="{ active: item.id === selectedId }"
-          @click="emit('select', item)"
-        >
-          <span class="badge" :class="badgeClass(item)">{{ badge(item) }}</span>
-          <span class="name">{{ item.name }}</span>
-        </button>
-      </section>
-    </nav>
-    <footer>
-      <span class="dot"></span>
-      main · git clean
-    </footer>
+
+    <template v-if="workspace">
+      <div class="ws">
+        <button class="ws-name" :title="workspace.root" @click="emit('folder', '')">{{ workspace.name }}</button>
+        <button v-if="persistent" class="icon" title="Open another folder" @click="emit('open')">⇄</button>
+      </div>
+      <div class="actions">
+        <button @click="start('request')">+ Request</button>
+        <button @click="start('folder')">+ Folder</button>
+      </div>
+      <input
+        v-if="creating"
+        ref="input"
+        v-model="draft"
+        class="draft"
+        :placeholder="creating === 'request' ? 'Request name, then Enter' : 'Folder name, then Enter'"
+        @keydown.enter="confirm"
+        @keydown.esc="creating = null"
+        @blur="creating = null"
+      />
+      <nav>
+        <TreeView
+          :nodes="workspace.tree"
+          :selected-id="selectedId"
+          :folder-id="folderId"
+          :dirty="dirty"
+          @select="emit('select', $event)"
+          @folder="emit('folder', $event)"
+        />
+        <p v-if="!workspace.tree.length" class="empty">Empty workspace. Add a request to start.</p>
+      </nav>
+      <footer :title="workspace.root">
+        <span class="dot" :class="{ off: !persistent }"></span>
+        {{ persistent ? workspace.root : "In memory: changes are not saved" }}
+      </footer>
+    </template>
   </aside>
 </template>
 
@@ -46,11 +86,12 @@ function badgeClass(item: RequestItem): string {
 .sidebar {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   padding: 16px 12px;
   background: var(--surface);
   border-right: 1px solid var(--border);
   min-width: 0;
+  min-height: 0;
 }
 .brand {
   display: flex;
@@ -58,69 +99,71 @@ function badgeClass(item: RequestItem): string {
   gap: 10px;
   font-weight: 700;
   font-size: 17px;
-  padding: 0 6px;
+  padding: 0 6px 4px;
 }
-.search {
-  border: 1px solid var(--border);
-  background: var(--surface-2);
-  border-radius: 8px;
-  padding: 8px 10px;
-  outline: none;
-}
-.search:focus {
-  border-color: var(--accent);
-}
-nav {
-  flex: 1;
-  overflow: auto;
-}
-h3 {
-  margin: 14px 6px 6px;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-.item {
+.ws {
   display: flex;
   align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 6px 8px;
+  gap: 6px;
+}
+.ws-name {
+  flex: 1;
+  min-width: 0;
   border: 0;
-  border-radius: 8px;
   background: transparent;
-  cursor: pointer;
   text-align: left;
-}
-.item:hover {
-  background: var(--surface-2);
-}
-.item.active {
-  background: var(--accent-soft);
-}
-.badge {
-  flex: none;
-  width: 46px;
-  font: 600 10px/1 var(--mono);
-  text-align: right;
-}
-.name {
+  font-weight: 600;
+  padding: 4px 6px;
+  border-radius: 6px;
+  cursor: pointer;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.m-get { color: var(--m-get); }
-.m-post { color: var(--m-post); }
-.m-put { color: var(--m-put); }
-.m-patch { color: var(--m-patch); }
-.m-delete { color: var(--m-delete); }
-.p-graphql { color: var(--p-graphql); }
-.p-grpc { color: var(--p-grpc); }
-.p-websocket { color: var(--p-websocket); }
-.p-soap { color: var(--p-soap); }
-.p-sse { color: var(--p-sse); }
+.ws-name:hover {
+  background: var(--surface-2);
+}
+.icon {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: 6px;
+  cursor: pointer;
+  padding: 2px 8px;
+}
+.actions {
+  display: flex;
+  gap: 6px;
+}
+.actions button {
+  flex: 1;
+  border: 1px dashed var(--border);
+  background: transparent;
+  border-radius: 8px;
+  padding: 6px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.actions button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.draft {
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--surface-2);
+  padding: 7px 10px;
+  outline: none;
+}
+nav {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+}
+.empty {
+  color: var(--muted);
+  font-size: 13px;
+  padding: 0 6px;
+}
 footer {
   display: flex;
   align-items: center;
@@ -128,11 +171,18 @@ footer {
   padding: 0 6px;
   font-size: 12px;
   color: var(--muted);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .dot {
+  flex: none;
   width: 8px;
   height: 8px;
   border-radius: 50%;
   background: var(--ok);
+}
+.dot.off {
+  background: var(--m-post);
 }
 </style>

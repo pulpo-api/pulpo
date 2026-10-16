@@ -1,62 +1,59 @@
 import type { HttpRequest } from "./core";
-
-export type Protocol = "http" | "graphql" | "grpc" | "websocket" | "soap" | "sse";
-
-export interface RequestItem {
-  id: string;
-  name: string;
-  protocol: Protocol;
-  request: HttpRequest;
-}
-
-export interface Folder {
-  name: string;
-  items: RequestItem[];
-}
+import type { Protocol, TreeNode, Workspace } from "./workspace";
 
 const json = [{ name: "Content-Type", value: "application/json", enabled: true }];
 
-function http(id: string, name: string, request: Partial<HttpRequest> & Pick<HttpRequest, "method" | "url">): RequestItem {
-  return { id, name, protocol: "http", request: { headers: [], body: null, ...request } };
+function request(
+  id: string,
+  name: string,
+  req: Partial<HttpRequest> & Pick<HttpRequest, "method" | "url">,
+  protocol: Protocol = "http",
+): TreeNode {
+  return { type: "request", id, name, protocol, request: { headers: [], body: null, ...req } };
 }
 
-function planned(id: string, name: string, protocol: Protocol, url: string): RequestItem {
-  return { id, name, protocol, request: { method: "GET", url, headers: [], body: null } };
+/** The browser preview has no file system, so it works on this in-memory copy of examples/jsonplaceholder. */
+export function sampleWorkspace(): Workspace {
+  return {
+    root: "examples/jsonplaceholder",
+    name: "JSONPlaceholder (browser preview)",
+    tree: [
+      {
+        type: "folder",
+        id: "01-posts",
+        name: "Posts",
+        children: [
+          request("01-posts/01-list-posts.pulpo.yaml", "List posts", {
+            method: "GET",
+            url: "https://jsonplaceholder.typicode.com/posts?_limit=5",
+          }),
+          request("01-posts/02-get-a-post.pulpo.yaml", "Get a post", {
+            method: "GET",
+            url: "https://jsonplaceholder.typicode.com/posts/1",
+          }),
+          request("01-posts/03-create-a-post.pulpo.yaml", "Create a post", {
+            method: "POST",
+            url: "https://jsonplaceholder.typicode.com/posts",
+            headers: json,
+            body: '{\n  "title": "Hello from Pulpo",\n  "body": "Eight arms, one client.",\n  "userId": 1\n}\n',
+          }),
+          request("01-posts/04-delete-a-post.pulpo.yaml", "Delete a post", {
+            method: "DELETE",
+            url: "https://jsonplaceholder.typicode.com/posts/1",
+          }),
+        ],
+      },
+      {
+        type: "folder",
+        id: "02-users",
+        name: "Users",
+        children: [
+          request("02-users/01-list-users.pulpo.yaml", "List users", {
+            method: "GET",
+            url: "https://jsonplaceholder.typicode.com/users",
+          }),
+        ],
+      },
+    ],
+  };
 }
-
-export const sampleCollection: Folder[] = [
-  {
-    name: "01 Posts",
-    items: [
-      http("list-posts", "List posts", { method: "GET", url: "https://jsonplaceholder.typicode.com/posts?_limit=5" }),
-      http("get-post", "Get a post", { method: "GET", url: "https://jsonplaceholder.typicode.com/posts/1" }),
-      http("create-post", "Create a post", {
-        method: "POST",
-        url: "https://jsonplaceholder.typicode.com/posts",
-        headers: json,
-        body: '{\n  "title": "Hello from Pulpo",\n  "body": "Eight arms, one client.",\n  "userId": 1\n}',
-      }),
-      http("delete-post", "Delete a post", { method: "DELETE", url: "https://jsonplaceholder.typicode.com/posts/1" }),
-    ],
-  },
-  {
-    name: "02 Echo",
-    items: [
-      http("echo-headers", "Echo my headers", {
-        method: "GET",
-        url: "https://httpbin.org/headers",
-        headers: [{ name: "X-Tenant-ID", value: "test", enabled: true }],
-      }),
-      http("not-found", "A 404", { method: "GET", url: "https://httpbin.org/status/404" }),
-    ],
-  },
-  {
-    name: "03 Coming soon",
-    items: [
-      planned("order-graphql", "GraphQL query", "graphql", "https://example.com/graphql"),
-      planned("order-grpc", "gRPC call", "grpc", "orders.v1.OrderService/Track"),
-      planned("courier-ws", "WebSocket", "websocket", "ws://localhost:3005/ws"),
-      planned("soap-trademark", "SOAP operation", "soap", "https://example.com/Service?wsdl"),
-    ],
-  },
-];

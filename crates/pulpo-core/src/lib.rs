@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 
+pub mod collection;
 pub mod http;
 
 /// Version of the Pulpo core engine.
