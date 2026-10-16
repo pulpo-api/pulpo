@@ -5,11 +5,11 @@ defineProps<{ folders: Folder[]; selectedId: string }>();
 const emit = defineEmits<{ select: [item: RequestItem] }>();
 
 function badge(item: RequestItem): string {
-  return item.protocol === "http" ? (item.method ?? "GET") : item.protocol.toUpperCase().slice(0, 4);
+  return item.protocol === "http" ? item.request.method : item.protocol.toUpperCase().slice(0, 4);
 }
 
 function badgeClass(item: RequestItem): string {
-  return item.protocol === "http" ? `m-${(item.method ?? "get").toLowerCase()}` : `p-${item.protocol}`;
+  return item.protocol === "http" ? `m-${item.request.method.toLowerCase()}` : `p-${item.protocol}`;
 }
 </script>
 

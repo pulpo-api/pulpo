@@ -15,3 +15,4 @@ path = "src/main.rs"
 
 [dependencies]
 pulpo-core.workspace = true
+tokio = { workspace = true, features = ["rt"] }
