@@ -92,6 +92,30 @@ export function resolveAuth(auth: Auth, resolve: (text: string) => string): Auth
   }
 }
 
+export type FormKind = "urlencoded" | "multipart";
+
+/** A form field. When `file` is true, `value` is a path relative to the workspace. */
+export interface FormField {
+  name: string;
+  value: string;
+  file: boolean;
+  enabled: boolean;
+}
+
+export interface Form {
+  kind: FormKind;
+  fields: FormField[];
+}
+
+/** How the body is sent; derived from which of `form`, `bodyFile` and `body` is set. */
+export type BodyMode = "none" | "raw" | FormKind | "file";
+
+export function bodyMode(request: HttpRequest): BodyMode {
+  if (request.form) return request.form.kind;
+  if (request.bodyFile != null) return "file";
+  return request.body != null ? "raw" : "none";
+}
+
 export interface HttpRequest {
   method: HttpMethod;
   url: string;
@@ -104,6 +128,10 @@ export interface HttpRequest {
   pathParams: Param[];
   /** Own auth; `null`/missing = inherit from the folder. */
   auth?: Auth | null;
+  /** A form body; wins over `bodyFile` and `body`. */
+  form?: Form | null;
+  /** A workspace file sent as the whole body; wins over `body`. */
+  bodyFile?: string | null;
 }
 
 export interface HttpResponse {
@@ -118,7 +146,7 @@ export interface HttpResponse {
 }
 
 export interface SendError {
-  kind: "invalidUrl" | "invalidHeader" | "timeout" | "connect" | "unresolved" | "other";
+  kind: "invalidUrl" | "invalidHeader" | "timeout" | "connect" | "unresolved" | "file" | "other";
   message: string;
 }
 
@@ -151,12 +179,26 @@ export async function sendHttp(
     headers: request.headers.map((h) =>
       h.enabled ? { ...h, name: resolveText(h.name, vars, missing), value: resolveText(h.value, vars, missing) } : h,
     ),
-    body: request.body === null ? null : resolveText(request.body, vars, missing),
+    body: request.body == null ? null : resolveText(request.body, vars, missing),
+    form: request.form
+      ? {
+          kind: request.form.kind,
+          fields: request.form.fields
+            .filter((f) => f.enabled && f.name)
+            .map((f) => ({ ...f, name: resolveText(f.name, vars, missing), value: resolveText(f.value, vars, missing) })),
+        }
+      : null,
   };
   const auth = request.auth ? resolveAuth(request.auth, (text) => resolveText(text, vars, missing)) : null;
   resolved.url = applyAuth(resolved.url, resolved.headers, auth);
   if (missing.size) {
     throw { kind: "unresolved", message: [...missing].sort().join(", ") } satisfies SendError;
+  }
+  if (resolved.bodyFile != null || resolved.form?.fields.some((f) => f.file)) {
+    throw {
+      kind: "file",
+      message: "Uploading files works in the desktop app; the browser preview cannot read your workspace.",
+    } satisfies SendError;
   }
   return sendWithFetch(resolved);
 }
@@ -166,13 +208,23 @@ async function sendWithFetch(request: HttpRequest): Promise<HttpResponse> {
   for (const h of request.headers) {
     if (h.enabled && h.name.trim()) headers.append(h.name.trim(), h.value);
   }
+  let payload: BodyInit | undefined = request.body ?? undefined;
+  if (request.form?.kind === "urlencoded") {
+    payload = new URLSearchParams(request.form.fields.map((f) => [f.name, f.value]));
+  } else if (request.form?.kind === "multipart") {
+    // The browser writes the boundary in Content-Type, so a hand-written one must go.
+    headers.delete("content-type");
+    const data = new FormData();
+    for (const f of request.form.fields) data.append(f.name, f.value);
+    payload = data;
+  }
   const started = performance.now();
   let response: Response;
   try {
     response = await fetch(request.url, {
       method: request.method,
       headers,
-      body: request.body && !["GET", "HEAD"].includes(request.method) ? request.body : undefined,
+      body: payload && !["GET", "HEAD"].includes(request.method) ? payload : undefined,
     });
   } catch (e) {
     throw {

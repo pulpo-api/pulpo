@@ -1,8 +1,8 @@
 //! OpenAPI 3.x documents (JSON or YAML): one folder per tag, one request per operation.
 
-use super::{ImportError, ImportFormat, ImportNode, ImportPlan};
+use super::{workspace_path, ImportError, ImportFormat, ImportNode, ImportPlan, ImportedBody};
 use crate::environment::{Environment, Variable};
-use crate::http::{ApiKeyLocation, Auth, Header, HttpRequest};
+use crate::http::{ApiKeyLocation, Auth, Form, FormField, FormKind, Header, HttpRequest};
 use crate::HttpMethod;
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
@@ -109,14 +109,27 @@ fn example(doc: &Value, schema: &Value, depth: usize) -> Value {
     }
 }
 
-fn request_body(doc: &Value, operation: &Value, headers: &mut Vec<Header>) -> Option<String> {
-    let body = deref(doc, operation.get("requestBody")?);
-    let content = body.get("content")?.as_object()?;
-    let (media, spec) = content
+fn request_body(
+    doc: &Value,
+    operation: &Value,
+    headers: &mut Vec<Header>,
+    warnings: &mut Vec<String>,
+    at: &str,
+) -> ImportedBody {
+    let Some(body) = operation.get("requestBody") else {
+        return ImportedBody::default();
+    };
+    let body = deref(doc, body);
+    let Some(content) = body.get("content").and_then(|c| c.as_object()) else {
+        return ImportedBody::default();
+    };
+    let Some((media, spec)) = content
         .iter()
         .find(|(m, _)| m.contains("json"))
-        .or_else(|| content.iter().next())?;
-    headers.push(Header::new("Content-Type", media.clone()));
+        .or_else(|| content.iter().next())
+    else {
+        return ImportedBody::default();
+    };
     let value = if let Some(v) = spec.get("example") {
         v.clone()
     } else if let Some(first) = spec
@@ -133,14 +146,87 @@ fn request_body(doc: &Value, operation: &Value, headers: &mut Vec<Header>) -> Op
     } else {
         Value::Null
     };
-    if media.contains("json") {
-        Some(serde_json::to_string_pretty(&value).unwrap_or_default())
+
+    let form_kind = match media.as_str() {
+        "application/x-www-form-urlencoded" => Some(FormKind::Urlencoded),
+        "multipart/form-data" => Some(FormKind::Multipart),
+        _ => None,
+    };
+    if let Some(kind) = form_kind {
+        // Fields come from the schema's properties; `format: binary` ones are files.
+        let schema = spec
+            .get("schema")
+            .map(|s| deref(doc, s).clone())
+            .unwrap_or(Value::Null);
+        let properties = schema
+            .get("properties")
+            .and_then(|p| p.as_object())
+            .cloned()
+            .unwrap_or_default();
+        let fields = properties
+            .iter()
+            .map(|(name, prop)| {
+                let prop = deref(doc, prop);
+                let is_binary =
+                    |p: &Value| p.get("format").and_then(|f| f.as_str()) == Some("binary");
+                let binary = is_binary(prop)
+                    || prop
+                        .get("items")
+                        .map(|i| is_binary(deref(doc, i)))
+                        .unwrap_or(false);
+                if binary && kind == FormKind::Multipart {
+                    warnings.push(format!("{at}: put the file for '{name}' at files/{name}"));
+                    FormField::file(name.clone(), format!("files/{name}"))
+                } else {
+                    // A field without a real example becomes a variable, not a made-up "string".
+                    let example = spec
+                        .get("example")
+                        .or_else(|| spec.get("examples"))
+                        .and_then(|_| value.get(name))
+                        .or_else(|| prop.get("example"))
+                        .or_else(|| prop.get("default"))
+                        .or_else(|| prop.get("enum").and_then(|e| e.get(0)))
+                        .cloned()
+                        .unwrap_or(Value::Null);
+                    let text = match example {
+                        Value::String(s) => s,
+                        Value::Null => format!("{{{{{name}}}}}"),
+                        other => other.to_string(),
+                    };
+                    FormField::text(name.clone(), text)
+                }
+            })
+            .collect();
+        return ImportedBody {
+            form: Some(Form { kind, fields }),
+            ..Default::default()
+        };
+    }
+
+    headers.push(Header::new("Content-Type", media.clone()));
+    let textual = media.contains("json")
+        || media.contains("xml")
+        || media.starts_with("text/")
+        || media.contains("graphql");
+    if !textual {
+        // A binary upload (octet-stream, image/*, application/pdf...).
+        return ImportedBody {
+            file: Some(workspace_path("", warnings, at)),
+            ..Default::default()
+        };
+    }
+    let raw = if media.contains("json") {
+        serde_json::to_string_pretty(&value).unwrap_or_default()
     } else {
         match value {
-            Value::String(s) => Some(s),
-            Value::Null => Some(String::new()),
-            other => Some(other.to_string()),
+            Value::String(s) => s,
+            Value::Null => String::new(),
+            other => other.to_string(),
         }
+    };
+    ImportedBody {
+        raw: Some(raw),
+        ..Default::default()
     }
 }
 
@@ -399,7 +485,7 @@ pub(super) fn document(doc: &Value) -> Result<ImportPlan, ImportError> {
                     used_auth.push(auth.clone());
                 }
             }
-            let body = request_body(doc, operation, &mut headers);
+            let body = request_body(doc, operation, &mut headers, &mut warnings, path);
             let mut url = format!("{{{{baseUrl}}}}{}", path_template(path));
             if !query.is_empty() {
                 url.push('?');
@@ -433,7 +519,9 @@ pub(super) fn document(doc: &Value) -> Result<ImportPlan, ImportError> {
                         method,
                         url,
                         headers,
-                        body,
+                        body: body.raw,
+                        form: body.form,
+                        body_file: body.file,
                         timeout_ms: None,
                         disabled_params: Vec::new(),
                         path_params: Vec::new(),
@@ -652,6 +740,79 @@ components:
         let env = &plan.environments[0];
         assert_eq!(env.variables[0].value, "https://dev.shop.test/api");
         assert!(env.variables.iter().any(|v| v.name == "token" && v.secret));
+    }
+
+    #[test]
+    fn imports_forms_and_binary_uploads() {
+        let spec = r#"
+openapi: 3.0.0
+info: { title: Files }
+paths:
+  /login:
+    post:
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                username: { type: string, example: ana }
+                password: { type: string }
+  /photos:
+    post:
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                caption: { type: string }
+                photo: { type: string, format: binary }
+  /raw:
+    put:
+      requestBody:
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+"#;
+        let plan = parse(spec).unwrap();
+        let mut requests = Vec::new();
+        for node in &plan.nodes {
+            if let ImportNode::Folder { children, .. } = node {
+                for child in children {
+                    if let ImportNode::Request { request, .. } = child {
+                        requests.push(request.clone());
+                    }
+                }
+            }
+        }
+        let login = requests.iter().find(|r| r.url.ends_with("/login")).unwrap();
+        assert_eq!(
+            login.form,
+            Some(Form {
+                kind: FormKind::Urlencoded,
+                fields: vec![
+                    FormField::text("username", "ana"),
+                    FormField::text("password", "{{password}}"),
+                ],
+            })
+        );
+        assert!(
+            login.headers.is_empty(),
+            "send() sets the form content type"
+        );
+
+        let photos = requests
+            .iter()
+            .find(|r| r.url.ends_with("/photos"))
+            .unwrap();
+        let fields = &photos.form.as_ref().unwrap().fields;
+        assert_eq!(fields[1], FormField::file("photo", "files/photo"));
+        assert!(plan.warnings.iter().any(|w| w.contains("files/photo")));
+
+        let raw = requests.iter().find(|r| r.url.ends_with("/raw")).unwrap();
+        assert_eq!(raw.body_file.as_deref(), Some("files/upload.bin"));
+        assert_eq!(raw.body, None);
     }
 
     #[test]

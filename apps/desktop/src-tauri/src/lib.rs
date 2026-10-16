@@ -30,14 +30,14 @@ async fn send_http(
     root: Option<String>,
     environment_id: Option<String>,
 ) -> Result<HttpResponse, SendError> {
-    let vars = match (root, environment_id) {
+    let vars = match (root.as_deref(), environment_id) {
         (Some(root), Some(id)) => environment::variables_for(Path::new(&root), &id, &Keychain)
             .map_err(|e| SendError::Other(e.to_string()))?,
         _ => Variables::new(),
     };
     let resolved = variables::resolve_request(&request, &vars)
         .map_err(|missing| SendError::Unresolved(missing.join(", ")))?;
-    http::send(&resolved).await
+    http::send_in(&resolved, root.as_deref().map(Path::new)).await
 }
 
 /// Runs a request with its folder and own scripts. `entry` may contain unsaved edits.

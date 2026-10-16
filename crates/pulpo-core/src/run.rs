@@ -148,7 +148,7 @@ pub async fn run_entry(
     vars.extend(local_values.clone());
     match variables::resolve_request(&request, &vars) {
         Err(missing) => report.error = Some(SendError::Unresolved(missing.join(", "))),
-        Ok(resolved) => match http::send(&resolved).await {
+        Ok(resolved) => match http::send_in(&resolved, Some(root)).await {
             Err(e) => report.error = Some(e),
             Ok(response) => {
                 let context = ScriptContext {

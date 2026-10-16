@@ -12,7 +12,7 @@ rust-version.workspace = true
 [dependencies]
 serde.workspace = true
 serde_json = { workspace = true, features = ["preserve_order"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2", "gzip", "brotli", "deflate"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2", "gzip", "brotli", "deflate", "multipart"] }
 serde_norway = "0.9"
 uuid = { version = "1", features = ["v4"] }
 rquickjs = "0.14"

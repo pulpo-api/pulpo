@@ -123,7 +123,16 @@ const preview = computed(() => {
     resolveText(h.name, previewVars.value, missing, true);
     resolveText(h.value, previewVars.value, missing, true);
   }
-  if (node.request.body) resolveText(node.request.body, previewVars.value, missing, true);
+  if (node.request.form) {
+    for (const f of node.request.form.fields.filter((f) => f.enabled)) {
+      resolveText(f.name, previewVars.value, missing, true);
+      resolveText(f.value, previewVars.value, missing, true);
+    }
+  } else if (node.request.bodyFile != null) {
+    resolveText(node.request.bodyFile, previewVars.value, missing, true);
+  } else if (node.request.body) {
+    resolveText(node.request.body, previewVars.value, missing, true);
+  }
   const auth = resolveAuth(node.request.auth ?? selectedInheritedAuth.value.auth, (text) =>
     resolveText(text, previewVars.value, missing, true),
   );
@@ -513,6 +522,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         :supported="selected.protocol === 'http'"
         :preview="preview"
         :inherited-auth="selectedInheritedAuth"
+        :root="workspace?.root ?? ''"
         @send="send"
         @save="save()"
       />

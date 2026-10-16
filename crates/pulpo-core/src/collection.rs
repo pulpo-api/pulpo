@@ -10,7 +10,7 @@
 //! ```
 //! Pulpo always writes these files in one canonical form so diffs stay small.
 
-use crate::http::{ApiKeyLocation, Auth, Header, HttpRequest, Param};
+use crate::http::{ApiKeyLocation, Auth, Form, FormField, FormKind, Header, HttpRequest, Param};
 use crate::{HttpMethod, Protocol};
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -34,6 +34,46 @@ pub enum BodyKind {
     Xml,
     Graphql,
     Text,
+}
+
+/// What `body:` says in a request file: a raw body kind (stored in a sidecar file),
+/// a form (stored in `form:`) or a file of the workspace (`bodyFile:`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum BodyModeV1 {
+    Json,
+    Xml,
+    Graphql,
+    Text,
+    Urlencoded,
+    Multipart,
+    File,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct FormFieldV1 {
+    name: String,
+    #[serde(default)]
+    value: Option<String>,
+    #[serde(default)]
+    file: Option<String>,
+    #[serde(default = "yes")]
+    enabled: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// The raw body kind to store in a sidecar, or None when the request has no raw body
+/// (or sends a form or a file instead, which win over it).
+fn raw_body_kind(request: &HttpRequest) -> Option<BodyKind> {
+    if request.form.is_some() || request.body_file.as_deref().is_some_and(|f| !f.is_empty()) {
+        return None;
+    }
+    let body = request.body.as_deref().filter(|b| !b.is_empty())?;
+    Some(BodyKind::detect(&request.headers, body))
 }
 
 impl BodyKind {
@@ -122,6 +162,9 @@ impl Scripts {
 pub const FOLDER_SCRIPT_STEM: &str = "_folder";
 
 /// A node of the collection tree.
+// Requests are bigger than folders, but trees are small and only walked or serialized,
+// so boxing them would add noise for no gain.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum TreeNode {
@@ -208,7 +251,11 @@ struct RequestFileV1 {
     #[serde(default)]
     headers: Vec<Header>,
     #[serde(default)]
-    body: Option<BodyKind>,
+    body: Option<BodyModeV1>,
+    #[serde(default)]
+    form: Vec<FormFieldV1>,
+    #[serde(default)]
+    body_file: Option<String>,
     #[serde(default)]
     timeout_ms: Option<u64>,
     #[serde(default)]
@@ -345,7 +392,27 @@ fn request_yaml(entry: &RequestEntry, body: Option<BodyKind>) -> String {
         }
     }
     out.push_str(&auth_yaml(entry.request.auth.as_ref()));
-    if let Some(kind) = body {
+    if let Some(form) = &entry.request.form {
+        let mode = match form.kind {
+            FormKind::Urlencoded => "urlencoded",
+            FormKind::Multipart => "multipart",
+        };
+        out.push_str(&format!("body: {}\n", quote(mode)));
+        if !form.fields.is_empty() {
+            out.push_str("form:\n");
+            for field in &form.fields {
+                out.push_str(&format!("  - name: {}\n", quote(&field.name)));
+                let key = if field.file { "file" } else { "value" };
+                out.push_str(&format!("    {key}: {}\n", quote(&field.value)));
+                if !field.enabled {
+                    out.push_str("    enabled: false\n");
+                }
+            }
+        }
+    } else if let Some(file) = entry.request.body_file.as_deref().filter(|f| !f.is_empty()) {
+        out.push_str("body: \"file\"\n");
+        out.push_str(&format!("bodyFile: {}\n", quote(file)));
+    } else if let Some(kind) = body {
         out.push_str(&format!("body: {}\n", quote(kind.as_str())));
     }
     if let Some(timeout) = entry.request.timeout_ms {
@@ -638,12 +705,61 @@ fn load_request_file(root: &Path, path: &Path) -> Result<RequestEntry, Collectio
         }
         (_, _) => HttpMethod::Get,
     };
-    let body = match file.body {
+    let invalid = |why: &str| CollectionError::InvalidFile(format!("{}: {why}", path.display()));
+    let raw_kind = match file.body {
+        Some(BodyModeV1::Json) => Some(BodyKind::Json),
+        Some(BodyModeV1::Xml) => Some(BodyKind::Xml),
+        Some(BodyModeV1::Graphql) => Some(BodyKind::Graphql),
+        Some(BodyModeV1::Text) => Some(BodyKind::Text),
+        _ => None,
+    };
+    let body = match raw_kind {
         Some(kind) => {
             let sidecar = body_path(path, kind);
             Some(fs::read_to_string(&sidecar).map_err(|e| io_error(&sidecar, e))?)
         }
         None => None,
+    };
+    let form_kind = match file.body {
+        Some(BodyModeV1::Urlencoded) => Some(FormKind::Urlencoded),
+        Some(BodyModeV1::Multipart) => Some(FormKind::Multipart),
+        _ => None,
+    };
+    if form_kind.is_none() && !file.form.is_empty() {
+        return Err(invalid("form needs body: \"urlencoded\" or \"multipart\""));
+    }
+    let form = match form_kind {
+        Some(kind) => {
+            let mut fields = Vec::new();
+            for field in file.form {
+                let (value, is_file) = match (field.value, field.file) {
+                    (Some(value), None) => (value, false),
+                    (None, Some(file)) if kind == FormKind::Multipart => (file, true),
+                    (None, Some(_)) => return Err(invalid("file fields need body: \"multipart\"")),
+                    (None, None) => (String::new(), false),
+                    (Some(_), Some(_)) => {
+                        return Err(invalid(&format!(
+                            "form field '{}' has both value and file",
+                            field.name
+                        )))
+                    }
+                };
+                fields.push(FormField {
+                    name: field.name,
+                    value,
+                    file: is_file,
+                    enabled: field.enabled,
+                });
+            }
+            Some(Form { kind, fields })
+        }
+        None => None,
+    };
+    let body_file = match (file.body, file.body_file) {
+        (Some(BodyModeV1::File), Some(f)) => Some(f),
+        (Some(BodyModeV1::File), None) => return Err(invalid("body: \"file\" needs bodyFile")),
+        (_, Some(_)) => return Err(invalid("bodyFile needs body: \"file\"")),
+        (_, None) => None,
     };
     Ok(RequestEntry {
         id: relative_id(root, path),
@@ -654,6 +770,8 @@ fn load_request_file(root: &Path, path: &Path) -> Result<RequestEntry, Collectio
             url: file.url,
             headers: file.headers,
             body,
+            form,
+            body_file,
             timeout_ms: file.timeout_ms,
             disabled_params: file.disabled_params,
             path_params: file.path_params,
@@ -684,8 +802,8 @@ pub fn save_request(root: &Path, entry: &RequestEntry) -> Result<(), CollectionE
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| io_error(parent, e))?;
     }
-    let body = entry.request.body.as_deref().filter(|b| !b.is_empty());
-    let kind = body.map(|b| BodyKind::detect(&entry.request.headers, b));
+    let kind = raw_body_kind(&entry.request);
+    let body = entry.request.body.as_deref();
 
     for other in BodyKind::ALL {
         let sidecar = body_path(&path, other);
@@ -799,8 +917,7 @@ fn format_nodes(
             }
             TreeNode::Request(entry) => {
                 let path = request_path(root, &entry.id)?;
-                let body = entry.request.body.as_deref().filter(|b| !b.is_empty());
-                let kind = body.map(|b| BodyKind::detect(&entry.request.headers, b));
+                let kind = raw_body_kind(&entry.request);
                 let on_disk_kind = BodyKind::ALL
                     .into_iter()
                     .find(|k| body_path(&path, *k).exists());
@@ -862,6 +979,8 @@ mod tests {
                     },
                 ],
                 body: Some("{\n  \"a\": 1\n}\n".to_string()),
+                form: None,
+                body_file: None,
                 timeout_ms: Some(5000),
                 disabled_params: vec![Param::new("debug", "true")],
                 path_params: vec![Param::new("tenant", "{{tenantId}}")],
@@ -964,6 +1083,62 @@ mod tests {
                  timeoutMs: 5000\n"
             )
         );
+    }
+
+    #[test]
+    fn stores_forms_and_body_files_in_the_request_file() {
+        let ws = workspace();
+        let mut entry = create_request(ws.path(), "", "Upload").unwrap();
+        entry.request.body = Some("{\"a\": 1}".into());
+        save_request(ws.path(), &entry).unwrap();
+        assert!(ws.path().join("01-upload.body.json").exists());
+
+        entry.request.form = Some(Form {
+            kind: FormKind::Multipart,
+            fields: vec![
+                FormField::text("title", "{{title}}"),
+                FormField {
+                    enabled: false,
+                    ..FormField::file("doc", "files/a.pdf")
+                },
+            ],
+        });
+        save_request(ws.path(), &entry).unwrap();
+        assert!(
+            !ws.path().join("01-upload.body.json").exists(),
+            "a form replaces the raw body"
+        );
+        let text = fs::read_to_string(ws.path().join("01-upload.pulpo.yaml")).unwrap();
+        assert!(text.ends_with(
+            "body: \"multipart\"\nform:\n  - name: \"title\"\n    value: \"{{title}}\"\n  - name: \"doc\"\n    file: \"files/a.pdf\"\n    enabled: false\n"
+        ), "{text}");
+        let loaded = load_request(ws.path(), &entry.id).unwrap();
+        assert_eq!(loaded.request.form, entry.request.form);
+        assert_eq!(loaded.request.body, None);
+        assert!(format_workspace(ws.path(), true).unwrap().is_empty());
+
+        entry.request.form = None;
+        entry.request.body_file = Some("files/data.bin".into());
+        save_request(ws.path(), &entry).unwrap();
+        let loaded = load_request(ws.path(), &entry.id).unwrap();
+        assert_eq!(loaded.request.body_file.as_deref(), Some("files/data.bin"));
+        assert!(fs::read_to_string(ws.path().join("01-upload.pulpo.yaml"))
+            .unwrap()
+            .ends_with("body: \"file\"\nbodyFile: \"files/data.bin\"\n"));
+
+        let file = ws.path().join("01-upload.pulpo.yaml");
+        for (bad, why) in [
+            (
+                "body: \"urlencoded\"\nform:\n  - name: \"a\"\n    file: \"x\"\n",
+                "file fields",
+            ),
+            ("form:\n  - name: \"a\"\n    value: \"1\"\n", "form needs"),
+            ("body: \"file\"\n", "needs bodyFile"),
+        ] {
+            fs::write(&file, format!("version: 1\nname: \"x\"\nprotocol: \"http\"\nmethod: \"POST\"\nurl: \"u\"\n{bad}")).unwrap();
+            let error = load_request(ws.path(), &entry.id).unwrap_err().to_string();
+            assert!(error.contains(why), "{error}");
+        }
     }
 
     #[test]

@@ -3,6 +3,7 @@
 use crate::HttpMethod;
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
 
 const DEFAULT_TIMEOUT_MS: u64 = 30_000;
@@ -29,6 +30,53 @@ impl Header {
             enabled: true,
         }
     }
+}
+
+/// Which kind of form a request sends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FormKind {
+    /// `application/x-www-form-urlencoded`
+    Urlencoded,
+    /// `multipart/form-data`, with text and file fields.
+    Multipart,
+}
+
+/// A form field. When `file` is true, `value` is a path relative to the workspace.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FormField {
+    pub name: String,
+    #[serde(default)]
+    pub value: String,
+    #[serde(default)]
+    pub file: bool,
+    #[serde(default = "enabled_by_default")]
+    pub enabled: bool,
+}
+
+impl FormField {
+    pub fn text(name: impl Into<String>, value: impl Into<String>) -> Self {
+        FormField {
+            name: name.into(),
+            value: value.into(),
+            file: false,
+            enabled: true,
+        }
+    }
+
+    pub fn file(name: impl Into<String>, path: impl Into<String>) -> Self {
+        FormField {
+            file: true,
+            ..FormField::text(name, path)
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Form {
+    pub kind: FormKind,
+    #[serde(default)]
+    pub fields: Vec<FormField>,
 }
 
 /// A name and a value: a disabled query param or a path param.
@@ -88,6 +136,11 @@ impl Auth {
             Auth::ApiKey { .. } => "API key",
         }
     }
+}
+
+/// `application/x-www-form-urlencoded` encoding: like the query, but spaces are `+`.
+fn encode_form(value: &str) -> String {
+    encode_query(value).replace("%20", "+")
 }
 
 fn encode_query(value: &str) -> String {
@@ -160,8 +213,15 @@ pub struct HttpRequest {
     pub url: String,
     #[serde(default)]
     pub headers: Vec<Header>,
+    /// Raw body (JSON, XML, GraphQL, text). Ignored when `form` or `body_file` is set.
     #[serde(default)]
     pub body: Option<String>,
+    /// A form body; wins over `body_file` and `body`.
+    #[serde(default)]
+    pub form: Option<Form>,
+    /// A file sent as the whole body, relative to the workspace. Wins over `body`.
+    #[serde(default)]
+    pub body_file: Option<String>,
     #[serde(default)]
     pub timeout_ms: Option<u64>,
     #[serde(default)]
@@ -180,12 +240,82 @@ impl HttpRequest {
             url: url.into(),
             headers: Vec::new(),
             body: None,
+            form: None,
+            body_file: None,
             timeout_ms: None,
             disabled_params: Vec::new(),
             path_params: Vec::new(),
             auth: None,
         }
     }
+}
+
+/// Finds a file a request sends. Paths are relative to the workspace and may not leave
+/// it, so a shared collection cannot read and upload other files of your machine.
+pub fn workspace_file(root: Option<&Path>, relative: &str) -> Result<PathBuf, SendError> {
+    let Some(root) = root else {
+        return Err(SendError::File(format!(
+            "{relative}: files can only be sent from a workspace"
+        )));
+    };
+    let path = Path::new(relative.trim());
+    if relative.trim().is_empty()
+        || path.is_absolute()
+        || path
+            .components()
+            .any(|c| !matches!(c, Component::Normal(_) | Component::CurDir))
+    {
+        return Err(SendError::File(format!(
+            "{relative}: use a path inside the workspace, like files/photo.png"
+        )));
+    }
+    let full = root.join(path);
+    let real = full
+        .canonicalize()
+        .map_err(|e| SendError::File(format!("{relative}: {e}")))?;
+    let real_root = root
+        .canonicalize()
+        .map_err(|e| SendError::File(format!("{}: {e}", root.display())))?;
+    if !real.starts_with(&real_root) {
+        return Err(SendError::File(format!(
+            "{relative}: links out of the workspace are not followed"
+        )));
+    }
+    if !real.is_file() {
+        return Err(SendError::File(format!("{relative}: not a file")));
+    }
+    Ok(real)
+}
+
+/// A content type from the file extension, for uploads.
+pub fn mime_for(path: &str) -> &'static str {
+    let ext = path
+        .rsplit_once('.')
+        .map(|(_, e)| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    match ext.as_str() {
+        "json" => "application/json",
+        "xml" => "application/xml",
+        "txt" | "log" => "text/plain",
+        "csv" => "text/csv",
+        "html" | "htm" => "text/html",
+        "pdf" => "application/pdf",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "zip" => "application/zip",
+        "gz" => "application/gzip",
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        _ => "application/octet-stream",
+    }
+}
+
+fn read_file(root: Option<&Path>, relative: &str) -> Result<Vec<u8>, SendError> {
+    let path = workspace_file(root, relative)?;
+    std::fs::read(&path).map_err(|e| SendError::File(format!("{relative}: {e}")))
 }
 
 /// Where the path starts: after `scheme://host[:port]`, or at the start for relative URLs.
@@ -283,6 +413,8 @@ pub enum SendError {
     Timeout(String),
     Connect(String),
     Unresolved(String),
+    /// A file to upload is missing or outside the workspace.
+    File(String),
     Other(String),
 }
 
@@ -294,6 +426,7 @@ impl fmt::Display for SendError {
             SendError::Timeout(m) => write!(f, "timed out: {m}"),
             SendError::Connect(m) => write!(f, "could not connect: {m}"),
             SendError::Unresolved(m) => write!(f, "unresolved variables: {m}"),
+            SendError::File(m) => write!(f, "file: {m}"),
             SendError::Other(m) => f.write_str(m),
         }
     }
@@ -340,7 +473,16 @@ fn to_reqwest_method(method: HttpMethod) -> reqwest::Method {
 }
 
 /// Sends the request and returns the response, whatever its status code.
+/// Requests that upload files need [`send_in`].
 pub async fn send(request: &HttpRequest) -> Result<HttpResponse, SendError> {
+    send_in(request, None).await
+}
+
+/// Like [`send`], reading uploaded files from the workspace at `root`.
+pub async fn send_in(
+    request: &HttpRequest,
+    root: Option<&Path>,
+) -> Result<HttpResponse, SendError> {
     let mut raw_url = apply_path_params(request.url.trim(), &request.path_params);
     let mut headers = request.headers.clone();
     if let Some(auth) = &request.auth {
@@ -361,18 +503,75 @@ pub async fn send(request: &HttpRequest) -> Result<HttpResponse, SendError> {
         .timeout(timeout)
         .build()?;
 
+    let has_header = |name: &str| {
+        headers
+            .iter()
+            .any(|h| h.enabled && h.name.trim().eq_ignore_ascii_case(name))
+    };
+    let multipart = matches!(&request.form, Some(f) if f.kind == FormKind::Multipart);
     let mut builder = client.request(to_reqwest_method(request.method), url);
-    for header in headers
-        .iter()
-        .filter(|h| h.enabled && !h.name.trim().is_empty())
-    {
+    for header in headers.iter().filter(|h| {
+        // The multipart boundary lives in Content-Type, so Pulpo always writes that one.
+        h.enabled
+            && !h.name.trim().is_empty()
+            && !(multipart && h.name.trim().eq_ignore_ascii_case("content-type"))
+    }) {
         let name = reqwest::header::HeaderName::from_bytes(header.name.trim().as_bytes())
             .map_err(|_| SendError::InvalidHeader(header.name.clone()))?;
         let value = reqwest::header::HeaderValue::from_str(&header.value)
             .map_err(|_| SendError::InvalidHeader(format!("{}: {}", header.name, header.value)))?;
         builder = builder.header(name, value);
     }
-    if let Some(body) = &request.body {
+    if let Some(form) = &request.form {
+        let fields = form
+            .fields
+            .iter()
+            .filter(|f| f.enabled && !f.name.is_empty());
+        match form.kind {
+            FormKind::Urlencoded => {
+                let pairs: Vec<String> = fields
+                    .map(|f| format!("{}={}", encode_form(&f.name), encode_form(&f.value)))
+                    .collect();
+                if !has_header("content-type") {
+                    builder = builder.header(
+                        reqwest::header::CONTENT_TYPE,
+                        "application/x-www-form-urlencoded",
+                    );
+                }
+                builder = builder.body(pairs.join("&"));
+            }
+            FormKind::Multipart => {
+                let mut parts = reqwest::multipart::Form::new();
+                for field in fields {
+                    if field.file {
+                        let bytes = read_file(root, &field.value)?;
+                        let file_name = Path::new(&field.value)
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        let part = reqwest::multipart::Part::bytes(bytes)
+                            .file_name(file_name)
+                            .mime_str(mime_for(&field.value))
+                            .map_err(|e| SendError::Other(e.to_string()))?;
+                        parts = parts.part(field.name.clone(), part);
+                    } else {
+                        parts = parts.text(field.name.clone(), field.value.clone());
+                    }
+                }
+                builder = builder.multipart(parts);
+            }
+        }
+    } else if let Some(file) = request
+        .body_file
+        .as_deref()
+        .filter(|f| !f.trim().is_empty())
+    {
+        let bytes = read_file(root, file)?;
+        if !has_header("content-type") {
+            builder = builder.header(reqwest::header::CONTENT_TYPE, mime_for(file));
+        }
+        builder = builder.body(bytes);
+    } else if let Some(body) = &request.body {
         builder = builder.body(body.clone());
     }
 
@@ -531,6 +730,137 @@ mod tests {
             socket.write_all(reply.as_bytes()).await.unwrap();
         });
         format!("http://{address}")
+    }
+
+    /// Answers one request with the raw request (head and body) as its body.
+    async fn raw_echo() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buffer = Vec::new();
+            let mut chunk = [0u8; 4096];
+            loop {
+                let read = socket.read(&mut chunk).await.unwrap();
+                buffer.extend_from_slice(&chunk[..read]);
+                let text = String::from_utf8_lossy(&buffer).to_string();
+                let done = match text.find("\r\n\r\n") {
+                    Some(end) => {
+                        let length = text[..end]
+                            .lines()
+                            .find_map(|l| {
+                                l.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .map(|v| v.trim().parse::<usize>().unwrap())
+                            })
+                            .unwrap_or(0);
+                        buffer.len() >= end + 4 + length
+                    }
+                    None => false,
+                };
+                if done || read == 0 {
+                    break;
+                }
+            }
+            let reply = format!(
+                "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                buffer.len()
+            );
+            socket.write_all(reply.as_bytes()).await.unwrap();
+            socket.write_all(&buffer).await.unwrap();
+        });
+        format!("http://{address}")
+    }
+
+    #[tokio::test]
+    async fn sends_urlencoded_forms() {
+        let url = raw_echo().await;
+        let mut request = HttpRequest::new(HttpMethod::Post, url);
+        request.body = Some("ignored".into());
+        request.form = Some(Form {
+            kind: FormKind::Urlencoded,
+            fields: vec![
+                FormField::text("q", "a b&c"),
+                FormField {
+                    enabled: false,
+                    ..FormField::text("off", "1")
+                },
+                FormField::text("n", "ñ"),
+            ],
+        });
+        let echoed = send(&request).await.unwrap().body;
+        assert!(echoed.contains("content-type: application/x-www-form-urlencoded"));
+        assert!(echoed.ends_with("\r\n\r\nq=a+b%26c&n=%C3%B1"), "{echoed}");
+    }
+
+    #[tokio::test]
+    async fn sends_multipart_forms_and_files_from_the_workspace() {
+        let ws = tempfile::tempdir().unwrap();
+        std::fs::create_dir(ws.path().join("files")).unwrap();
+        std::fs::write(ws.path().join("files/hola.txt"), "hola pulpo").unwrap();
+
+        let url = raw_echo().await;
+        let mut request = HttpRequest::new(HttpMethod::Post, url);
+        request
+            .headers
+            .push(Header::new("Content-Type", "multipart/form-data"));
+        request.form = Some(Form {
+            kind: FormKind::Multipart,
+            fields: vec![
+                FormField::text("title", "Hello"),
+                FormField::file("doc", "files/hola.txt"),
+            ],
+        });
+        let echoed = send_in(&request, Some(ws.path())).await.unwrap().body;
+        assert!(
+            echoed.contains("content-type: multipart/form-data; boundary="),
+            "{echoed}"
+        );
+        assert_eq!(
+            echoed.matches("content-type: multipart").count(),
+            1,
+            "the hand-written one is dropped"
+        );
+        assert!(echoed.contains("name=\"title\"\r\n\r\nHello"));
+        assert!(echoed.contains(
+            "name=\"doc\"; filename=\"hola.txt\"\r\nContent-Type: text/plain\r\n\r\nhola pulpo"
+        ));
+
+        let error = send(&request).await.unwrap_err();
+        assert!(
+            matches!(error, SendError::File(_)),
+            "no workspace, no files"
+        );
+    }
+
+    #[tokio::test]
+    async fn sends_a_file_as_the_body() {
+        let ws = tempfile::tempdir().unwrap();
+        std::fs::write(ws.path().join("data.json"), "{\"a\":1}").unwrap();
+        let url = raw_echo().await;
+        let mut request = HttpRequest::new(HttpMethod::Put, url);
+        request.body_file = Some("data.json".into());
+        let echoed = send_in(&request, Some(ws.path())).await.unwrap().body;
+        assert!(echoed.contains("content-type: application/json"));
+        assert!(echoed.ends_with("{\"a\":1}"));
+    }
+
+    #[test]
+    fn workspace_files_cannot_leave_the_workspace() {
+        let parent = tempfile::tempdir().unwrap();
+        let ws = parent.path().join("ws");
+        std::fs::create_dir(&ws).unwrap();
+        std::fs::write(parent.path().join("secret.txt"), "x").unwrap();
+        std::fs::write(ws.join("ok.txt"), "x").unwrap();
+
+        assert!(workspace_file(Some(&ws), "ok.txt").is_ok());
+        assert!(workspace_file(Some(&ws), "./ok.txt").is_ok());
+        for bad in ["../secret.txt", "", "missing.txt"] {
+            assert!(workspace_file(Some(&ws), bad).is_err(), "{bad}");
+        }
+        let absolute = parent.path().join("secret.txt");
+        assert!(workspace_file(Some(&ws), &absolute.to_string_lossy()).is_err());
+        assert!(workspace_file(None, "ok.txt").is_err());
     }
 
     #[tokio::test]

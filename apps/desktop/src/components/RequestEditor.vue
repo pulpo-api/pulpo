@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import { HTTP_METHODS, type HttpRequest } from "../core";
+import { HTTP_METHODS, bodyMode, type HttpRequest } from "../core";
 import type { InheritedAuth, Scripts } from "../workspace";
 import AuthEditor from "./AuthEditor.vue";
-import CodeEditor, { type Language } from "./CodeEditor.vue";
+import CodeEditor from "./CodeEditor.vue";
+import BodyEditor from "./BodyEditor.vue";
 import ParamsEditor from "./ParamsEditor.vue";
 import { pathParamNames, splitUrl } from "../params";
 
@@ -14,6 +15,7 @@ const props = defineProps<{
   supported: boolean;
   preview: { url: string; changed: boolean; missing: string[] } | null;
   inheritedAuth: InheritedAuth;
+  root: string;
 }>();
 const emit = defineEmits<{ send: []; save: [] }>();
 
@@ -21,23 +23,12 @@ const tab = ref<"params" | "auth" | "body" | "headers" | "pre" | "test">(
   props.request.method === "GET" || splitUrl(props.request.url).params.length ? "params" : "body",
 );
 const paramCount = computed(() => splitUrl(props.request.url).params.length + pathParamNames(props.request.url).length);
-const hasBody = computed(() => !["GET", "HEAD"].includes(props.request.method));
-const bodyLanguage = computed<Language>(() => {
-  const contentType =
-    props.request.headers.find((h) => h.enabled && h.name.toLowerCase() === "content-type")?.value.toLowerCase() ?? "";
-  if (contentType.includes("json")) return "json";
-  if (contentType.includes("xml")) return "xml";
-  const start = (props.request.body ?? "").trimStart();
-  if (start.startsWith("{") || start.startsWith("[")) return "json";
-  if (start.startsWith("<")) return "xml";
-  return "text";
-});
-const body = computed({
-  get: () => props.request.body ?? "",
-  set: (value: string) => {
-    props.request.body = value || null;
-  },
-});
+const BODY_BADGES: Partial<Record<ReturnType<typeof bodyMode>, string>> = {
+  urlencoded: "Form",
+  multipart: "Form",
+  file: "File",
+};
+const bodyBadge = computed(() => BODY_BADGES[bodyMode(props.request)] ?? "");
 const auth = computed({
   get: () => props.request.auth ?? null,
   set: (value) => {
@@ -61,14 +52,6 @@ function removeHeader(index: number) {
   props.request.headers.splice(index, 1);
 }
 
-function formatBody() {
-  if (!props.request.body) return;
-  try {
-    props.request.body = JSON.stringify(JSON.parse(props.request.body), null, 2);
-  } catch {
-    /* not JSON, leave as is */
-  }
-}
 </script>
 
 <template>
@@ -97,7 +80,9 @@ function formatBody() {
       <button :class="{ on: tab === 'auth' }" @click="tab = 'auth'">
         Auth <span v-if="authBadge" class="count" :title="request.auth ? 'Set on this request' : 'Inherited from a parent'">{{ authBadge }}</span>
       </button>
-      <button :class="{ on: tab === 'body' }" @click="tab = 'body'">Body</button>
+      <button :class="{ on: tab === 'body' }" @click="tab = 'body'">
+        Body <span v-if="bodyBadge" class="count">{{ bodyBadge }}</span>
+      </button>
       <button :class="{ on: tab === 'headers' }" @click="tab = 'headers'">
         Headers <span v-if="activeHeaders" class="count">{{ activeHeaders }}</span>
       </button>
@@ -108,7 +93,6 @@ function formatBody() {
         Tests <span v-if="scripts.test.trim()" class="dot"></span>
       </button>
       <span class="spacer"></span>
-      <button v-if="tab === 'body' && hasBody" class="link" @click="formatBody">Format JSON</button>
       <span class="kbd">Ctrl ↵ to send</span>
     </div>
 
@@ -116,18 +100,7 @@ function formatBody() {
 
     <AuthEditor v-else-if="tab === 'auth'" v-model="auth" :inherited="inheritedAuth" />
 
-    <template v-else-if="tab === 'body'">
-      <CodeEditor
-        v-if="hasBody"
-        v-model="body"
-        class="code-area"
-        :language="bodyLanguage"
-        placeholder='{ "hello": "pulpo" }'
-        @run="emit('send')"
-        @save="emit('save')"
-      />
-      <p v-else class="empty">{{ request.method }} requests have no body.</p>
-    </template>
+    <BodyEditor v-else-if="tab === 'body'" :request="request" :root="root" @send="emit('send')" @save="emit('save')" />
 
     <template v-else-if="tab === 'pre' || tab === 'test'">
       <CodeEditor

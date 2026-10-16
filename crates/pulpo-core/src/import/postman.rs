@@ -1,9 +1,9 @@
 //! Postman collection v2.0/v2.1 and Postman environment files.
 
-use super::{ImportError, ImportFormat, ImportNode, ImportPlan};
+use super::{workspace_path, ImportError, ImportFormat, ImportNode, ImportPlan, ImportedBody};
 use crate::collection::Scripts;
 use crate::environment::{Environment, Variable};
-use crate::http::{ApiKeyLocation, Auth, Header, HttpRequest, Param};
+use crate::http::{ApiKeyLocation, Auth, Form, FormField, FormKind, Header, HttpRequest, Param};
 use crate::HttpMethod;
 use serde_json::Value;
 
@@ -114,9 +114,16 @@ fn body_of(
     headers: &mut Vec<Header>,
     warnings: &mut Vec<String>,
     at: &str,
-) -> Option<String> {
-    let body = body?;
-    match body.get("mode").and_then(|m| m.as_str()).unwrap_or("raw") {
+) -> ImportedBody {
+    let Some(body) = body else {
+        return ImportedBody::default();
+    };
+    let raw = |text: String| ImportedBody {
+        raw: (!text.is_empty()).then_some(text),
+        ..Default::default()
+    };
+    let mode = body.get("mode").and_then(|m| m.as_str()).unwrap_or("raw");
+    match mode {
         "raw" => {
             let raw = text(body.get("raw"));
             let language = body
@@ -135,27 +142,56 @@ fn body_of(
                     headers.push(Header::new("Content-Type", ct));
                 }
             }
-            (!raw.is_empty()).then_some(raw)
+            ImportedBody {
+                raw: (!raw.is_empty()).then_some(raw),
+                ..Default::default()
+            }
         }
-        "urlencoded" => {
-            let pairs: Vec<String> = body
-                .get("urlencoded")
+        "urlencoded" | "formdata" => {
+            let urlencoded = mode == "urlencoded";
+            let fields = body
+                .get(mode)
                 .and_then(|u| u.as_array())
                 .map(|items| {
                     items
                         .iter()
-                        .filter(|i| !i.get("disabled").and_then(|d| d.as_bool()).unwrap_or(false))
-                        .map(|i| format!("{}={}", text(i.get("key")), text(i.get("value"))))
+                        .map(|i| {
+                            let is_file = i.get("type").and_then(|t| t.as_str()) == Some("file");
+                            let value = if is_file {
+                                // `src` is a path (or a list of paths) on the author's machine.
+                                let src = match i.get("src") {
+                                    Some(Value::Array(list)) => text(list.first()),
+                                    other => text(other),
+                                };
+                                workspace_path(&src, warnings, at)
+                            } else {
+                                text(i.get("value"))
+                            };
+                            FormField {
+                                name: text(i.get("key")),
+                                value,
+                                file: is_file && !urlencoded,
+                                enabled: !i
+                                    .get("disabled")
+                                    .and_then(|d| d.as_bool())
+                                    .unwrap_or(false),
+                            }
+                        })
+                        .filter(|f| !f.name.is_empty())
                         .collect()
                 })
                 .unwrap_or_default();
-            if !has_header(headers, "content-type") {
-                headers.push(Header::new(
-                    "Content-Type",
-                    "application/x-www-form-urlencoded",
-                ));
+            ImportedBody {
+                form: Some(Form {
+                    kind: if urlencoded {
+                        FormKind::Urlencoded
+                    } else {
+                        FormKind::Multipart
+                    },
+                    fields,
+                }),
+                ..Default::default()
             }
-            Some(pairs.join("&"))
         }
         "graphql" => {
             let query = text(body.pointer("/graphql/query"));
@@ -166,21 +202,17 @@ fn body_of(
                 headers.push(Header::new("Content-Type", "application/json"));
             }
             let payload = serde_json::json!({ "query": query, "variables": variables });
-            Some(serde_json::to_string_pretty(&payload).unwrap_or_default())
+            raw(serde_json::to_string_pretty(&payload).unwrap_or_default())
         }
-        "formdata" => {
-            warnings.push(format!(
-                "{at}: multipart form-data bodies are not supported yet; body skipped"
-            ));
-            None
-        }
-        "file" => {
-            warnings.push(format!(
-                "{at}: file bodies are not supported yet; body skipped"
-            ));
-            None
-        }
-        _ => None,
+        "file" => ImportedBody {
+            file: Some(workspace_path(
+                &text(body.pointer("/file/src")),
+                warnings,
+                at,
+            )),
+            ..Default::default()
+        },
+        _ => ImportedBody::default(),
     }
 }
 
@@ -235,7 +267,9 @@ fn request_of(item: &Value, warnings: &mut Vec<String>, at: &str) -> Option<Http
         method,
         url: url_of(url),
         headers,
-        body,
+        body: body.raw,
+        form: body.form,
+        body_file: body.file,
         timeout_ms: None,
         disabled_params: params_of("query", |i| {
             i.get("disabled").and_then(|d| d.as_bool()).unwrap_or(false)
@@ -436,7 +470,9 @@ mod tests {
             "body": {"mode": "urlencoded", "urlencoded": [{"key": "a", "value": "1"}, {"key": "b", "value": "2", "disabled": true}]}}},
           {"name": "Query", "request": {"method": "POST", "url": "{{base}}/graphql",
             "body": {"mode": "graphql", "graphql": {"query": "{ orders { id } }", "variables": "{\"n\": 1}"}}}},
-          {"name": "Upload", "request": {"method": "POST", "url": "{{base}}/files", "body": {"mode": "formdata", "formdata": []}}},
+          {"name": "Upload", "request": {"method": "POST", "url": "{{base}}/files", "body": {"mode": "formdata", "formdata": [
+            {"key": "title", "value": "x", "type": "text"},
+            {"key": "photo", "src": "/Users/ana/photo.png", "type": "file"}]}}},
           {"name": "Weird", "request": {"method": "PURGE", "url": "{{base}}/cache"}},
           {"name": "Api key", "request": {"method": "GET", "url": "{{base}}/k",
             "auth": {"type": "apikey", "apikey": [{"key": "key", "value": "X-Key"}, {"key": "value", "value": "{{key}}"}]}}}
@@ -490,14 +526,33 @@ mod tests {
         let create = &all[1].1;
         assert_eq!(create.auth, None);
         assert!(!create.headers.iter().any(|h| h.name == "Authorization"));
-        assert_eq!(create.body.as_deref(), Some("a=1"));
+        assert_eq!(create.body, None);
+        assert_eq!(
+            create.form,
+            Some(Form {
+                kind: FormKind::Urlencoded,
+                fields: vec![
+                    FormField::text("a", "1"),
+                    FormField {
+                        enabled: false,
+                        ..FormField::text("b", "2")
+                    },
+                ],
+            })
+        );
 
         let query = &all[2].1;
         let payload: Value = serde_json::from_str(query.body.as_deref().unwrap()).unwrap();
         assert_eq!(payload["query"], "{ orders { id } }");
         assert_eq!(payload["variables"]["n"], 1);
 
-        assert_eq!(all[3].1.body, None);
+        assert_eq!(
+            all[3].1.form.as_ref().unwrap().fields,
+            vec![
+                FormField::text("title", "x"),
+                FormField::file("photo", "files/photo.png")
+            ]
+        );
         assert_eq!(
             all[4].1.auth,
             Some(Auth::ApiKey {
@@ -516,7 +571,10 @@ mod tests {
             panic!()
         };
         assert_eq!(scripts.test, "pm.test('ok', () => {});\n");
-        assert!(plan.warnings.iter().any(|w| w.contains("form-data")));
+        assert!(plan
+            .warnings
+            .iter()
+            .any(|w| w.contains("copy it to files/photo.png")));
         assert!(plan.warnings.iter().any(|w| w.contains("PURGE")));
 
         let env = &plan.environments[0];

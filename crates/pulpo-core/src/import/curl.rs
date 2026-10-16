@@ -1,7 +1,7 @@
 //! curl commands, as copied from a terminal, docs or the browser's "Copy as cURL".
 
-use super::{ImportError, ImportFormat, ImportNode, ImportPlan};
-use crate::http::{Auth, Header, HttpRequest};
+use super::{workspace_path, ImportError, ImportFormat, ImportNode, ImportPlan};
+use crate::http::{Auth, Form, FormField, FormKind, Header, HttpRequest};
 use crate::HttpMethod;
 
 /// Splits a shell command into words. Handles single and double quotes, backslash
@@ -121,6 +121,8 @@ pub fn parse_curl(command: &str) -> Result<(HttpRequest, Vec<String>), ImportErr
     let mut headers: Vec<Header> = Vec::new();
     let mut auth = None;
     let mut data: Vec<String> = Vec::new();
+    let mut form: Vec<FormField> = Vec::new();
+    let mut body_file: Option<String> = None;
     let mut get_mode = false;
     let mut head = false;
     let mut warnings = Vec::new();
@@ -178,9 +180,7 @@ pub fn parse_curl(command: &str) -> Result<(HttpRequest, Vec<String>), ImportErr
             "-d" | "--data" | "--data-raw" | "--data-binary" | "--data-ascii" => {
                 let body = value(&mut args)?;
                 if let Some(file) = body.strip_prefix('@').filter(|_| flag != "--data-raw") {
-                    warnings.push(format!(
-                        "body from file @{file} was not read; paste its content"
-                    ));
+                    body_file = Some(workspace_path(file, &mut warnings, "curl"));
                 } else {
                     data.push(body);
                 }
@@ -214,9 +214,23 @@ pub fn parse_curl(command: &str) -> Result<(HttpRequest, Vec<String>), ImportErr
             "-G" | "--get" => get_mode = true,
             "-I" | "--head" => head = true,
             "--url" => url = Some(value(&mut args)?),
-            "-F" | "--form" => {
-                value(&mut args)?;
-                warnings.push("multipart -F fields are not supported yet; skipped".into());
+            "-F" | "--form" | "--form-string" => {
+                let raw = value(&mut args)?;
+                let Some((name, val)) = raw.split_once('=') else {
+                    warnings.push(format!("form field without '=' ignored: {raw}"));
+                    continue;
+                };
+                // `name=@path;type=...` uploads a file; `name=<path` sends its content as text.
+                let file = (flag != "--form-string")
+                    .then(|| val.strip_prefix('@').or_else(|| val.strip_prefix('<')))
+                    .flatten();
+                form.push(match file {
+                    Some(path) => {
+                        let path = path.split(';').next().unwrap_or(path);
+                        FormField::file(name, workspace_path(path, &mut warnings, "curl"))
+                    }
+                    None => FormField::text(name, val),
+                });
             }
             f if IGNORED.contains(&f) => {}
             f if IGNORED_WITH_VALUE.contains(&f) => {
@@ -244,10 +258,11 @@ pub fn parse_curl(command: &str) -> Result<(HttpRequest, Vec<String>), ImportErr
             url.push_str(&query);
         }
     }
+    let has_body = body.is_some() || body_file.is_some() || !form.is_empty();
     let method_name = method.unwrap_or_else(|| {
         if head {
             "HEAD".into()
-        } else if body.is_some() {
+        } else if has_body {
             "POST".into()
         } else {
             "GET".into()
@@ -257,6 +272,7 @@ pub fn parse_curl(command: &str) -> Result<(HttpRequest, Vec<String>), ImportErr
         .parse()
         .map_err(|_| ImportError::Invalid(format!("method {method_name} is not supported")))?;
     if body.is_some()
+        && body_file.is_none()
         && !headers
             .iter()
             .any(|h| h.name.eq_ignore_ascii_case("content-type"))
@@ -273,6 +289,11 @@ pub fn parse_curl(command: &str) -> Result<(HttpRequest, Vec<String>), ImportErr
             url,
             headers,
             body,
+            form: (!form.is_empty()).then_some(Form {
+                kind: FormKind::Multipart,
+                fields: form,
+            }),
+            body_file,
             timeout_ms: None,
             disabled_params: Vec::new(),
             path_params: Vec::new(),
@@ -343,6 +364,37 @@ mod tests {
     }
 
     #[test]
+    fn imports_multipart_fields_and_file_bodies() {
+        let (req, warnings) = parse_curl(
+            "curl https://x.test/up -F title=Hola -F 'doc=@./files/cv.pdf;type=application/pdf' -F 'raw=@/etc/passwd'",
+        )
+        .unwrap();
+        assert_eq!(req.method, HttpMethod::Post);
+        assert_eq!(req.body, None);
+        let form = req.form.unwrap();
+        assert_eq!(form.kind, FormKind::Multipart);
+        assert_eq!(
+            form.fields,
+            vec![
+                FormField::text("title", "Hola"),
+                FormField::file("doc", "files/cv.pdf"),
+                FormField::file("raw", "files/passwd"),
+            ]
+        );
+        assert!(warnings
+            .iter()
+            .any(|w| w.contains("copy it to files/passwd")));
+
+        let (req, _) =
+            parse_curl("curl -X PUT https://x.test/b --data-binary @data/img.png").unwrap();
+        assert_eq!(req.body_file.as_deref(), Some("data/img.png"));
+        assert!(!req
+            .headers
+            .iter()
+            .any(|h| h.name.eq_ignore_ascii_case("content-type")));
+    }
+
+    #[test]
     fn handles_json_user_get_and_inline_values() {
         let (req, _) =
             parse_curl("curl --json '{\"q\":1}' -u ana:pw --url=https://x.test/s").unwrap();
@@ -371,7 +423,11 @@ mod tests {
     fn keeps_variables_and_reports_unsupported_flags() {
         let (req, warnings) = parse_curl("curl {{base}}/upload -F file=@a.png --foo").unwrap();
         assert_eq!(req.url, "{{base}}/upload");
-        assert_eq!(warnings.len(), 2);
+        assert_eq!(
+            req.form.unwrap().fields,
+            vec![FormField::file("file", "a.png")]
+        );
+        assert_eq!(warnings, vec!["option --foo ignored".to_string()]);
     }
 
     #[test]

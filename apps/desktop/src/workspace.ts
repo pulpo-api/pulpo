@@ -115,7 +115,7 @@ export function clone<T>(value: T): T {
 
 export function toEntry(node: Extract<TreeNode, { type: "request" }>): RequestEntry {
   const { id, name, protocol, request, scripts } = node;
-  return clone({ id, name, protocol, request: { ...request, auth: request.auth ?? null }, scripts: scripts ?? { pre: "", test: "" } });
+  return clone({ id, name, protocol, request: { ...request, auth: request.auth ?? null, form: request.form ?? null, bodyFile: request.bodyFile ?? null }, scripts: scripts ?? { pre: "", test: "" } });
 }
 
 /** Where the workspace lives: real files in the desktop app, memory in the browser preview. */
@@ -137,6 +137,8 @@ export interface WorkspaceBackend {
   /** Desktop only: imports a file (or pasted text) with the Rust importers. */
   importInto?(root: string, folderId: string, source: { path?: string; text?: string }): Promise<ImportSummary>;
   pickImportFile?(): Promise<string | null>;
+  /** Desktop only: picks a file to upload and returns its absolute path. */
+  pickUploadFile?(): Promise<string | null>;
   /** Sends the request with its scripts; `entry` may contain unsaved edits. */
   run(root: string, entry: RequestEntry, environmentId: string | undefined): Promise<RunReport>;
   /** Only in the browser preview: the values used to resolve requests (secrets included). */
@@ -172,7 +174,25 @@ const tauriBackend: WorkspaceBackend = {
     });
     return typeof picked === "string" ? picked : null;
   },
+  async pickUploadFile() {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const picked = await open({ multiple: false, title: "Choose a file inside the workspace" });
+    return typeof picked === "string" ? picked : null;
+  },
 };
+
+/** A picked absolute path as a workspace-relative one, or null when it is outside the
+ * workspace (pulpo-core refuses to send those). */
+export function toWorkspacePath(root: string, absolute: string): string | null {
+  const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "");
+  const base = norm(root);
+  const path = norm(absolute);
+  const windows = /^[a-z]:\//i.test(base);
+  const same = (a: string, b: string) => (windows ? a.toLowerCase() === b.toLowerCase() : a === b);
+  if (!same(path.slice(0, base.length + 1), `${base}/`)) return null;
+  const relative = path.slice(base.length + 1);
+  return relative && !relative.split("/").includes("..") ? relative : null;
+}
 
 function slugify(name: string): string {
   const slug = name

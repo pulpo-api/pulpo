@@ -9,7 +9,7 @@ mod postman;
 
 use crate::collection::{self, CollectionError, RequestEntry, Scripts};
 use crate::environment::{self, Environment, SecretStore};
-use crate::http::{Auth, HttpRequest};
+use crate::http::{Auth, Form, HttpRequest};
 use crate::Protocol;
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -287,6 +287,44 @@ fn write_nodes(
     Ok(())
 }
 
+/// A body as importers find it: raw text, a form or a file of the workspace.
+#[derive(Debug, Default)]
+pub(super) struct ImportedBody {
+    pub raw: Option<String>,
+    pub form: Option<Form>,
+    pub file: Option<String>,
+}
+
+/// A path for a file the imported request sends. Relative paths that stay inside the
+/// workspace are kept; anything else (usually an absolute path on the author's machine)
+/// becomes `files/<name>`, with a warning to copy the file there.
+pub(super) fn workspace_path(path: &str, warnings: &mut Vec<String>, at: &str) -> String {
+    let clean = path.trim().replace('\\', "/");
+    let clean = clean.trim_start_matches("./").to_string();
+    let inside = !clean.is_empty()
+        && !clean.starts_with('/')
+        && !clean.contains(':')
+        && !clean.split('/').any(|part| part == "..");
+    if inside {
+        return clean;
+    }
+    let name = clean
+        .rsplit('/')
+        .find(|part| !part.is_empty())
+        .unwrap_or("upload.bin");
+    let target = format!("files/{name}");
+    if clean.is_empty() {
+        warnings.push(format!(
+            "{at}: a file to upload had no path; put it at {target}"
+        ));
+    } else {
+        warnings.push(format!(
+            "{at}: {path} is outside the workspace; copy it to {target}"
+        ));
+    }
+    target
+}
+
 /// Standard base64, used for `Authorization: Basic`.
 pub(crate) fn base64(input: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -314,6 +352,34 @@ mod tests {
     use super::*;
     use crate::collection::{init_workspace, load_workspace, TreeNode};
     use crate::environment::{list_environments, MemoryStore};
+
+    #[test]
+    fn keeps_workspace_paths_and_moves_the_rest_to_files() {
+        let mut warnings = Vec::new();
+        assert_eq!(
+            workspace_path("./files/a.png", &mut warnings, "x"),
+            "files/a.png"
+        );
+        assert_eq!(
+            workspace_path("data\\b.csv", &mut warnings, "x"),
+            "data/b.csv"
+        );
+        assert!(warnings.is_empty());
+        assert_eq!(
+            workspace_path("/Users/ana/photo.png", &mut warnings, "x"),
+            "files/photo.png"
+        );
+        assert_eq!(
+            workspace_path("C:\\Users\\ana\\cv.pdf", &mut warnings, "x"),
+            "files/cv.pdf"
+        );
+        assert_eq!(
+            workspace_path("../secret.txt", &mut warnings, "x"),
+            "files/secret.txt"
+        );
+        assert_eq!(workspace_path("", &mut warnings, "x"), "files/upload.bin");
+        assert_eq!(warnings.len(), 4);
+    }
 
     #[test]
     fn encodes_base64() {

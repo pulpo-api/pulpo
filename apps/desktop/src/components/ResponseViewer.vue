@@ -60,6 +60,7 @@ const errorTitle: Record<SendError["kind"], string> = {
   timeout: "Timed out",
   connect: "Could not connect",
   unresolved: "Missing variables",
+  file: "File problem",
   other: "Request failed",
 };
 </script>

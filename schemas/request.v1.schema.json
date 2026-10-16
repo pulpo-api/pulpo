@@ -53,9 +53,26 @@
     },
     "auth": { "$ref": "#/$defs/auth" },
     "body": {
-      "enum": ["json", "xml", "graphql", "text"],
-      "description": "Kind of the body file next to this one (.body.json, .body.xml, .body.graphql or .body.txt)."
+      "enum": ["json", "xml", "graphql", "text", "urlencoded", "multipart", "file"],
+      "description": "json/xml/graphql/text: the body is the file next to this one (.body.json, .body.xml, .body.graphql or .body.txt). urlencoded/multipart: the fields in form. file: the workspace file in bodyFile."
     },
+    "form": {
+      "type": "array",
+      "description": "Fields of a urlencoded or multipart body. Values may contain {{variables}}.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string" },
+          "value": { "type": "string" },
+          "file": { "type": "string", "description": "Multipart only: a file to upload, relative to the workspace (it cannot leave it)." },
+          "enabled": { "type": "boolean", "default": true }
+        },
+        "not": { "required": ["value", "file"] }
+      }
+    },
+    "bodyFile": { "type": "string", "description": "With body: file. A workspace file sent as the whole body, e.g. files/photo.png." },
     "timeoutMs": { "type": "integer", "minimum": 1, "description": "Request timeout in milliseconds (default 30000)." }
   },
   "if": { "properties": { "protocol": { "const": "http" } } },

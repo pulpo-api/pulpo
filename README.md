@@ -50,6 +50,17 @@ headers:
 body: "json"
 ```
 
+Forms and uploads live in the request file too. File paths are relative to the workspace (and cannot leave it), so the collection works on every machine and a shared collection cannot upload your other files:
+
+```yaml
+body: "multipart"          # or "urlencoded"; "file" + bodyFile sends one file as the whole body
+form:
+  - name: "title"
+    value: "{{title}}"
+  - name: "photo"
+    file: "files/photo.png"
+```
+
 Pulpo always writes files in one canonical form. The [JSON Schema](schemas/request.v1.schema.json) gives you autocompletion in VS Code and IntelliJ.
 
 ```bash
