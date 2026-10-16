@@ -124,7 +124,8 @@ for lang in $langs; do
       01-json) check $name $lang "$out" '"method": "POST"' '"path": "/orders/a%20b"' '"authorization": "Bearer t0ken"' '\"note' 'ñ' "it's" ;;
       02-basic) check $name $lang "$out" '"method": "GET"' '"path": "/me?x=1"' '"authorization": "Basic YW5hOnBAc3M6d2Q="' ;;
       03-form) check $name $lang "$out" '"content-type": "application/x-www-form-urlencoded' 'user=ana' 'q=a%26b%3Dc' ;;
-      04-multipart) check $name $lang "$out" 'multipart/form-data; boundary=' 'name=\"title\"' 'Hola' 'filename=\"hola.txt\"' 'hola pulpo' ;;
+      # .NET (C#, PowerShell) writes name=title without quotes: valid for simple names.
+      04-multipart) check $name $lang "$out" 'multipart/form-data; boundary=' 'form-data; name=' 'title' 'Hola' 'filename=' 'hola.txt' 'hola pulpo' ;;
       05-file) check $name $lang "$out" '"method": "PUT"' '"content-type": "application/json"' '{\"bin\":true}' ;;
       06-apikey) check $name $lang "$out" '"method": "DELETE"' '"path": "/items?api%20key=k%261"' ;;
     esac

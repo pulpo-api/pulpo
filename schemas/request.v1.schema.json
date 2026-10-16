@@ -53,8 +53,8 @@
     },
     "auth": { "$ref": "#/$defs/auth" },
     "body": {
-      "enum": ["json", "xml", "graphql", "text", "urlencoded", "multipart", "file"],
-      "description": "json/xml/graphql/text: the body is the file next to this one (.body.json, .body.xml, .body.graphql or .body.txt). urlencoded/multipart: the fields in form. file: the workspace file in bodyFile."
+      "enum": ["json", "xml", "html", "javascript", "graphql", "text", "urlencoded", "multipart", "file"],
+      "description": "json/xml/html/javascript/graphql/text: the body is the file next to this one (.body.json, .body.xml, .body.html, .body.js, .body.graphql or .body.txt), chosen from the Content-Type header. urlencoded/multipart: the fields in form. file: the workspace file in bodyFile."
     },
     "form": {
       "type": "array",

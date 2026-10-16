@@ -35,6 +35,8 @@ pub(crate) const SKIPPED_DIRS: [&str; 5] =
 pub enum BodyKind {
     Json,
     Xml,
+    Html,
+    Javascript,
     Graphql,
     Text,
 }
@@ -46,6 +48,8 @@ pub enum BodyKind {
 enum BodyModeV1 {
     Json,
     Xml,
+    Html,
+    Javascript,
     Graphql,
     Text,
     Urlencoded,
@@ -80,9 +84,11 @@ fn raw_body_kind(request: &HttpRequest) -> Option<BodyKind> {
 }
 
 impl BodyKind {
-    pub const ALL: [BodyKind; 4] = [
+    pub const ALL: [BodyKind; 6] = [
         BodyKind::Json,
         BodyKind::Xml,
+        BodyKind::Html,
+        BodyKind::Javascript,
         BodyKind::Graphql,
         BodyKind::Text,
     ];
@@ -91,6 +97,8 @@ impl BodyKind {
         match self {
             BodyKind::Json => "json",
             BodyKind::Xml => "xml",
+            BodyKind::Html => "html",
+            BodyKind::Javascript => "javascript",
             BodyKind::Graphql => "graphql",
             BodyKind::Text => "text",
         }
@@ -100,6 +108,8 @@ impl BodyKind {
         match self {
             BodyKind::Json => "json",
             BodyKind::Xml => "xml",
+            BodyKind::Html => "html",
+            BodyKind::Javascript => "js",
             BodyKind::Graphql => "graphql",
             BodyKind::Text => "txt",
         }
@@ -114,14 +124,22 @@ impl BodyKind {
             .unwrap_or_default();
         if content_type.contains("json") {
             BodyKind::Json
+        } else if content_type.contains("html") {
+            // Before xml: application/xhtml+xml is HTML.
+            BodyKind::Html
         } else if content_type.contains("xml") {
             BodyKind::Xml
+        } else if content_type.contains("javascript") || content_type.contains("ecmascript") {
+            BodyKind::Javascript
         } else if content_type.contains("graphql") {
             BodyKind::Graphql
         } else if content_type.is_empty() {
             let trimmed = body.trim_start();
+            let lower = trimmed.get(..15).unwrap_or(trimmed).to_ascii_lowercase();
             if trimmed.starts_with('{') || trimmed.starts_with('[') {
                 BodyKind::Json
+            } else if lower.starts_with("<!doctype html") || lower.starts_with("<html") {
+                BodyKind::Html
             } else if trimmed.starts_with('<') {
                 BodyKind::Xml
             } else {
@@ -898,6 +916,8 @@ fn load_request_file(root: &Path, path: &Path) -> Result<RequestEntry, Collectio
     let raw_kind = match file.body {
         Some(BodyModeV1::Json) => Some(BodyKind::Json),
         Some(BodyModeV1::Xml) => Some(BodyKind::Xml),
+        Some(BodyModeV1::Html) => Some(BodyKind::Html),
+        Some(BodyModeV1::Javascript) => Some(BodyKind::Javascript),
         Some(BodyModeV1::Graphql) => Some(BodyKind::Graphql),
         Some(BodyModeV1::Text) => Some(BodyKind::Text),
         _ => None,
@@ -1353,6 +1373,37 @@ mod tests {
     }
 
     #[test]
+    fn stores_each_raw_kind_with_its_extension() {
+        let ws = workspace();
+        let mut entry = create_request(ws.path(), "", "Page").unwrap();
+        entry.request.body = Some("<h1>Hola</h1>".into());
+        for (content_type, extension) in [
+            ("text/html", "html"),
+            ("application/javascript", "js"),
+            ("application/graphql", "graphql"),
+            ("text/plain", "txt"),
+        ] {
+            entry.request.headers = vec![Header::new("Content-Type", content_type)];
+            save_request(ws.path(), &entry).unwrap();
+            let files: Vec<_> = fs::read_dir(ws.path())
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .filter(|n| n.contains(".body."))
+                .collect();
+            assert_eq!(
+                files,
+                [format!("01-page.body.{extension}")],
+                "only one body file"
+            );
+            assert_eq!(
+                load_request(ws.path(), &entry.id).unwrap().request.body,
+                entry.request.body
+            );
+        }
+        assert!(format_workspace(ws.path(), true).unwrap().is_empty());
+    }
+
+    #[test]
     fn removes_the_body_file_when_the_body_is_cleared() {
         let ws = workspace();
         let mut entry = sample("01-create-order.pulpo.yaml");
@@ -1679,6 +1730,25 @@ timeoutMs: 700
         );
         assert_eq!(BodyKind::detect(&[], "  [1, 2]"), BodyKind::Json);
         assert_eq!(BodyKind::detect(&[], "hello"), BodyKind::Text);
+        let ct = |v: &str| [Header::new("Content-Type", v)];
+        assert_eq!(
+            BodyKind::detect(&ct("text/html; charset=utf-8"), "x"),
+            BodyKind::Html
+        );
+        assert_eq!(
+            BodyKind::detect(&ct("application/xhtml+xml"), "x"),
+            BodyKind::Html
+        );
+        assert_eq!(
+            BodyKind::detect(&ct("application/javascript"), "x"),
+            BodyKind::Javascript
+        );
+        assert_eq!(
+            BodyKind::detect(&ct("text/plain"), "{}"),
+            BodyKind::Text,
+            "the header wins"
+        );
+        assert_eq!(BodyKind::detect(&[], "<!DOCTYPE html><p>"), BodyKind::Html);
         assert_eq!(slugify("¡Crear pedido nº 2!"), "crear-pedido-n-2");
         assert_eq!(slugify("***"), "untitled");
     }

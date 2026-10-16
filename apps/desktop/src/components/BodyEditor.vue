@@ -72,15 +72,59 @@ const raw = computed({
     props.request.body = value;
   },
 });
-const language = computed<Language>(() => {
-  const contentType =
-    props.request.headers.find((h) => h.enabled && h.name.toLowerCase() === "content-type")?.value.toLowerCase() ?? "";
+type RawKind = "text" | "json" | "xml" | "html" | "javascript" | "graphql";
+
+/** The raw types, as in Postman; choosing one sets the Content-Type header. */
+const RAW_KINDS: { kind: RawKind; label: string; mime: string }[] = [
+  { kind: "text", label: "Text", mime: "text/plain" },
+  { kind: "json", label: "JSON", mime: "application/json" },
+  { kind: "xml", label: "XML", mime: "application/xml" },
+  { kind: "html", label: "HTML", mime: "text/html" },
+  { kind: "javascript", label: "JavaScript", mime: "application/javascript" },
+  { kind: "graphql", label: "GraphQL", mime: "application/graphql" },
+];
+
+const contentTypeHeader = computed(() =>
+  props.request.headers.find((h) => h.enabled && h.name.trim().toLowerCase() === "content-type"),
+);
+
+/** The raw type, from Content-Type or else from the body. Mirrors `BodyKind::detect`
+ * in pulpo-core, which also picks the body file's extension. */
+const rawKind = computed<RawKind>(() => {
+  const contentType = contentTypeHeader.value?.value.toLowerCase() ?? "";
   if (contentType.includes("json")) return "json";
+  if (contentType.includes("html")) return "html";
   if (contentType.includes("xml")) return "xml";
+  if (contentType.includes("javascript") || contentType.includes("ecmascript")) return "javascript";
+  if (contentType.includes("graphql")) return "graphql";
+  if (contentType) return "text";
   const start = (props.request.body ?? "").trimStart();
+  const head = start.slice(0, 15).toLowerCase();
   if (start.startsWith("{") || start.startsWith("[")) return "json";
+  if (head.startsWith("<!doctype html") || head.startsWith("<html")) return "html";
   if (start.startsWith("<")) return "xml";
   return "text";
+});
+
+function setRawKind(kind: RawKind) {
+  const mime = RAW_KINDS.find((k) => k.kind === kind)!.mime;
+  const header = contentTypeHeader.value;
+  if (header) header.value = mime;
+  else props.request.headers.push({ name: "Content-Type", value: mime, enabled: true });
+}
+
+const language = computed<Language>(() => {
+  switch (rawKind.value) {
+    case "json":
+      return "json";
+    case "xml":
+    case "html":
+      return "xml";
+    case "javascript":
+      return "javascript";
+    default:
+      return "text";
+  }
 });
 
 function formatJson() {
@@ -147,8 +191,19 @@ async function pick(apply: (path: string) => void) {
         <input type="radio" name="body-mode" :checked="mode === m.mode" @change="setMode(m.mode)" />
         {{ m.label }}
       </label>
+      <select
+        v-if="mode === 'raw'"
+        class="raw-kind"
+        aria-label="Raw type"
+        :value="rawKind"
+        :title="contentTypeHeader ? `Content-Type: ${contentTypeHeader.value}` : 'No Content-Type yet: detected from the body'"
+        @change="setRawKind(($event.target as HTMLSelectElement).value as RawKind)"
+      >
+        <option v-for="k in RAW_KINDS" :key="k.kind" :value="k.kind">{{ k.label }}</option>
+      </select>
+      <span v-if="mode === 'raw' && !contentTypeHeader" class="detected">detected</span>
       <span class="spacer"></span>
-      <button v-if="mode === 'raw'" class="link" @click="formatJson">Format JSON</button>
+      <button v-if="mode === 'raw' && rawKind === 'json'" class="link" @click="formatJson">Format JSON</button>
     </div>
 
     <p v-if="!hasBody && mode !== 'none'" class="warn">{{ request.method }} requests usually have no body; servers may ignore it.</p>
@@ -344,5 +399,18 @@ select:focus {
 }
 .warn {
   color: var(--m-post);
+}
+.raw-kind {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text);
+  padding: 3px 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.detected {
+  font-size: 11px;
+  color: var(--muted);
 }
 </style>
