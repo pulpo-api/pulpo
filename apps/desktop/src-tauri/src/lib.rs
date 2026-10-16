@@ -65,6 +65,16 @@ async fn folder_scripts(root: String, folder_id: String) -> Result<Scripts, Coll
     collection::folder_scripts(Path::new(&root), &folder_id)
 }
 
+/// Runs a JSONPath or jq query over a response body, for the response filter.
+#[tauri::command]
+async fn query_json(
+    body: String,
+    language: pulpo_core::query::QueryLanguage,
+    expression: String,
+) -> Result<Vec<serde_json::Value>, String> {
+    pulpo_core::query::query(&body, language, &expression)
+}
+
 /// Writes a response body to a file the user picked: text as is, binary from base64.
 #[tauri::command]
 async fn save_response(
@@ -329,6 +339,7 @@ pub fn run() {
             list_cookies,
             save_cookies,
             save_response,
+            query_json,
             folder_meta,
             save_folder_meta,
             rename_node,

@@ -122,6 +122,15 @@ function flash(message: string) {
   setTimeout(() => (notice.value = notice.value === message ? "" : notice.value), 2000);
 }
 
+/** A test made from the response filter goes to the end of the request's test script. */
+function addTest(code: string) {
+  const node = selected.value;
+  if (!node) return;
+  const current = node.scripts.test.trimEnd();
+  node.scripts.test = current ? `${current}\n\n${code}` : code;
+  flash("Test added: see the Tests tab, then save");
+}
+
 /** "Copy as curl" from the tree: no variables resolved, no secrets. */
 async function copyCurl(id: string) {
   const ws = workspace.value;
@@ -729,6 +738,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         :history-index="historyPick[selectedId] ?? 0"
         :url="preview?.url ?? selected.request.url"
         @pick="historyPick[selectedId] = $event"
+        @add-test="addTest"
       />
 
       <footer class="statusbar">

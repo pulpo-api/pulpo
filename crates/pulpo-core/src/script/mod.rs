@@ -7,6 +7,7 @@ mod crypto;
 
 use crate::cookies::SharedJar;
 use crate::http::{self, HttpRequest, HttpResponse, SendContext};
+use crate::query::{self, QueryLanguage};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -240,6 +241,15 @@ fn execute(
         })
         .map_err(|e| format!("script engine: {e}"))?;
         globals.set("__pulpo_crypto", crypto_bridge).map_err(|e| format!("script engine: {e}"))?;
+        let query_bridge = rquickjs::Function::new(ctx.clone(), |language: String, expression: String, body: String| -> String {
+            let language = if language == "jq" { QueryLanguage::Jq } else { QueryLanguage::Jsonpath };
+            match query::query(&body, language, &expression) {
+                Ok(values) => serde_json::json!({ "ok": true, "values": values }).to_string(),
+                Err(error) => serde_json::json!({ "ok": false, "error": error }).to_string(),
+            }
+        })
+        .map_err(|e| format!("script engine: {e}"))?;
+        globals.set("__pulpo_query", query_bridge).map_err(|e| format!("script engine: {e}"))?;
 
         ctx.eval::<String, _>(program.as_str()).map_err(|e| {
             if over_limit() {
@@ -328,6 +338,32 @@ mod tests {
         assert_eq!(body["base"], "https://api");
         assert_eq!(body["id"].as_str().unwrap().len(), 36);
         assert_eq!(outcome.logs, ["[test.js] ready {\"n\":1}"]);
+    }
+
+    #[test]
+    fn test_scripts_query_the_response_with_jsonpath_and_jq() {
+        let env = HashMap::new();
+        let local = HashMap::new();
+        let body = r#"{"data": [{"id": 1, "name": "Ana"}, {"id": 2, "name": "Luis"}]}"#;
+        let (_, outcome) = run_phase(
+            Phase::Test,
+            &script(
+                "pm.test('jsonpath', () => pm.expect(pm.response.jsonPath('$.data[1].name')).to.eql(['Luis']));
+                 pm.test('jq', () => pm.expect(pm.response.jq('[.data[].id] | add')).to.eql([3]));
+                 pm.test('bad filter fails the test', () => pm.response.jq('.data['));",
+            ),
+            &context(&env, &local),
+            &HttpRequest::new(HttpMethod::Get, "https://api/x"),
+            Some(&response(200, body)),
+        );
+        assert!(outcome.errors.is_empty(), "{:?}", outcome.errors);
+        assert!(
+            outcome.tests[0].passed && outcome.tests[1].passed,
+            "{:?}",
+            outcome.tests
+        );
+        assert!(!outcome.tests[2].passed);
+        assert!(outcome.tests[2].error.as_deref().unwrap().starts_with("jq"));
     }
 
     #[test]

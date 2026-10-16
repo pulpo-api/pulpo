@@ -15,6 +15,10 @@ serde_json = { workspace = true, features = ["preserve_order"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2", "gzip", "brotli", "deflate", "multipart", "cookies", "socks"] }
 httpdate = "1"
 p12-keystore = "0.4"
+serde_json_path = "0.7"
+jaq-core = "3"
+jaq-std = "3"
+jaq-json = "2"
 serde_norway = "0.9"
 uuid = { version = "1", features = ["v4"] }
 rquickjs = "0.14"

@@ -8,6 +8,7 @@ import { json } from "@codemirror/lang-json";
 import { javascript } from "@codemirror/lang-javascript";
 import { xml } from "@codemirror/lang-xml";
 import { tags } from "@lezer/highlight";
+import { openSearchPanel } from "@codemirror/search";
 import { refreshVariables, variables as variablesExt } from "../cmVariables";
 import { varContext } from "../varContext";
 
@@ -126,6 +127,11 @@ watch(varContext, () => {
 });
 
 onBeforeUnmount(() => view?.destroy());
+
+defineExpose({
+  /** Opens the find (and replace) panel, as Ctrl+F does inside the editor. */
+  openSearch: () => view && openSearchPanel(view),
+});
 </script>
 
 <template>

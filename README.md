@@ -134,6 +134,13 @@ pm.environment.set("orderId", pm.response.json().id);   // used later as {{order
 
 Values set by scripts stay on your machine in `.pulpo/` (which ignores itself in git), so tokens never end up in a commit. Scripts run in a sandboxed QuickJS engine with time and memory limits.
 
+Query responses with JSONPath or jq, the same engines as the response filter in the app (where "Create test" writes the test for you):
+
+```js
+pm.test("first order", () => pm.expect(pm.response.jsonPath("$.data[0].id")).to.eql([1]));
+pm.test("total", () => pm.expect(pm.response.jq("[.data[].price] | add")).to.eql([42]));
+```
+
 Also supported: `pm.sendRequest` (for logins and setup calls, with or without a callback), `CryptoJS` (`SHA256`, `SHA1`, `SHA512`, `MD5` and their `Hmac*`, with `enc.Hex`, `enc.Base64`, `enc.Utf8`; also via `require('crypto-js')`), `atob` and `btoa`.
 
 ```bash

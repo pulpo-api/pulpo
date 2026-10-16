@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import type { HttpResponse, SendError } from "../core";
-import { asCollectionError, backend, type TestResult } from "../workspace";
+import { asCollectionError, backend, type QueryLanguage, type TestResult } from "../workspace";
 import { base64ToBytes, contentTypeOf, previewKind, suggestedFileName } from "../responseFiles";
 import CodeEditor, { type Language } from "./CodeEditor.vue";
 
@@ -22,7 +22,7 @@ const props = defineProps<{
   /** The request URL, to name saved files. */
   url: string;
 }>();
-const emit = defineEmits<{ pick: [index: number] }>();
+const emit = defineEmits<{ pick: [index: number]; addTest: [code: string] }>();
 
 const tab = ref<"body" | "headers" | "cookies" | "tests" | "console">("body");
 
@@ -76,6 +76,71 @@ const imageSrc = computed(() =>
     ? `data:${contentTypeOf(props.response).split(";")[0]};base64,${props.response.bodyBase64}`
     : "",
 );
+
+// ---------------------------------------------------------------- filter and find
+
+const queryLanguage = ref<QueryLanguage>("jsonpath");
+const expression = ref("");
+const queryResult = ref<unknown[] | null>(null);
+const queryError = ref("");
+const isJson = computed(() => {
+  try {
+    JSON.parse(props.response?.body ?? "");
+    return true;
+  } catch {
+    return false;
+  }
+});
+
+let queryTimer: ReturnType<typeof setTimeout> | undefined;
+watch([expression, queryLanguage, () => props.response], () => {
+  clearTimeout(queryTimer);
+  queryTimer = setTimeout(runQuery, 250);
+});
+
+async function runQuery() {
+  const text = expression.value.trim();
+  if (!text || !props.response) {
+    queryResult.value = null;
+    queryError.value = "";
+    return;
+  }
+  try {
+    queryResult.value = await backend.queryJson(props.response.body, queryLanguage.value, text);
+    queryError.value = "";
+  } catch (e) {
+    queryResult.value = null;
+    queryError.value = e instanceof Error ? e.message : String(e);
+  }
+}
+
+const filtered = computed(() =>
+  queryResult.value === null ? null : JSON.stringify(queryResult.value.length === 1 ? queryResult.value[0] : queryResult.value, null, 2),
+);
+
+/** A pm.test that checks what the filter shows now, with the same engine. */
+function createTest() {
+  if (queryResult.value === null) return;
+  const call = `pm.response.${queryLanguage.value === "jq" ? "jq" : "jsonPath"}(${JSON.stringify(expression.value.trim())})`;
+  const expected = JSON.stringify(queryResult.value);
+  const check =
+    expected.length > 400
+      ? `pm.expect(${call}.length).to.eql(${queryResult.value.length});`
+      : `pm.expect(${call}).to.eql(${expected});`;
+  emit("addTest", `pm.test(${JSON.stringify(expression.value.trim())}, () => {\n  ${check}\n});\n`);
+  saved.value = "Test added to the Tests tab";
+}
+
+async function copyResult() {
+  try {
+    await navigator.clipboard.writeText(filtered.value ?? "");
+    saved.value = "Copied";
+  } catch {
+    saved.value = "Could not copy";
+  }
+}
+
+const bodyEditor = ref<InstanceType<typeof CodeEditor> | null>(null);
 
 async function saveBody() {
   if (!props.response) return;
@@ -173,8 +238,36 @@ const errorTitle: Record<SendError["kind"], string> = {
           <button :class="{ on: view === 'raw' }" @click="view = 'raw'">Raw</button>
           <button v-if="kind" :class="{ on: view === 'preview' }" @click="view = 'preview'">Preview</button>
           <span class="saved" :title="saved">{{ saved }}</span>
+          <button
+            v-if="view !== 'preview' && !(kind && kind !== 'html')"
+            class="save"
+            title="Find in the body (Ctrl+F inside it)"
+            @click="bodyEditor?.openSearch()"
+          >
+            Find
+          </button>
           <button class="save" title="Save the body to a file" @click="saveBody">Save</button>
         </div>
+        <div v-if="isJson && view !== 'preview'" class="filter">
+          <select v-model="queryLanguage" aria-label="Filter language">
+            <option value="jsonpath">JSONPath</option>
+            <option value="jq">jq</option>
+          </select>
+          <input
+            v-model="expression"
+            spellcheck="false"
+            :placeholder="queryLanguage === 'jq' ? '.data[] | {id, name}' : '$.data[*].name'"
+            aria-label="Filter expression"
+          />
+          <template v-if="queryResult !== null">
+            <span class="count">{{ queryResult.length }} result{{ queryResult.length === 1 ? "" : "s" }}</span>
+            <button class="save" @click="copyResult">Copy</button>
+            <button class="save" title="Add a pm.test that checks this result to the request's Tests" @click="createTest">
+              Create test
+            </button>
+          </template>
+        </div>
+        <p v-if="queryError" class="query-error">{{ queryError }}</p>
         <template v-if="view === 'preview' && kind">
           <!-- No scripts, no forms, no navigation: a response cannot act inside Pulpo. -->
           <iframe v-if="kind === 'html'" class="preview frame" sandbox="" :srcdoc="response.body" title="HTML preview"></iframe>
@@ -191,9 +284,10 @@ const errorTitle: Record<SendError["kind"], string> = {
         </div>
         <CodeEditor
           v-else
-          :key="`${historyIndex}-${view}`"
-          :model-value="(view === 'raw' ? response.body : pretty) || '(empty body)'"
-          :language="view === 'raw' ? 'text' : bodyLanguage"
+          ref="bodyEditor"
+          :key="`${historyIndex}-${view}-${filtered !== null}`"
+          :model-value="filtered ?? ((view === 'raw' ? response.body : pretty) || '(empty body)')"
+          :language="filtered !== null ? 'json' : view === 'raw' ? 'text' : bodyLanguage"
           readonly
         />
       </template>
@@ -446,5 +540,39 @@ const errorTitle: Record<SendError["kind"], string> = {
 }
 .preview.binary p {
   margin: 0;
+}
+.filter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.filter select,
+.filter input {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text);
+  padding: 4px 8px;
+  font-size: 12px;
+}
+.filter input {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--mono);
+  outline: none;
+}
+.filter input:focus {
+  border-color: var(--accent);
+}
+.filter .count {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.query-error {
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: var(--m-post);
 }
 </style>

@@ -18,6 +18,7 @@ pub mod import;
 pub mod keychain;
 pub mod local;
 pub mod organize;
+pub mod query;
 pub mod run;
 pub mod script;
 pub mod variables;

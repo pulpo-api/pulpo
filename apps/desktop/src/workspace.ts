@@ -147,6 +147,40 @@ export function inheritedSettings(workspace: Workspace, requestId: string): Inhe
   };
 }
 
+export type QueryLanguage = "jsonpath" | "jq";
+
+/** JSONPath for the browser preview only: $, .key, ['key'], [n], [*] and ..key. The app
+ * runs full RFC 9535 JSONPath and jq in pulpo-core. */
+function previewJsonPath(root: unknown, expression: string): unknown[] {
+  let nodes: unknown[] = [root];
+  const tokens = expression.trim().replace(/^\$/, "").match(/\.\.[\w$-]+|\.[\w$-]+|\[\*\]|\.\*|\[\d+\]|\['[^']*'\]/g) ?? [];
+  if (tokens.join("") !== expression.trim().replace(/^\$/, "")) {
+    throw new Error("The browser preview understands simple paths only ($.a.b[0], [*], ..name); the app runs full JSONPath");
+  }
+  const children = (n: unknown): unknown[] =>
+    Array.isArray(n) ? n : n && typeof n === "object" ? Object.values(n as Record<string, unknown>) : [];
+  const descendants = (n: unknown): unknown[] => [n, ...children(n).flatMap(descendants)];
+  for (const token of tokens) {
+    if (token.startsWith("..")) {
+      const key = token.slice(2);
+      nodes = nodes.flatMap(descendants).flatMap((n) =>
+        n && typeof n === "object" && !Array.isArray(n) && key in (n as object) ? [(n as Record<string, unknown>)[key]] : [],
+      );
+    } else if (token === "[*]" || token === ".*") {
+      nodes = nodes.flatMap(children);
+    } else if (token.startsWith("[") && /\d/.test(token[1])) {
+      const i = Number(token.slice(1, -1));
+      nodes = nodes.flatMap((n) => (Array.isArray(n) && i < n.length ? [n[i]] : []));
+    } else {
+      const key = token.startsWith("[") ? token.slice(2, -2) : token.slice(1);
+      nodes = nodes.flatMap((n) =>
+        n && typeof n === "object" && !Array.isArray(n) && key in (n as object) ? [(n as Record<string, unknown>)[key]] : [],
+      );
+    }
+  }
+  return nodes;
+}
+
 export type CodeLanguage = "curl" | "fetch" | "axios" | "python" | "java" | "go" | "csharp" | "powershell";
 
 export const CODE_LANGUAGES: Record<CodeLanguage, string> = {
@@ -369,6 +403,8 @@ export interface WorkspaceBackend {
     language: CodeLanguage,
     options: CodeOptions,
   ): Promise<string>;
+  /** Runs a JSONPath or jq query over a response body. */
+  queryJson(body: string, language: QueryLanguage, expression: string): Promise<unknown[]>;
   /** Saves a response body to a file the user picks; returns where, or null if cancelled. */
   saveResponse(response: HttpResponse, suggestedName: string): Promise<string | null>;
   /** Values set by scripts for an environment ("" = none), from `.pulpo/local.json`. */
@@ -428,6 +464,7 @@ const tauriBackend: WorkspaceBackend = {
   saveFolderAuth: (root, folderId, auth) => invoke<void>("save_folder_auth", { root, folderId, auth }),
   generateCode: (root, entry, environmentId, language, options) =>
     invoke<string>("generate_code", { root, entry, environmentId: environmentId || null, language, options }),
+  queryJson: (body, language, expression) => invoke<unknown[]>("query_json", { body, language, expression }),
   async saveResponse(response, suggestedName) {
     const { save } = await import("@tauri-apps/plugin-dialog");
     const path = await save({ title: "Save the response", defaultPath: suggestedName });
@@ -651,6 +688,11 @@ function memoryBackend(): WorkspaceBackend {
     async deleteEnvironment(_root, id) {
       const index = environments.findIndex((e) => e.id === id);
       if (index >= 0) environments.splice(index, 1);
+    },
+    // The preview has no Rust: a small JSONPath subset, and jq only in the app.
+    async queryJson(body, language, expression) {
+      if (language === "jq") throw new Error("jq runs in the desktop app (the browser preview has JSONPath only)");
+      return previewJsonPath(JSON.parse(body), expression);
     },
     // The browser downloads it to its download folder.
     async saveResponse(response, suggestedName) {

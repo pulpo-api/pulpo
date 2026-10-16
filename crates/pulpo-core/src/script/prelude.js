@@ -139,6 +139,13 @@ function __response() {
   return __state.response ? __responseApi(__state.response) : undefined;
 }
 
+/** Runs a JSONPath or jq query in Rust; returns the list of values, throws on errors. */
+function __query(language, expression, body) {
+  var out = JSON.parse(__pulpo_query(language, String(expression), body));
+  if (!out.ok) throw new Error(out.error);
+  return out.values;
+}
+
 function __responseApi(r) {
   var api = {
     code: r.status,
@@ -160,6 +167,9 @@ function __responseApi(r) {
     },
     text: function () { return r.body; },
     json: function () { return JSON.parse(r.body); },
+    // Queries run in Rust (serde_json_path, jaq), the same engine as the app's filter.
+    jsonPath: function (expression) { return __query("jsonpath", expression, r.body); },
+    jq: function (expression) { return __query("jq", expression, r.body); },
   };
   api.to = {
     have: {
