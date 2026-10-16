@@ -296,6 +296,7 @@ mod tests {
             ],
             body: body.into(),
             body_is_text: true,
+            body_base64: None,
             size_bytes: body.len(),
             duration_ms: 42,
         }

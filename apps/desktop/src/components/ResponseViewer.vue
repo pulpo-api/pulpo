@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import type { HttpResponse, SendError } from "../core";
-import type { TestResult } from "../workspace";
+import { asCollectionError, backend, type TestResult } from "../workspace";
+import { base64ToBytes, contentTypeOf, previewKind, suggestedFileName } from "../responseFiles";
 import CodeEditor, { type Language } from "./CodeEditor.vue";
 
 export interface HistoryItem {
@@ -18,6 +19,8 @@ const props = defineProps<{
   scriptErrors: string[];
   history: HistoryItem[];
   historyIndex: number;
+  /** The request URL, to name saved files. */
+  url: string;
 }>();
 const emit = defineEmits<{ pick: [index: number] }>();
 
@@ -38,6 +41,51 @@ const setCookies = computed(() =>
     }),
 );
 const failed = computed(() => props.tests.filter((t) => !t.passed).length);
+
+// ---------------------------------------------------------------- body views
+
+const kind = computed(() => (props.response ? previewKind(props.response) : null));
+const view = ref<"pretty" | "raw" | "preview">("pretty");
+const saved = ref("");
+// Images, PDFs and other binaries open in Preview; text in Pretty.
+watch(
+  () => props.response,
+  () => {
+    view.value = kind.value && kind.value !== "html" ? "preview" : "pretty";
+    saved.value = "";
+  },
+  { immediate: true },
+);
+
+/** PDFs need a blob URL; it is released when the response changes. */
+const pdfUrl = ref("");
+watch(
+  () => (kind.value === "pdf" ? props.response?.bodyBase64 : undefined),
+  (base64) => {
+    if (pdfUrl.value) URL.revokeObjectURL(pdfUrl.value);
+    pdfUrl.value = base64 ? URL.createObjectURL(new Blob([base64ToBytes(base64)], { type: "application/pdf" })) : "";
+  },
+  { immediate: true },
+);
+onBeforeUnmount(() => {
+  if (pdfUrl.value) URL.revokeObjectURL(pdfUrl.value);
+});
+
+const imageSrc = computed(() =>
+  kind.value === "image" && props.response?.bodyBase64
+    ? `data:${contentTypeOf(props.response).split(";")[0]};base64,${props.response.bodyBase64}`
+    : "",
+);
+
+async function saveBody() {
+  if (!props.response) return;
+  try {
+    const where = await backend.saveResponse(props.response, suggestedFileName(props.response, props.url));
+    if (where) saved.value = `Saved to ${where}`;
+  } catch (e) {
+    saved.value = `Could not save: ${asCollectionError(e).message}`;
+  }
+}
 
 const pretty = computed(() => {
   const body = props.response?.body ?? "";
@@ -119,13 +167,36 @@ const errorTitle: Record<SendError["kind"], string> = {
           Console
         </button>
       </div>
-      <CodeEditor
-        v-if="tab === 'body'"
-        :key="historyIndex"
-        :model-value="pretty || '(empty body)'"
-        :language="bodyLanguage"
-        readonly
-      />
+      <template v-if="tab === 'body'">
+        <div class="views">
+          <button :class="{ on: view === 'pretty' }" @click="view = 'pretty'">Pretty</button>
+          <button :class="{ on: view === 'raw' }" @click="view = 'raw'">Raw</button>
+          <button v-if="kind" :class="{ on: view === 'preview' }" @click="view = 'preview'">Preview</button>
+          <span class="saved" :title="saved">{{ saved }}</span>
+          <button class="save" title="Save the body to a file" @click="saveBody">Save</button>
+        </div>
+        <template v-if="view === 'preview' && kind">
+          <!-- No scripts, no forms, no navigation: a response cannot act inside Pulpo. -->
+          <iframe v-if="kind === 'html'" class="preview frame" sandbox="" :srcdoc="response.body" title="HTML preview"></iframe>
+          <div v-else-if="kind === 'image'" class="preview image"><img :src="imageSrc" alt="Image in the response" /></div>
+          <iframe v-else-if="kind === 'pdf'" class="preview frame" :src="pdfUrl" title="PDF preview"></iframe>
+          <div v-else class="preview binary">
+            <p>Binary response: {{ contentTypeOf(response) || "no Content-Type" }}, {{ size(response.sizeBytes) }}.</p>
+            <p v-if="!response.bodyBase64">It is bigger than 25 MB, so Pulpo did not keep it.</p>
+            <button v-else class="save" @click="saveBody">Save to a file</button>
+          </div>
+        </template>
+        <div v-else-if="kind && kind !== 'html'" class="preview binary">
+          <p>{{ contentTypeOf(response) || "Binary" }} body ({{ size(response.sizeBytes) }}): see it in Preview or save it.</p>
+        </div>
+        <CodeEditor
+          v-else
+          :key="`${historyIndex}-${view}`"
+          :model-value="(view === 'raw' ? response.body : pretty) || '(empty body)'"
+          :language="view === 'raw' ? 'text' : bodyLanguage"
+          readonly
+        />
+      </template>
       <ul v-else-if="tab === 'tests'" class="code list">
         <li v-for="(t, i) in tests" :key="i" :class="t.passed ? 'pass' : 'fail'">
           <span>{{ t.passed ? "✓" : "✗" }}</span> {{ t.name }}<em v-if="t.error"> — {{ t.error }}</em>
@@ -301,5 +372,79 @@ const errorTitle: Record<SendError["kind"], string> = {
 .attrs {
   color: var(--muted);
   font-style: normal;
+}
+.views {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.views button {
+  border: 0;
+  background: transparent;
+  padding: 3px 9px;
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+}
+.views button.on {
+  background: var(--surface-2);
+  color: var(--text);
+  font-weight: 600;
+}
+.views .saved {
+  flex: 1;
+  text-align: right;
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.save {
+  border: 1px solid var(--border) !important;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text) !important;
+  padding: 3px 9px;
+  cursor: pointer;
+}
+.preview {
+  flex: 1;
+  min-height: 200px;
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+.preview.frame {
+  width: 100%;
+  border: 0;
+  /* Pages are made for a white background. */
+  background: #fff;
+}
+.preview.image {
+  display: grid;
+  place-items: center;
+  overflow: auto;
+  padding: 12px;
+  background-image: linear-gradient(45deg, rgba(128, 128, 128, 0.12) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(128, 128, 128, 0.12) 25%, transparent 25%);
+  background-size: 16px 16px;
+}
+.preview.image img {
+  max-width: 100%;
+  max-height: 100%;
+}
+.preview.binary {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 14px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.preview.binary p {
+  margin: 0;
 }
 </style>

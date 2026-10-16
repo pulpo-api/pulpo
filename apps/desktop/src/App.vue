@@ -698,6 +698,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         :script-errors="result.scriptErrors"
         :history="historyItems"
         :history-index="historyPick[selectedId] ?? 0"
+        :url="preview?.url ?? selected.request.url"
         @pick="historyPick[selectedId] = $event"
       />
 

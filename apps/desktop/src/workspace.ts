@@ -11,6 +11,7 @@ import {
   type Settings,
 } from "./core";
 import { sampleEnvironments, sampleWorkspace } from "./sample";
+import { base64ToBytes } from "./responseFiles";
 
 export type Protocol = "http" | "graphql" | "grpc" | "websocket" | "soap" | "sse";
 
@@ -368,6 +369,8 @@ export interface WorkspaceBackend {
     language: CodeLanguage,
     options: CodeOptions,
   ): Promise<string>;
+  /** Saves a response body to a file the user picks; returns where, or null if cancelled. */
+  saveResponse(response: HttpResponse, suggestedName: string): Promise<string | null>;
   /** Values set by scripts for an environment ("" = none), from `.pulpo/local.json`. */
   localValues(root: string, environmentId: string): Promise<Record<string, string>>;
   /** What a folder ("" = the workspace) sets for the requests inside. */
@@ -425,6 +428,17 @@ const tauriBackend: WorkspaceBackend = {
   saveFolderAuth: (root, folderId, auth) => invoke<void>("save_folder_auth", { root, folderId, auth }),
   generateCode: (root, entry, environmentId, language, options) =>
     invoke<string>("generate_code", { root, entry, environmentId: environmentId || null, language, options }),
+  async saveResponse(response, suggestedName) {
+    const { save } = await import("@tauri-apps/plugin-dialog");
+    const path = await save({ title: "Save the response", defaultPath: suggestedName });
+    if (!path) return null;
+    await invoke<void>("save_response", {
+      path,
+      text: response.bodyBase64 ? null : response.body,
+      base64: response.bodyBase64 ?? null,
+    });
+    return path;
+  },
   localValues: (root, environmentId) =>
     invoke<Record<string, string>>("local_values", { root, environmentId: environmentId || null }),
   folderMeta: (root, folderId) => invoke<FolderMeta>("folder_meta", { root, folderId }),
@@ -637,6 +651,15 @@ function memoryBackend(): WorkspaceBackend {
     async deleteEnvironment(_root, id) {
       const index = environments.findIndex((e) => e.id === id);
       if (index >= 0) environments.splice(index, 1);
+    },
+    // The browser downloads it to its download folder.
+    async saveResponse(response, suggestedName) {
+      const data = response.bodyBase64 ? base64ToBytes(response.bodyBase64) : response.body;
+      const url = URL.createObjectURL(new Blob([data]));
+      const link = Object.assign(document.createElement("a"), { href: url, download: suggestedName });
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      return suggestedName;
     },
     // pulpo-core generates code in the desktop app; the preview only has a plain curl.
     async generateCode(_root, entry, _environmentId, language) {

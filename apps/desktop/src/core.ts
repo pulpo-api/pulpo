@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { resolveText, type Vars } from "./variables";
 import { applyPathParams, type Param } from "./params";
+import { bytesToBase64, isBinaryType } from "./responseFiles";
 
 export interface CoreInfo {
   version: string;
@@ -155,6 +156,8 @@ export interface HttpResponse {
   headers: Header[];
   body: string;
   bodyIsText: boolean;
+  /** The exact bytes of binary bodies (images, PDF...), in base64. */
+  bodyBase64?: string;
   sizeBytes: number;
   durationMs: number;
 }
@@ -256,14 +259,23 @@ async function sendWithFetch(request: HttpRequest): Promise<HttpResponse> {
     } satisfies SendError;
   }
   const buffer = await response.arrayBuffer();
-  const body = new TextDecoder().decode(buffer);
+  const bytes = new Uint8Array(buffer);
+  let bodyIsText = true;
+  try {
+    new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    bodyIsText = false;
+  }
+  const body = new TextDecoder().decode(bytes);
+  const binary = !bodyIsText || isBinaryType(response.headers.get("content-type") ?? "");
   return {
     status: response.status,
     statusText: response.statusText,
     httpVersion: "HTTP/1.1",
     headers: [...response.headers.entries()].map(([name, value]) => ({ name, value, enabled: true })),
     body,
-    bodyIsText: true,
+    bodyIsText,
+    bodyBase64: binary && bytes.length <= 25 * 1024 * 1024 ? bytesToBase64(bytes) : undefined,
     sizeBytes: buffer.byteLength,
     durationMs: Math.round(performance.now() - started),
   };

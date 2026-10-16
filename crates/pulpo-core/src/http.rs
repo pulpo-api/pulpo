@@ -467,10 +467,77 @@ pub struct HttpResponse {
     pub status_text: String,
     pub http_version: String,
     pub headers: Vec<Header>,
+    /// The body as text (lossy for binary bodies).
     pub body: String,
     pub body_is_text: bool,
+    /// The exact bytes, in base64, for binary bodies (images, PDF, zip...) up to
+    /// [`MAX_BINARY_BYTES`]: what the app needs to preview and save them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body_base64: Option<String>,
     pub size_bytes: usize,
     pub duration_ms: u64,
+}
+
+/// Binary bodies bigger than this are not kept for preview or saving.
+pub const MAX_BINARY_BYTES: usize = 25 * 1024 * 1024;
+
+/// Content types whose body is bytes, not text (even when they happen to be UTF-8).
+pub fn is_binary_type(content_type: &str) -> bool {
+    let ct = content_type.to_ascii_lowercase();
+    ["image/", "audio/", "video/", "font/"]
+        .iter()
+        .any(|p| ct.starts_with(p))
+        || [
+            "application/pdf",
+            "application/octet-stream",
+            "application/zip",
+            "application/gzip",
+            "application/x-gzip",
+            "application/msword",
+            "application/vnd.openxmlformats",
+            "application/vnd.ms-excel",
+            "application/x-tar",
+            "application/x-7z",
+            "application/wasm",
+        ]
+        .iter()
+        .any(|p| ct.starts_with(p))
+}
+
+/// Decodes standard base64 (with or without padding). `None` when it is not base64.
+pub fn decode_base64(text: &str) -> Option<Vec<u8>> {
+    fn value(c: u8) -> Option<u32> {
+        match c {
+            b'A'..=b'Z' => Some((c - b'A') as u32),
+            b'a'..=b'z' => Some((c - b'a' + 26) as u32),
+            b'0'..=b'9' => Some((c - b'0' + 52) as u32),
+            b'+' | b'-' => Some(62),
+            b'/' | b'_' => Some(63),
+            _ => None,
+        }
+    }
+    let clean: Vec<u8> = text
+        .bytes()
+        .filter(|c| !c.is_ascii_whitespace() && *c != b'=')
+        .collect();
+    if clean.len() % 4 == 1 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(clean.len() * 3 / 4);
+    for chunk in clean.chunks(4) {
+        let mut n = 0u32;
+        for (i, c) in chunk.iter().enumerate() {
+            n |= value(*c)? << (18 - 6 * i);
+        }
+        out.push((n >> 16) as u8);
+        if chunk.len() > 2 {
+            out.push((n >> 8) as u8);
+        }
+        if chunk.len() > 3 {
+            out.push(n as u8);
+        }
+    }
+    Some(out)
 }
 
 /// Why a request could not be completed.
@@ -707,7 +774,7 @@ pub async fn send_with(
     let response = builder.send().await?;
     let status = response.status();
     let http_version = format!("{:?}", response.version());
-    let headers = response
+    let headers: Vec<Header> = response
         .headers()
         .iter()
         .map(|(name, value)| Header::new(name.as_str(), String::from_utf8_lossy(value.as_bytes())))
@@ -715,10 +782,18 @@ pub async fn send_with(
     let bytes = response.bytes().await?;
     let duration_ms = started.elapsed().as_millis() as u64;
 
+    let content_type = headers
+        .iter()
+        .find(|h| h.name.eq_ignore_ascii_case("content-type"))
+        .map(|h| h.value.clone())
+        .unwrap_or_default();
     let (body, body_is_text) = match std::str::from_utf8(&bytes) {
         Ok(text) => (text.to_string(), true),
         Err(_) => (String::from_utf8_lossy(&bytes).into_owned(), false),
     };
+    let body_base64 = ((!body_is_text || is_binary_type(&content_type))
+        && bytes.len() <= MAX_BINARY_BYTES)
+        .then(|| crate::import::base64(&bytes));
 
     Ok(HttpResponse {
         status: status.as_u16(),
@@ -727,6 +802,7 @@ pub async fn send_with(
         headers,
         body,
         body_is_text,
+        body_base64,
         size_bytes: bytes.len(),
         duration_ms,
     })
@@ -1079,6 +1155,59 @@ connection: close
         assert_eq!(sniff_content_type("<!DOCTYPE html><p>"), "text/html");
         assert_eq!(sniff_content_type("<a/>"), "application/xml");
         assert_eq!(sniff_content_type("hola"), "text/plain");
+    }
+
+    #[tokio::test]
+    async fn keeps_the_bytes_of_binary_bodies() {
+        let png: &'static [u8] = b"\x89PNG\r\n\x1a\n\x00\xff";
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buffer = [0u8; 1024];
+            let _ = socket.read(&mut buffer).await.unwrap();
+            let head = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: image/png\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                png.len()
+            );
+            socket.write_all(head.as_bytes()).await.unwrap();
+            socket.write_all(png).await.unwrap();
+        });
+        let response = send(&HttpRequest::new(
+            HttpMethod::Get,
+            format!("http://{address}"),
+        ))
+        .await
+        .unwrap();
+        assert!(!response.body_is_text);
+        assert_eq!(
+            decode_base64(response.body_base64.as_deref().unwrap()).unwrap(),
+            png
+        );
+
+        let text = send(&HttpRequest::new(HttpMethod::Get, raw_echo().await))
+            .await
+            .unwrap();
+        assert_eq!(text.body_base64, None, "text bodies are not doubled");
+    }
+
+    #[test]
+    fn decodes_base64() {
+        for bytes in [
+            &b""[..],
+            b"f",
+            b"fo",
+            b"foo",
+            b"foob",
+            b"\x00\xff\x10 pulpo",
+        ] {
+            assert_eq!(decode_base64(&crate::import::base64(bytes)).unwrap(), bytes);
+        }
+        assert_eq!(decode_base64("aG9sYQ").unwrap(), b"hola", "without padding");
+        assert_eq!(decode_base64("a"), None);
+        assert_eq!(decode_base64("ab$c"), None);
+        assert!(is_binary_type("image/svg+xml") && is_binary_type("application/PDF"));
+        assert!(!is_binary_type("application/json"));
     }
 
     #[test]

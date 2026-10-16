@@ -65,6 +65,21 @@ async fn folder_scripts(root: String, folder_id: String) -> Result<Scripts, Coll
     collection::folder_scripts(Path::new(&root), &folder_id)
 }
 
+/// Writes a response body to a file the user picked: text as is, binary from base64.
+#[tauri::command]
+async fn save_response(
+    path: String,
+    text: Option<String>,
+    base64: Option<String>,
+) -> Result<(), String> {
+    let bytes = match (base64, text) {
+        (Some(b64), _) => http::decode_base64(&b64).ok_or("the body is not valid base64")?,
+        (None, Some(text)) => text.into_bytes(),
+        (None, None) => Vec::new(),
+    };
+    std::fs::write(&path, bytes).map_err(|e| format!("{path}: {e}"))
+}
+
 /// What a folder (`""` = the workspace) sets for the requests inside.
 #[tauri::command]
 async fn folder_meta(root: String, folder_id: String) -> Result<FolderMeta, CollectionError> {
@@ -313,6 +328,7 @@ pub fn run() {
             save_folder_auth,
             list_cookies,
             save_cookies,
+            save_response,
             folder_meta,
             save_folder_meta,
             rename_node,
