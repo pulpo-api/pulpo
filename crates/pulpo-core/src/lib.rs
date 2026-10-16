@@ -126,6 +126,9 @@ mod tests {
     #[test]
     fn lists_every_protocol_once() {
         let labels: Vec<_> = Protocol::ALL.iter().map(|p| p.as_str()).collect();
-        assert_eq!(labels, ["http", "graphql", "grpc", "websocket", "soap", "sse"]);
+        assert_eq!(
+            labels,
+            ["http", "graphql", "grpc", "websocket", "soap", "sse"]
+        );
     }
 }
