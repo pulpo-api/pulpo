@@ -2,6 +2,8 @@
 import { computed, ref } from "vue";
 import { HTTP_METHODS, bodyMode, type HttpRequest } from "../core";
 import type { InheritedAuth, InheritedSettings, Scripts } from "../workspace";
+import type { Header } from "../core";
+import HeadersEditor from "./HeadersEditor.vue";
 import SettingsEditor from "./SettingsEditor.vue";
 import AuthEditor from "./AuthEditor.vue";
 import CodeEditor from "./CodeEditor.vue";
@@ -17,6 +19,7 @@ const props = defineProps<{
   preview: { url: string; changed: boolean; missing: string[] } | null;
   inheritedAuth: InheritedAuth;
   inheritedSettings: InheritedSettings;
+  inheritedHeaders: { header: Header; from: string }[];
   root: string;
 }>();
 const emit = defineEmits<{ send: []; save: [] }>();
@@ -46,14 +49,12 @@ const authBadge = computed(() => {
   return inherited.found && SHORT[inherited.auth.type] ? `${SHORT[inherited.auth.type]} ↑` : "";
 });
 const activeHeaders = computed(() => props.request.headers.filter((h) => h.enabled && h.name.trim()).length);
-
-function addHeader() {
-  props.request.headers.push({ name: "", value: "", enabled: true });
-}
-
-function removeHeader(index: number) {
-  props.request.headers.splice(index, 1);
-}
+const inheritedCount = computed(
+  () =>
+    props.inheritedHeaders.filter(
+      (i) => !props.request.headers.some((h) => h.name.trim().toLowerCase() === i.header.name.trim().toLowerCase()),
+    ).length,
+);
 
 </script>
 
@@ -87,7 +88,8 @@ function removeHeader(index: number) {
         Body <span v-if="bodyBadge" class="count">{{ bodyBadge }}</span>
       </button>
       <button :class="{ on: tab === 'headers' }" @click="tab = 'headers'">
-        Headers <span v-if="activeHeaders" class="count">{{ activeHeaders }}</span>
+        Headers <span v-if="activeHeaders" class="count">{{ activeHeaders }}</span
+        ><span v-if="inheritedCount" class="count" title="Inherited from folders">+{{ inheritedCount }} ↑</span>
       </button>
       <button :class="{ on: tab === 'settings' }" @click="tab = 'settings'">
         Settings <span v-if="settingsCount" class="count" title="Settings set on this request">{{ settingsCount }}</span>
@@ -136,14 +138,7 @@ function removeHeader(index: number) {
       </p>
     </template>
 
-    <div v-else class="headers">
-      <div v-for="(header, i) in request.headers" :key="i" class="row">
-        <input v-model="header.enabled" type="checkbox" :title="header.enabled ? 'Sent' : 'Not sent'" />
-        <input v-model="header.name" placeholder="Name" spellcheck="false" />
-        <input v-model="header.value" placeholder="Value" spellcheck="false" />
-        <button class="icon" title="Remove" @click="removeHeader(i)">✕</button>
-      </div>
-      <button class="link" @click="addHeader">+ Add header</button>
+    <HeadersEditor v-else :headers="request.headers" :inherited="inheritedHeaders">
       <label class="toggle" title="Uses the cookie jar of the selected environment (🍪 in the top bar)">
         <input
           type="checkbox"
@@ -153,7 +148,7 @@ function removeHeader(index: number) {
         Send and store cookies
         <span class="hint-inline">— a <code>Cookie</code> header written here wins over the jar</span>
       </label>
-    </div>
+    </HeadersEditor>
   </section>
 </template>
 

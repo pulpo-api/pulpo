@@ -125,14 +125,20 @@ pub async fn run_entry(
 
     // The request carries the auth it really uses (its own or a folder's), so scripts
     // see it and `send` applies it.
-    // Settings work the same way, field by field.
+    // Settings work the same way, field by field; folder headers are added too.
     let mut effective = entry.request.clone();
-    match collection::effective_auth(root, entry)
-        .and_then(|(auth, _)| Ok((auth, collection::effective_settings(root, entry)?)))
-    {
-        Ok((auth, settings)) => {
+    let inherited = collection::effective_auth(root, entry).and_then(|(auth, _)| {
+        Ok((
+            auth,
+            collection::effective_settings(root, entry)?,
+            collection::effective_headers(root, entry)?,
+        ))
+    });
+    match inherited {
+        Ok((auth, settings, headers)) => {
             effective.auth = Some(auth);
             effective.settings = settings;
+            effective.headers = headers;
         }
         Err(e) => {
             report.error = Some(SendError::Other(e.to_string()));

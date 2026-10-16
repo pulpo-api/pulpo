@@ -181,6 +181,9 @@ pub enum TreeNode {
         /// Settings for the requests inside (unset fields come from the parent).
         #[serde(default)]
         settings: Settings,
+        /// Headers every request inside sends (unless it sets the same one).
+        #[serde(default)]
+        headers: Vec<Header>,
     },
     Request(RequestEntry),
 }
@@ -198,6 +201,9 @@ pub struct Workspace {
     /// Settings for every request, unless a folder or request sets them.
     #[serde(default)]
     pub settings: Settings,
+    /// Headers every request sends, unless a folder or the request sets the same one.
+    #[serde(default)]
+    pub headers: Vec<Header>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -236,6 +242,8 @@ struct WorkspaceFileV1 {
     version: u32,
     name: String,
     #[serde(default)]
+    headers: Vec<Header>,
+    #[serde(default)]
     auth: Option<Auth>,
     #[serde(default)]
     settings: Settings,
@@ -246,6 +254,8 @@ struct WorkspaceFileV1 {
 struct FolderFileV1 {
     version: u32,
     name: String,
+    #[serde(default)]
+    headers: Vec<Header>,
     #[serde(default)]
     auth: Option<Auth>,
     #[serde(default)]
@@ -380,22 +390,38 @@ fn settings_yaml(settings: &Settings) -> String {
     out
 }
 
-fn workspace_yaml(name: &str, auth: Option<&Auth>, settings: &Settings) -> String {
+/// Writes a `headers:` list (nothing when there are none).
+fn headers_yaml(headers: &[Header]) -> String {
+    if headers.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("headers:\n");
+    for header in headers {
+        out.push_str(&format!("  - name: {}\n", quote(&header.name)));
+        out.push_str(&format!("    value: {}\n", quote(&header.value)));
+        if !header.enabled {
+            out.push_str("    enabled: false\n");
+        }
+    }
+    out
+}
+
+/// `pulpo.yaml` and `_folder.yaml` share one canonical form.
+fn meta_yaml(meta: &FolderMeta) -> String {
     format!(
-        "version: {FORMAT_VERSION}\nname: {}\n{}{}",
-        quote(name),
-        auth_yaml(auth),
-        settings_yaml(settings)
+        "version: {FORMAT_VERSION}\nname: {}\n{}{}{}",
+        quote(&meta.name),
+        headers_yaml(&meta.headers),
+        auth_yaml(meta.auth.as_ref()),
+        settings_yaml(&meta.settings)
     )
 }
 
-fn folder_yaml(name: &str, auth: Option<&Auth>, settings: &Settings) -> String {
-    format!(
-        "version: {FORMAT_VERSION}\nname: {}\n{}{}",
-        quote(name),
-        auth_yaml(auth),
-        settings_yaml(settings)
-    )
+fn named(name: &str) -> FolderMeta {
+    FolderMeta {
+        name: name.to_string(),
+        ..Default::default()
+    }
 }
 
 fn request_yaml(entry: &RequestEntry, body: Option<BodyKind>) -> String {
@@ -422,16 +448,7 @@ fn request_yaml(entry: &RequestEntry, body: Option<BodyKind>) -> String {
             }
         }
     }
-    if !entry.request.headers.is_empty() {
-        out.push_str("headers:\n");
-        for header in &entry.request.headers {
-            out.push_str(&format!("  - name: {}\n", quote(&header.name)));
-            out.push_str(&format!("    value: {}\n", quote(&header.value)));
-            if !header.enabled {
-                out.push_str("    enabled: false\n");
-            }
-        }
-    }
+    out.push_str(&headers_yaml(&entry.request.headers));
     out.push_str(&auth_yaml(entry.request.auth.as_ref()));
     if let Some(form) = &entry.request.form {
         let mode = match form.kind {
@@ -550,12 +567,18 @@ pub fn save_folder_scripts(
     write_scripts(&dir.join(FOLDER_FILE), FOLDER_SCRIPT_STEM, scripts)
 }
 
-/// What `pulpo.yaml` or a `_folder.yaml` says besides the name.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct FolderMeta {
-    pub(crate) name: String,
-    pub(crate) auth: Option<Auth>,
-    pub(crate) settings: Settings,
+/// What `pulpo.yaml` or a `_folder.yaml` says: the name and what the requests inside
+/// inherit (headers, auth, settings).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderMeta {
+    pub name: String,
+    #[serde(default)]
+    pub headers: Vec<Header>,
+    #[serde(default)]
+    pub auth: Option<Auth>,
+    #[serde(default)]
+    pub settings: Settings,
 }
 
 /// Reads a folder's meta (`""` = the workspace). A folder without `_folder.yaml` is named
@@ -566,6 +589,7 @@ pub(crate) fn read_meta(root: &Path, folder_id: &str) -> Result<FolderMeta, Coll
         let parsed: WorkspaceFileV1 = parse_yaml(&file)?;
         return Ok(FolderMeta {
             name: parsed.name,
+            headers: parsed.headers,
             auth: parsed.auth,
             settings: parsed.settings,
         });
@@ -587,6 +611,7 @@ pub(crate) fn read_meta(root: &Path, folder_id: &str) -> Result<FolderMeta, Coll
     let parsed: FolderFileV1 = parse_yaml(&file)?;
     Ok(FolderMeta {
         name: parsed.name,
+        headers: parsed.headers,
         auth: parsed.auth,
         settings: parsed.settings,
     })
@@ -597,18 +622,57 @@ pub(crate) fn write_meta(
     folder_id: &str,
     meta: &FolderMeta,
 ) -> Result<(), CollectionError> {
-    let (file, text) = if folder_id.is_empty() {
-        (
-            root.join(WORKSPACE_FILE),
-            workspace_yaml(&meta.name, meta.auth.as_ref(), &meta.settings),
-        )
+    let file = if folder_id.is_empty() {
+        root.join(WORKSPACE_FILE)
     } else {
-        (
-            resolve(root, folder_id)?.join(FOLDER_FILE),
-            folder_yaml(&meta.name, meta.auth.as_ref(), &meta.settings),
-        )
+        resolve(root, folder_id)?.join(FOLDER_FILE)
     };
-    fs::write(&file, text).map_err(|e| io_error(&file, e))
+    fs::write(&file, meta_yaml(meta)).map_err(|e| io_error(&file, e))
+}
+
+/// What a folder (`""` = the workspace) sets for the requests inside.
+pub fn folder_meta(root: &Path, folder_id: &str) -> Result<FolderMeta, CollectionError> {
+    read_meta(root, folder_id)
+}
+
+/// Saves headers, auth and settings of a folder (`""` = the workspace). The name is kept:
+/// renaming also renames the directory (see `organize::rename`).
+pub fn save_folder_meta(
+    root: &Path,
+    folder_id: &str,
+    meta: &FolderMeta,
+) -> Result<(), CollectionError> {
+    let current = read_meta(root, folder_id)?;
+    write_meta(
+        root,
+        folder_id,
+        &FolderMeta {
+            name: current.name,
+            ..meta.clone()
+        },
+    )
+}
+
+/// The headers a request really sends: the workspace's, then each folder's going down
+/// (a deeper one replaces a header with the same name), then its own. A header of the
+/// request with the same name wins, and a disabled one stops the inherited header.
+pub fn effective_headers(
+    root: &Path,
+    entry: &RequestEntry,
+) -> Result<Vec<Header>, CollectionError> {
+    let same = |a: &Header, b: &Header| a.name.trim().eq_ignore_ascii_case(b.name.trim());
+    let mut inherited: Vec<Header> = Vec::new();
+    for folder in ancestor_folders(&entry.id) {
+        for header in read_meta(root, &folder)?.headers {
+            inherited.retain(|h| !same(h, &header));
+            if header.enabled && !header.name.trim().is_empty() {
+                inherited.push(header);
+            }
+        }
+    }
+    inherited.retain(|h| !entry.request.headers.iter().any(|own| same(own, h)));
+    inherited.extend(entry.request.headers.iter().cloned());
+    Ok(inherited)
 }
 
 /// Auth set on a folder (`""` = the workspace, from `pulpo.yaml`). `None` = not set.
@@ -758,8 +822,7 @@ pub fn init_workspace(root: &Path, name: &str) -> Result<(), CollectionError> {
         ));
     }
     fs::create_dir_all(root).map_err(|e| io_error(root, e))?;
-    fs::write(&file, workspace_yaml(name, None, &Settings::default()))
-        .map_err(|e| io_error(&file, e))
+    fs::write(&file, meta_yaml(&named(name))).map_err(|e| io_error(&file, e))
 }
 
 /// Reads the whole workspace tree.
@@ -776,6 +839,7 @@ pub fn load_workspace(root: &Path) -> Result<Workspace, CollectionError> {
         tree: load_dir(root, root)?,
         auth: workspace.auth,
         settings: workspace.settings,
+        headers: workspace.headers,
     })
 }
 
@@ -795,12 +859,12 @@ fn load_dir(root: &Path, dir: &Path) -> Result<Vec<TreeNode>, CollectionError> {
                 continue;
             }
             let folder_file = path.join(FOLDER_FILE);
-            let (name, auth, settings) = if folder_file.is_file() {
+            let (name, auth, settings, headers) = if folder_file.is_file() {
                 let folder: FolderFileV1 = parse_yaml(&folder_file)?;
                 check_version(folder.version, &folder_file)?;
-                (folder.name, folder.auth, folder.settings)
+                (folder.name, folder.auth, folder.settings, folder.headers)
             } else {
-                (file_name.clone(), None, Settings::default())
+                (file_name.clone(), None, Settings::default(), Vec::new())
             };
             nodes.push(TreeNode::Folder {
                 id: relative_id(root, &path),
@@ -808,6 +872,7 @@ fn load_dir(root: &Path, dir: &Path) -> Result<Vec<TreeNode>, CollectionError> {
                 children: load_dir(root, &path)?,
                 auth,
                 settings,
+                headers,
             });
         } else if file_name.ends_with(REQUEST_SUFFIX) {
             nodes.push(TreeNode::Request(load_request_file(root, &path)?));
@@ -982,8 +1047,7 @@ pub fn create_folder(root: &Path, parent_id: &str, name: &str) -> Result<String,
     let dir = parent.join(format!("{:02}-{}", next_order(&parent)?, slugify(name)));
     fs::create_dir_all(&dir).map_err(|e| io_error(&dir, e))?;
     let file = dir.join(FOLDER_FILE);
-    fs::write(&file, folder_yaml(name, None, &Settings::default()))
-        .map_err(|e| io_error(&file, e))?;
+    fs::write(&file, meta_yaml(&named(name))).map_err(|e| io_error(&file, e))?;
     Ok(relative_id(root, &dir))
 }
 
@@ -1008,11 +1072,12 @@ pub fn format_workspace(root: &Path, check: bool) -> Result<Vec<String>, Collect
     let ws_file = root.join(WORKSPACE_FILE);
     rewrite(
         &ws_file,
-        &workspace_yaml(
-            &workspace.name,
-            workspace.auth.as_ref(),
-            &workspace.settings,
-        ),
+        &meta_yaml(&FolderMeta {
+            name: workspace.name.clone(),
+            headers: workspace.headers.clone(),
+            auth: workspace.auth.clone(),
+            settings: workspace.settings.clone(),
+        }),
         check,
         root,
         &mut changed,
@@ -1036,12 +1101,18 @@ fn format_nodes(
                 children,
                 auth,
                 settings,
+                headers,
             } => {
                 let file = resolve(root, id)?.join(FOLDER_FILE);
                 if file.is_file() {
                     rewrite(
                         &file,
-                        &folder_yaml(name, auth.as_ref(), settings),
+                        &meta_yaml(&FolderMeta {
+                            name: name.clone(),
+                            headers: headers.clone(),
+                            auth: auth.clone(),
+                            settings: settings.clone(),
+                        }),
                         check,
                         root,
                         changed,
@@ -1360,6 +1431,67 @@ mod tests {
             TreeNode::Folder { settings, .. } => assert_eq!(settings.verify_ssl, Some(false)),
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn inherits_headers_and_lets_requests_override_or_stop_them() {
+        let ws = workspace();
+        let api = create_folder(ws.path(), "", "API").unwrap();
+        let mut entry = create_request(ws.path(), &api, "Health").unwrap();
+        save_folder_meta(
+            ws.path(),
+            "",
+            &FolderMeta {
+                headers: vec![
+                    Header::new("X-Tenant", "{{tenant}}"),
+                    Header::new("Accept", "application/json"),
+                    Header::new("X-Trace", "1"),
+                ],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        save_folder_meta(
+            ws.path(),
+            &api,
+            &FolderMeta {
+                name: "ignored: renaming goes through organize".into(),
+                headers: vec![Header::new("x-tenant", "api")],
+                auth: Some(Auth::None),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(folder_meta(ws.path(), &api).unwrap().name, "API");
+        assert_eq!(folder_meta(ws.path(), &api).unwrap().auth, Some(Auth::None));
+
+        entry.request.headers = vec![
+            Header::new("Accept", "text/plain"),
+            Header {
+                enabled: false,
+                ..Header::new("X-Trace", "")
+            },
+        ];
+        let sent = effective_headers(ws.path(), &entry).unwrap();
+        assert_eq!(
+            sent,
+            vec![
+                Header::new("x-tenant", "api"),
+                Header::new("Accept", "text/plain"),
+                Header {
+                    enabled: false,
+                    ..Header::new("X-Trace", "")
+                },
+            ],
+            "the folder replaces the workspace's X-Tenant; the request's Accept wins; a disabled X-Trace stops it"
+        );
+        let text = fs::read_to_string(ws.path().join(WORKSPACE_FILE)).unwrap();
+        assert!(
+            text.starts_with("version: 1\nname: \"Demo\"\nheaders:\n  - name: \"X-Tenant\""),
+            "{text}"
+        );
+        assert!(format_workspace(ws.path(), true).unwrap().is_empty());
+        assert_eq!(load_workspace(ws.path()).unwrap().headers.len(), 3);
     }
 
     #[test]

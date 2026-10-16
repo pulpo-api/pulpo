@@ -5,6 +5,7 @@ import RequestEditor from "./components/RequestEditor.vue";
 import ResponseViewer from "./components/ResponseViewer.vue";
 import EnvironmentPanel from "./components/EnvironmentPanel.vue";
 import CookiesPanel from "./components/CookiesPanel.vue";
+import FolderEditor from "./components/FolderEditor.vue";
 import ImportDialog from "./components/ImportDialog.vue";
 import { resolveText } from "./variables";
 import { applyPathParams } from "./params";
@@ -13,8 +14,10 @@ import {
   asCollectionError,
   backend,
   inheritedAuth,
+  inheritedHeaders,
   inheritedSettings,
   remapId,
+  type FolderMeta,
   toEntry,
   type Organized,
   type CollectionError,
@@ -90,6 +93,20 @@ const environments = ref<Environment[]>([]);
 const activeEnvId = ref("");
 const showEnvironments = ref(false);
 const showCookies = ref(false);
+/** The folder being edited ("" = the collection); null = editing requests. */
+const editingFolder = ref<string | null>(null);
+const folderEditor = ref<InstanceType<typeof FolderEditor> | null>(null);
+
+/** Keeps the tree in step with a saved folder, so requests show what they inherit. */
+function onFolderSaved(folderId: string, meta: FolderMeta) {
+  const ws = workspace.value;
+  if (!ws) return;
+  let target: { headers?: FolderMeta["headers"]; auth?: FolderMeta["auth"]; settings?: FolderMeta["settings"] } = ws;
+  if (folderId) walk(ws.tree, (n) => n.type === "folder" && n.id === folderId && (target = n));
+  target.headers = meta.headers;
+  target.auth = meta.auth;
+  target.settings = meta.settings;
+}
 
 const envKey = () => `pulpo.env:${workspace.value?.root ?? ""}`;
 watch(activeEnvId, (id) => {
@@ -114,6 +131,10 @@ const selectedInheritedAuth = computed(() =>
   workspace.value && selected.value
     ? inheritedAuth(workspace.value, selected.value.id)
     : { auth: { type: "none" as const }, sourceId: "", sourceName: "", found: false },
+);
+
+const selectedInheritedHeaders = computed(() =>
+  workspace.value && selected.value ? inheritedHeaders(workspace.value, selected.value.id) : [],
 );
 
 const selectedInheritedSettings = computed(() =>
@@ -436,6 +457,7 @@ function deleteNode(node: TreeNode) {
 }
 
 function select(entry: RequestEntry) {
+  editingFolder.value = null;
   selectedId.value = entry.id;
   confirmDelete.value = false;
   folderId.value = entry.id.includes("/") ? entry.id.slice(0, entry.id.lastIndexOf("/")) : "";
@@ -482,10 +504,11 @@ function onKey(event: KeyboardEvent) {
   const key = event.key.toLowerCase();
   if (key === "enter") {
     event.preventDefault();
-    void send();
+    if (editingFolder.value === null) void send();
   } else if (key === "s") {
     event.preventDefault();
-    void save();
+    if (editingFolder.value !== null) void folderEditor.value?.save();
+    else void save();
   } else if (key === "k") {
     event.preventDefault();
     sidebar.value?.focusSearch();
@@ -530,9 +553,22 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       @duplicate="duplicateNode"
       @delete="deleteNode"
       @move="moveNode"
+      @edit-folder="editingFolder = $event"
     />
 
-    <main v-if="workspace && selected">
+    <main v-if="workspace && editingFolder !== null" class="folder-main">
+      <p v-if="problem" class="problem">{{ problem.message }}</p>
+      <FolderEditor
+        ref="folderEditor"
+        :key="editingFolder"
+        :workspace="workspace"
+        :folder-id="editingFolder"
+        @close="editingFolder = null"
+        @saved="onFolderSaved"
+      />
+    </main>
+
+    <main v-if="workspace && selected && editingFolder === null">
       <nav class="tabbar">
         <button
           v-for="tab in tabs"
@@ -594,6 +630,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         :preview="preview"
         :inherited-auth="selectedInheritedAuth"
         :inherited-settings="selectedInheritedSettings"
+        :inherited-headers="selectedInheritedHeaders"
         :root="workspace?.root ?? ''"
         @send="send"
         @save="save()"
@@ -659,7 +696,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       @text="runImport({ text: $event })"
     />
 
-    <main v-if="!(workspace && selected)" class="welcome">
+    <main v-if="!(workspace && (selected || editingFolder !== null))" class="welcome">
       <div class="hello card">
         <img src="/pulpo.svg" width="72" height="72" alt="" />
         <h1>{{ workspace ? workspace.name : "Welcome to Pulpo" }}</h1>

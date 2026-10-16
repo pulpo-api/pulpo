@@ -1,10 +1,21 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { DEFAULT_TIMEOUT_MS, type HttpRequest, type Settings } from "../core";
+import { DEFAULT_TIMEOUT_MS, type Settings } from "../core";
 import { backend, certificateFor, type ClientCertificate, type InheritedSettings } from "../workspace";
 import CertificatesPanel from "./CertificatesPanel.vue";
 
-const props = defineProps<{ request: HttpRequest; inherited: InheritedSettings; root: string; resolvedUrl: string }>();
+/** Edits the settings of a request or a folder (anything with `settings`). */
+const props = withDefaults(
+  defineProps<{
+    request: { settings?: Settings };
+    inherited: InheritedSettings;
+    root: string;
+    resolvedUrl: string;
+    /** Client certificates are per host, so only requests show them. */
+    certificates?: boolean;
+  }>(),
+  { certificates: true },
+);
 
 /** The request's own settings; writing undefined means "inherit". */
 function own(): Settings {
@@ -77,17 +88,17 @@ const inheritedProxy = computed(() => {
 
 // ---------------------------------------------------------------- certificates
 
-const certificates = ref<ClientCertificate[]>([]);
+const certificateList = ref<ClientCertificate[]>([]);
 const showCertificates = ref(false);
 async function loadCertificates() {
   try {
-    certificates.value = props.root ? await backend.listCertificates(props.root) : [];
+    certificateList.value = props.root ? await backend.listCertificates(props.root) : [];
   } catch {
-    certificates.value = [];
+    certificateList.value = [];
   }
 }
-onMounted(loadCertificates);
-const matched = computed(() => certificateFor(certificates.value, props.resolvedUrl));
+onMounted(() => props.certificates && loadCertificates());
+const matched = computed(() => certificateFor(certificateList.value, props.resolvedUrl));
 
 </script>
 
@@ -142,7 +153,7 @@ const matched = computed(() => certificateFor(certificates.value, props.resolved
       </div>
     </div>
 
-    <section class="certs">
+    <section v-if="certificates" class="certs">
       <h4>Client certificate (mTLS)</h4>
       <p v-if="matched" class="hint">
         Uses the certificate for <code>{{ matched.host }}</code> ({{ matched.pfx ? "PFX" : "PEM" }}) set up on this machine.

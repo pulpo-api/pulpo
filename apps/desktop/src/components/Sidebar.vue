@@ -22,6 +22,7 @@ const emit = defineEmits<{
   duplicate: [id: string];
   delete: [node: TreeNode];
   move: [id: string, target: string, index: number];
+  editFolder: [id: string];
 }>();
 
 const query = ref("");
@@ -131,7 +132,7 @@ function countRequests(node: TreeNode): number {
   return node.type === "request" ? 1 : node.children.reduce((sum, child) => sum + countRequests(child), 0);
 }
 
-function act(action: "rename" | "duplicate" | "delete" | "newRequest" | "newFolder") {
+function act(action: "rename" | "duplicate" | "delete" | "newRequest" | "newFolder" | "edit") {
   const node = menu.value?.node;
   if (!node) return;
   if (action === "delete" && !confirmDelete.value) {
@@ -140,6 +141,7 @@ function act(action: "rename" | "duplicate" | "delete" | "newRequest" | "newFold
   }
   closeMenu();
   if (action === "rename") startRenaming(node.id, node.name);
+  else if (action === "edit") emit("editFolder", node.id);
   else if (action === "duplicate") emit("duplicate", node.id);
   else if (action === "delete") emit("delete", node);
   else {
@@ -173,6 +175,7 @@ function confirm() {
     <template v-if="workspace">
       <div class="ws">
         <button class="ws-name" :title="workspace.root" @click="emit('folder', '')">{{ workspace.name }}</button>
+        <button class="icon" title="Collection headers, auth, settings and scripts" @click="emit('editFolder', '')">⚙</button>
         <button v-if="persistent" class="icon" title="Open another folder" @click="emit('open')">⇄</button>
       </div>
       <div class="actions">
@@ -228,6 +231,7 @@ function confirm() {
         <button role="menuitem" @click="act('rename')">Rename <kbd>F2</kbd></button>
         <button role="menuitem" @click="act('duplicate')">Duplicate</button>
         <template v-if="menu.node.type === 'folder'">
+          <button role="menuitem" @click="act('edit')">Headers, auth, settings…</button>
           <button role="menuitem" @click="act('newRequest')">New request here</button>
           <button role="menuitem" @click="act('newFolder')">New folder here</button>
         </template>

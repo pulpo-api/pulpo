@@ -4,6 +4,7 @@ import {
   sendHttp,
   asSendError,
   type Auth,
+  type Header,
   type HttpRequest,
   type HttpResponse,
   type SendError,
@@ -44,7 +45,15 @@ export interface RunReport {
 
 export type TreeNode =
   | ({ type: "request" } & RequestEntry)
-  | { type: "folder"; id: string; name: string; children: TreeNode[]; auth?: Auth | null; settings?: Settings };
+  | {
+      type: "folder";
+      id: string;
+      name: string;
+      children: TreeNode[];
+      auth?: Auth | null;
+      settings?: Settings;
+      headers?: Header[];
+    };
 
 export interface Workspace {
   root: string;
@@ -54,6 +63,59 @@ export interface Workspace {
   auth?: Auth | null;
   /** Settings for every request unless a folder or the request sets them. */
   settings?: Settings;
+  /** Headers every request sends unless a folder or the request sets the same one. */
+  headers?: Header[];
+}
+
+/** What a folder (or the workspace) sets for the requests inside. Mirrors pulpo-core. */
+export interface FolderMeta {
+  name: string;
+  headers: Header[];
+  auth: Auth | null;
+  settings: Settings;
+}
+
+/** The folders above an id, from the workspace down (the id itself is not included). */
+function levelsAbove(workspace: Workspace, id: string): { id: string; name: string; headers?: Header[] }[] {
+  const levels: { id: string; name: string; headers?: Header[] }[] = [
+    { id: "", name: workspace.name, headers: workspace.headers },
+  ];
+  const parts = id.split("/").slice(0, -1);
+  let nodes = workspace.tree;
+  for (let i = 0; i < parts.length; i++) {
+    const folderId = parts.slice(0, i + 1).join("/");
+    const folder = nodes.find((n): n is Extract<TreeNode, { type: "folder" }> => n.type === "folder" && n.id === folderId);
+    if (!folder) break;
+    levels.push({ id: folder.id, name: folder.name, headers: folder.headers });
+    nodes = folder.children;
+  }
+  return levels;
+}
+
+/** Headers inherited by a request or folder, with the folder that sets each one. A deeper
+ * folder replaces a header with the same name. Mirrors `effective_headers` in pulpo-core. */
+export function inheritedHeaders(workspace: Workspace, id: string): { header: Header; from: string }[] {
+  let out: { header: Header; from: string }[] = [];
+  const same = (a: Header, b: Header) => a.name.trim().toLowerCase() === b.name.trim().toLowerCase();
+  for (const level of levelsAbove(workspace, id)) {
+    for (const header of level.headers ?? []) {
+      out = out.filter((h) => !same(h.header, header));
+      if (header.enabled && header.name.trim()) out.push({ header, from: level.name });
+    }
+  }
+  return out;
+}
+
+/** The headers a request sends: inherited ones it does not set itself, then its own. */
+export function effectiveHeaders(workspace: Workspace, entry: RequestEntry): Header[] {
+  const own = entry.request.headers;
+  const same = (a: Header, b: Header) => a.name.trim().toLowerCase() === b.name.trim().toLowerCase();
+  return [
+    ...inheritedHeaders(workspace, entry.id)
+      .map((h) => h.header)
+      .filter((h) => !own.some((o) => same(o, h))),
+    ...own,
+  ];
 }
 
 /** A setting a request inherits, and who sets it ("" = nobody: the default applies). */
@@ -256,6 +318,12 @@ export interface WorkspaceBackend {
   saveEnvironment(root: string, env: Environment): Promise<void>;
   createEnvironment(root: string, name: string): Promise<Environment>;
   deleteEnvironment(root: string, id: string): Promise<void>;
+  /** What a folder ("" = the workspace) sets for the requests inside. */
+  folderMeta(root: string, folderId: string): Promise<FolderMeta>;
+  /** Saves headers, auth and settings of a folder (the name is kept). */
+  saveFolderMeta(root: string, folderId: string, meta: FolderMeta): Promise<void>;
+  folderScripts(root: string, folderId: string): Promise<Scripts>;
+  saveFolderScripts(root: string, folderId: string, scripts: Scripts): Promise<void>;
   /** Renames a request or folder; its file name follows. */
   renameNode(root: string, id: string, name: string): Promise<Organized>;
   /** Moves a request or folder into `target` at `index` (counted without the node). */
@@ -303,6 +371,10 @@ const tauriBackend: WorkspaceBackend = {
   createEnvironment: (root, name) => invoke<Environment>("create_environment", { root, name }),
   deleteEnvironment: (root, id) => invoke<void>("delete_environment", { root, id }),
   saveFolderAuth: (root, folderId, auth) => invoke<void>("save_folder_auth", { root, folderId, auth }),
+  folderMeta: (root, folderId) => invoke<FolderMeta>("folder_meta", { root, folderId }),
+  saveFolderMeta: (root, folderId, meta) => invoke<void>("save_folder_meta", { root, folderId, meta }),
+  folderScripts: (root, folderId) => invoke<Scripts>("folder_scripts", { root, folderId }),
+  saveFolderScripts: (root, folderId, scripts) => invoke<void>("save_folder_scripts", { root, folderId, scripts }),
   renameNode: (root, id, name) => invoke<Organized>("rename_node", { root, id, name }),
   moveNode: (root, id, target, index) => invoke<Organized>("move_node", { root, id, target, index }),
   duplicateNode: (root, id) => invoke<Organized>("duplicate_node", { root, id }),
@@ -362,6 +434,20 @@ function memoryBackend(): WorkspaceBackend {
   // The browser keeps real cookies itself; this jar only lets the panel be tried out.
   const jars = new Map<string, Cookie[]>();
   let certificates: ClientCertificate[] = [];
+  const folderScripts = new Map<string, Scripts>();
+
+  function folderNode(id: string): Extract<TreeNode, { type: "folder" }> {
+    let found: Extract<TreeNode, { type: "folder" }> | null = null;
+    const walk = (nodes: TreeNode[]) =>
+      nodes.forEach((n) => {
+        if (n.type !== "folder") return;
+        if (n.id === id) found = n;
+        else walk(n.children);
+      });
+    walk(workspace.tree);
+    if (!found) throw { kind: "invalidPath", message: id } satisfies CollectionError;
+    return found;
+  }
 
   function childrenOf(folderId: string): TreeNode[] {
     if (!folderId) return workspace.tree;
@@ -496,6 +582,27 @@ function memoryBackend(): WorkspaceBackend {
       const index = environments.findIndex((e) => e.id === id);
       if (index >= 0) environments.splice(index, 1);
     },
+    async folderMeta(_root, folderId) {
+      const source = folderId ? folderNode(folderId) : workspace;
+      return clone({
+        name: source.name,
+        headers: source.headers ?? [],
+        auth: source.auth ?? null,
+        settings: source.settings ?? {},
+      });
+    },
+    async saveFolderMeta(_root, folderId, meta) {
+      const target = folderId ? folderNode(folderId) : workspace;
+      target.headers = clone(meta.headers);
+      target.auth = clone(meta.auth);
+      target.settings = clone(meta.settings);
+    },
+    async folderScripts(_root, folderId) {
+      return clone(folderScripts.get(folderId) ?? { pre: "", test: "" });
+    },
+    async saveFolderScripts(_root, folderId, scripts) {
+      folderScripts.set(folderId, clone(scripts));
+    },
     async renameNode(_root, id, name) {
       const { node } = locate(id);
       node.name = name.trim();
@@ -585,7 +692,8 @@ function memoryBackend(): WorkspaceBackend {
       try {
         const auth = entry.request.auth ?? inheritedAuth(workspace, entry.id).auth;
         const timeoutMs = entry.request.settings?.timeoutMs ?? inheritedSettings(workspace, entry.id).timeoutMs.value;
-        report.response = await sendHttp({ ...entry.request, auth, settings: { timeoutMs } }, {
+        const headers = effectiveHeaders(workspace, entry);
+        report.response = await sendHttp({ ...entry.request, auth, headers, settings: { timeoutMs } }, {
           environmentId,
           browserVars: environmentId ? this.browserVariables!(environmentId) : {},
         });

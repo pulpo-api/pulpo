@@ -1,5 +1,5 @@
 use pulpo_core::certificates::{self, ClientCertificate};
-use pulpo_core::collection::{self, CollectionError, RequestEntry, Scripts, Workspace};
+use pulpo_core::collection::{self, CollectionError, FolderMeta, RequestEntry, Scripts, Workspace};
 use pulpo_core::cookies::{self, Cookie, Jar};
 use pulpo_core::environment::{self, Environment};
 use pulpo_core::http::{self, Auth, HttpRequest, HttpResponse, SendError, Settings};
@@ -62,6 +62,22 @@ async fn run_request(
 #[tauri::command]
 async fn folder_scripts(root: String, folder_id: String) -> Result<Scripts, CollectionError> {
     collection::folder_scripts(Path::new(&root), &folder_id)
+}
+
+/// What a folder (`""` = the workspace) sets for the requests inside.
+#[tauri::command]
+async fn folder_meta(root: String, folder_id: String) -> Result<FolderMeta, CollectionError> {
+    collection::folder_meta(Path::new(&root), &folder_id)
+}
+
+/// Saves headers, auth and settings of a folder (the name is kept).
+#[tauri::command]
+async fn save_folder_meta(
+    root: String,
+    folder_id: String,
+    meta: FolderMeta,
+) -> Result<(), CollectionError> {
+    collection::save_folder_meta(Path::new(&root), &folder_id, &meta)
 }
 
 /// Renames a request or folder ("" = the workspace); returns the new id.
@@ -267,6 +283,8 @@ pub fn run() {
             save_folder_auth,
             list_cookies,
             save_cookies,
+            folder_meta,
+            save_folder_meta,
             rename_node,
             move_node,
             duplicate_node,

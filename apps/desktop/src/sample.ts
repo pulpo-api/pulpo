@@ -18,6 +18,8 @@ export function sampleWorkspace(): Workspace {
   return {
     root: "examples/jsonplaceholder",
     name: "JSONPlaceholder (browser preview)",
+    // Sent by every request: a common header of the collection.
+    headers: [{ name: "Accept", value: "application/json", enabled: true }],
     tree: [
       {
         type: "folder",
