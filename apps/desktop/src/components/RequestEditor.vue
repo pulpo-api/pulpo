@@ -3,6 +3,8 @@ import { computed, ref } from "vue";
 import { HTTP_METHODS, type HttpRequest } from "../core";
 import type { Scripts } from "../workspace";
 import CodeEditor, { type Language } from "./CodeEditor.vue";
+import ParamsEditor from "./ParamsEditor.vue";
+import { pathParamNames, splitUrl } from "../params";
 
 const props = defineProps<{
   request: HttpRequest;
@@ -13,7 +15,10 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ send: []; save: [] }>();
 
-const tab = ref<"body" | "headers" | "pre" | "test">("body");
+const tab = ref<"params" | "body" | "headers" | "pre" | "test">(
+  props.request.method === "GET" || splitUrl(props.request.url).params.length ? "params" : "body",
+);
+const paramCount = computed(() => splitUrl(props.request.url).params.length + pathParamNames(props.request.url).length);
 const hasBody = computed(() => !["GET", "HEAD"].includes(props.request.method));
 const bodyLanguage = computed<Language>(() => {
   const contentType =
@@ -71,6 +76,9 @@ function formatBody() {
     </p>
 
     <div class="tabs">
+      <button :class="{ on: tab === 'params' }" @click="tab = 'params'">
+        Params <span v-if="paramCount" class="count">{{ paramCount }}</span>
+      </button>
       <button :class="{ on: tab === 'body' }" @click="tab = 'body'">Body</button>
       <button :class="{ on: tab === 'headers' }" @click="tab = 'headers'">
         Headers <span v-if="activeHeaders" class="count">{{ activeHeaders }}</span>
@@ -86,7 +94,9 @@ function formatBody() {
       <span class="kbd">Ctrl ↵ to send</span>
     </div>
 
-    <template v-if="tab === 'body'">
+    <ParamsEditor v-if="tab === 'params'" :request="request" />
+
+    <template v-else-if="tab === 'body'">
       <CodeEditor
         v-if="hasBody"
         v-model="body"
@@ -139,6 +149,7 @@ function formatBody() {
 }
 .urlbar {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 .method {
@@ -155,7 +166,7 @@ function formatBody() {
 .m-patch { color: var(--m-patch); }
 .m-delete { color: var(--m-delete); }
 .urlbar input {
-  flex: 1;
+  flex: 1 1 220px;
   min-width: 0;
   border: 1px solid var(--border);
   border-radius: 8px;

@@ -17,7 +17,27 @@
       "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
       "description": "HTTP method. Required when protocol is http."
     },
-    "url": { "type": "string", "description": "Target URL. May contain {{variables}}." },
+    "url": { "type": "string", "description": "Target URL with the enabled query params. May contain {{variables}} and :pathParams." },
+    "pathParams": {
+      "type": "array",
+      "description": "Values for the :name segments of the URL path. Values may contain {{variables}}.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "properties": { "name": { "type": "string" }, "value": { "type": "string" } }
+      }
+    },
+    "disabledParams": {
+      "type": "array",
+      "description": "Query params kept but not sent (not part of url).",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "properties": { "name": { "type": "string" }, "value": { "type": "string" } }
+      }
+    },
     "headers": {
       "type": "array",
       "items": {

@@ -3,7 +3,7 @@
 use super::{base64, ImportError, ImportFormat, ImportNode, ImportPlan};
 use crate::collection::Scripts;
 use crate::environment::{Environment, Variable};
-use crate::http::{Header, HttpRequest};
+use crate::http::{Header, HttpRequest, Param};
 use crate::HttpMethod;
 use serde_json::Value;
 
@@ -255,12 +255,32 @@ fn request_of(
         }
     }
     let body = body_of(request.get("body"), &mut headers, warnings, at);
+    let url = request.get("url");
+    // Postman keeps disabled query params out of `raw`, in `query` with `disabled: true`,
+    // and the values of `:name` path segments in `variable`.
+    let params_of = |key: &str, keep: fn(&Value) -> bool| -> Vec<Param> {
+        url.and_then(|u| u.get(key))
+            .and_then(|list| list.as_array())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter(|i| keep(i))
+                    .map(|i| Param::new(text(i.get("key")), text(i.get("value"))))
+                    .filter(|p| !p.name.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
     Some(HttpRequest {
         method,
-        url: url_of(request.get("url")),
+        url: url_of(url),
         headers,
         body,
         timeout_ms: None,
+        disabled_params: params_of("query", |i| {
+            i.get("disabled").and_then(|d| d.as_bool()).unwrap_or(false)
+        }),
+        path_params: params_of("variable", |_| true),
     })
 }
 
@@ -536,6 +556,24 @@ mod tests {
             .variables
             .iter()
             .any(|v| v.name == "token" && v.secret && v.value == "abc"));
+    }
+
+    #[test]
+    fn keeps_disabled_query_params_and_path_variables() {
+        let plan = parse(
+            r#"{"info": {"name": "x"}, "item": [{"name": "a", "request": {"method": "GET",
+                "url": {"raw": "{{base}}/orders/:orderId?page=1",
+                        "query": [{"key": "page", "value": "1"}, {"key": "debug", "value": "true", "disabled": true}],
+                        "variable": [{"key": "orderId", "value": "{{orderId}}"}]}}}]}"#,
+        )
+        .unwrap();
+        let (_, request) = &requests(&plan.nodes)[0];
+        assert_eq!(request.url, "{{base}}/orders/:orderId?page=1");
+        assert_eq!(request.disabled_params, vec![Param::new("debug", "true")]);
+        assert_eq!(
+            request.path_params,
+            vec![Param::new("orderId", "{{orderId}}")]
+        );
     }
 
     #[test]

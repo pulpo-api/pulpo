@@ -4,3 +4,6 @@ name: "List posts"
 protocol: "http"
 method: "GET"
 url: "{{base}}/posts?_limit=5"
+disabledParams:
+  - name: "userId"
+    value: "{{userId}}"

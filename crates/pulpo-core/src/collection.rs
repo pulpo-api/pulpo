@@ -10,7 +10,7 @@
 //! ```
 //! Pulpo always writes these files in one canonical form so diffs stay small.
 
-use crate::http::{Header, HttpRequest};
+use crate::http::{Header, HttpRequest, Param};
 use crate::{HttpMethod, Protocol};
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -201,6 +201,10 @@ struct RequestFileV1 {
     body: Option<BodyKind>,
     #[serde(default)]
     timeout_ms: Option<u64>,
+    #[serde(default)]
+    path_params: Vec<Param>,
+    #[serde(default)]
+    disabled_params: Vec<Param>,
 }
 
 fn check_version(version: u32, path: &Path) -> Result<(), CollectionError> {
@@ -263,6 +267,18 @@ fn request_yaml(entry: &RequestEntry, body: Option<BodyKind>) -> String {
         ));
     }
     out.push_str(&format!("url: {}\n", quote(&entry.request.url)));
+    for (key, params) in [
+        ("pathParams", &entry.request.path_params),
+        ("disabledParams", &entry.request.disabled_params),
+    ] {
+        if !params.is_empty() {
+            out.push_str(&format!("{key}:\n"));
+            for param in params {
+                out.push_str(&format!("  - name: {}\n", quote(&param.name)));
+                out.push_str(&format!("    value: {}\n", quote(&param.value)));
+            }
+        }
+    }
     if !entry.request.headers.is_empty() {
         out.push_str("headers:\n");
         for header in &entry.request.headers {
@@ -521,6 +537,8 @@ fn load_request_file(root: &Path, path: &Path) -> Result<RequestEntry, Collectio
             headers: file.headers,
             body,
             timeout_ms: file.timeout_ms,
+            disabled_params: file.disabled_params,
+            path_params: file.path_params,
         },
         scripts: read_scripts(path, &stem_of(path))?,
     })
@@ -715,6 +733,8 @@ mod tests {
                 ],
                 body: Some("{\n  \"a\": 1\n}\n".to_string()),
                 timeout_ms: Some(5000),
+                disabled_params: vec![Param::new("debug", "true")],
+                path_params: vec![Param::new("tenant", "{{tenantId}}")],
             },
             scripts: Scripts::default(),
         }
@@ -802,6 +822,8 @@ mod tests {
                  protocol: \"http\"\n\
                  method: \"POST\"\n\
                  url: \"{{{{orders}}}}/api/v1/checkouts?x=010\"\n\
+                 pathParams:\n  - name: \"tenant\"\n    value: \"{{{{tenantId}}}}\"\n\
+                 disabledParams:\n  - name: \"debug\"\n    value: \"true\"\n\
                  headers:\n  - name: \"Content-Type\"\n    value: \"application/json\"\n\
                  \x20 - name: \"X-Debug\"\n    value: \"yes\\tplease\"\n    enabled: false\n\
                  body: \"json\"\n\

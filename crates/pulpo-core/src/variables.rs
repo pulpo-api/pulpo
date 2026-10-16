@@ -122,6 +122,14 @@ pub fn resolve_request(
             .as_ref()
             .map(|b| resolve_text(b, vars, &mut missing)),
         timeout_ms: request.timeout_ms,
+        disabled_params: request.disabled_params.clone(),
+        path_params: request
+            .path_params
+            .iter()
+            .map(|p| {
+                crate::http::Param::new(p.name.clone(), resolve_text(&p.value, vars, &mut missing))
+            })
+            .collect(),
     };
     if missing.is_empty() {
         Ok(resolved)

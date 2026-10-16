@@ -3,4 +3,7 @@ version: 1
 name: "Get a post"
 protocol: "http"
 method: "GET"
-url: "{{base}}/posts/1"
+url: "{{base}}/posts/:postId"
+pathParams:
+  - name: "postId"
+    value: "1"

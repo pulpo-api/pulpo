@@ -31,7 +31,27 @@ impl Header {
     }
 }
 
+/// A name and a value: a disabled query param or a path param.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Param {
+    pub name: String,
+    #[serde(default)]
+    pub value: String,
+}
+
+impl Param {
+    pub fn new(name: impl Into<String>, value: impl Into<String>) -> Self {
+        Param {
+            name: name.into(),
+            value: value.into(),
+        }
+    }
+}
+
 /// An HTTP request ready to be sent. Variables must already be resolved.
+///
+/// Enabled query params live in `url`; disabled ones are kept in `disabled_params` so the
+/// URL stays clean. `:name` path segments are replaced by `path_params` when sending.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HttpRequest {
@@ -43,6 +63,10 @@ pub struct HttpRequest {
     pub body: Option<String>,
     #[serde(default)]
     pub timeout_ms: Option<u64>,
+    #[serde(default)]
+    pub disabled_params: Vec<Param>,
+    #[serde(default)]
+    pub path_params: Vec<Param>,
 }
 
 impl HttpRequest {
@@ -53,8 +77,82 @@ impl HttpRequest {
             headers: Vec::new(),
             body: None,
             timeout_ms: None,
+            disabled_params: Vec::new(),
+            path_params: Vec::new(),
         }
     }
+}
+
+/// Where the path starts: after `scheme://host[:port]`, or at the start for relative URLs.
+fn path_start(url: &str) -> usize {
+    match url.find("://") {
+        Some(i) => url[i + 3..]
+            .find('/')
+            .map(|p| i + 3 + p)
+            .unwrap_or(url.len()),
+        None => 0,
+    }
+}
+
+/// Names of the `:name` segments in the URL path (not the port), in order.
+pub fn path_param_names(url: &str) -> Vec<String> {
+    let start = path_start(url);
+    let path = &url[start..];
+    let path = path.split(['?', '#']).next().unwrap_or("");
+    path.split('/')
+        .filter_map(|segment| segment.strip_prefix(':'))
+        .map(|name| {
+            name.chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+                .collect::<String>()
+        })
+        .filter(|name| !name.is_empty())
+        .collect()
+}
+
+fn encode_segment(value: &str) -> String {
+    let mut out = String::new();
+    for b in value.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// Replaces `:name` path segments with their (URL-encoded) values. Unknown names stay.
+pub fn apply_path_params(url: &str, params: &[Param]) -> String {
+    if params.is_empty() {
+        return url.to_string();
+    }
+    let start = path_start(url);
+    let (head, rest) = url.split_at(start);
+    let split = rest.find(['?', '#']).unwrap_or(rest.len());
+    let (path, tail) = rest.split_at(split);
+    let replaced: Vec<String> = path
+        .split('/')
+        .map(|segment| {
+            let Some(name_and_more) = segment.strip_prefix(':') else {
+                return segment.to_string();
+            };
+            let name: String = name_and_more
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+                .collect();
+            match params.iter().find(|p| p.name == name) {
+                Some(p) if !name.is_empty() => format!(
+                    "{}{}",
+                    encode_segment(&p.value),
+                    &name_and_more[name.len()..]
+                ),
+                _ => segment.to_string(),
+            }
+        })
+        .collect();
+    format!("{head}{}{tail}", replaced.join("/"))
 }
 
 /// What came back, with timing and size.
@@ -138,8 +236,9 @@ fn to_reqwest_method(method: HttpMethod) -> reqwest::Method {
 
 /// Sends the request and returns the response, whatever its status code.
 pub async fn send(request: &HttpRequest) -> Result<HttpResponse, SendError> {
-    let url = reqwest::Url::parse(request.url.trim())
-        .map_err(|e| SendError::InvalidUrl(format!("{}: {e}", request.url)))?;
+    let raw_url = apply_path_params(request.url.trim(), &request.path_params);
+    let url = reqwest::Url::parse(&raw_url)
+        .map_err(|e| SendError::InvalidUrl(format!("{raw_url}: {e}")))?;
     if !matches!(url.scheme(), "http" | "https") {
         return Err(SendError::InvalidUrl(format!(
             "unsupported scheme '{}', use http or https",
@@ -201,6 +300,36 @@ pub async fn send(request: &HttpRequest) -> Result<HttpResponse, SendError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finds_path_params_but_not_ports() {
+        assert_eq!(
+            path_param_names("http://localhost:8080/orders/:orderId/items/:item_id?x=:no"),
+            ["orderId", "item_id"]
+        );
+        assert_eq!(path_param_names("{{base}}/users/:id"), ["id"]);
+        assert!(path_param_names("https://api.test/plain").is_empty());
+    }
+
+    #[test]
+    fn replaces_path_params_and_encodes_values() {
+        let params = [Param::new("orderId", "a b/c"), Param::new("unused", "x")];
+        assert_eq!(
+            apply_path_params(
+                "https://api.test:8443/orders/:orderId/lines?x=:orderId",
+                &params
+            ),
+            "https://api.test:8443/orders/a%20b%2Fc/lines?x=:orderId"
+        );
+        assert_eq!(
+            apply_path_params("https://api.test/:missing", &params),
+            "https://api.test/:missing"
+        );
+        assert_eq!(
+            apply_path_params("https://api.test/:orderId.json", &params),
+            "https://api.test/a%20b%2Fc.json"
+        );
+    }
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 

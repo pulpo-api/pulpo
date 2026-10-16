@@ -10,7 +10,7 @@ function request(
   protocol: Protocol = "http",
   test = "",
 ): TreeNode {
-  return { type: "request", id, name, protocol, request: { headers: [], body: null, ...req }, scripts: { pre: "", test } };
+  return { type: "request", id, name, protocol, request: { headers: [], body: null, disabledParams: [], pathParams: [], ...req }, scripts: { pre: "", test } };
 }
 
 /** The browser preview has no file system, so it works on this in-memory copy of examples/jsonplaceholder. */
@@ -27,10 +27,12 @@ export function sampleWorkspace(): Workspace {
           request("01-posts/01-list-posts.pulpo.yaml", "List posts", {
             method: "GET",
             url: "{{base}}/posts?_limit=5",
+            disabledParams: [{ name: "userId", value: "{{userId}}" }],
           }),
           request("01-posts/02-get-a-post.pulpo.yaml", "Get a post", {
             method: "GET",
-            url: "{{base}}/posts/1",
+            url: "{{base}}/posts/:postId",
+            pathParams: [{ name: "postId", value: "1" }],
           }),
           request("01-posts/03-create-a-post.pulpo.yaml", "Create a post", {
             method: "POST",

@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { resolveText, type Vars } from "./variables";
+import { applyPathParams, type Param } from "./params";
 
 export interface CoreInfo {
   version: string;
@@ -22,6 +23,10 @@ export interface HttpRequest {
   headers: Header[];
   body: string | null;
   timeoutMs?: number;
+  /** Query params kept but not sent; the enabled ones live in `url`. */
+  disabledParams: Param[];
+  /** Values for `:name` path segments. */
+  pathParams: Param[];
 }
 
 export interface HttpResponse {
@@ -62,7 +67,10 @@ export async function sendHttp(
   const vars = context.browserVars ?? {};
   const resolved: HttpRequest = {
     ...request,
-    url: resolveText(request.url, vars, missing),
+    url: applyPathParams(
+      resolveText(request.url, vars, missing),
+      request.pathParams.map((p) => ({ name: p.name, value: resolveText(p.value, vars, missing) })),
+    ),
     headers: request.headers.map((h) =>
       h.enabled ? { ...h, name: resolveText(h.name, vars, missing), value: resolveText(h.value, vars, missing) } : h,
     ),

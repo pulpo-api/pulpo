@@ -6,6 +6,7 @@ import ResponseViewer from "./components/ResponseViewer.vue";
 import EnvironmentPanel from "./components/EnvironmentPanel.vue";
 import ImportDialog from "./components/ImportDialog.vue";
 import { resolveText } from "./variables";
+import { applyPathParams } from "./params";
 import { asSendError, coreInfo, type CoreInfo, type HttpResponse, type SendError } from "./core";
 import {
   asCollectionError,
@@ -107,7 +108,10 @@ const preview = computed(() => {
   const node = selected.value;
   if (!node) return null;
   const missing = new Set<string>();
-  const url = resolveText(node.request.url, previewVars.value, missing, true);
+  const url = applyPathParams(
+    resolveText(node.request.url, previewVars.value, missing, true),
+    node.request.pathParams.map((p) => ({ name: p.name, value: resolveText(p.value, previewVars.value, missing, true) })),
+  );
   for (const h of node.request.headers.filter((h) => h.enabled)) {
     resolveText(h.name, previewVars.value, missing, true);
     resolveText(h.value, previewVars.value, missing, true);
@@ -576,7 +580,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
 <style scoped>
 .layout {
   display: grid;
-  grid-template-columns: 290px 1fr;
+  grid-template-columns: clamp(200px, 24vw, 290px) minmax(0, 1fr);
   height: 100%;
 }
 main {

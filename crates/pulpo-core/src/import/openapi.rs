@@ -422,6 +422,8 @@ pub(super) fn document(doc: &Value) -> Result<ImportPlan, ImportError> {
                         headers,
                         body,
                         timeout_ms: None,
+                        disabled_params: Vec::new(),
+                        path_params: Vec::new(),
                     },
                     scripts: Default::default(),
                 },

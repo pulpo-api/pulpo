@@ -198,7 +198,7 @@ function memoryBackend(): WorkspaceBackend {
         id: `${prefix(folderId)}${nextOrder(children)}-${slugify(name)}.pulpo.yaml`,
         name,
         protocol: "http",
-        request: { method: "GET", url: "https://", headers: [], body: null },
+        request: { method: "GET", url: "https://", headers: [], body: null, disabledParams: [], pathParams: [] },
         scripts: { pre: "", test: "" },
       };
       children.push({ type: "request", ...clone(entry) });
