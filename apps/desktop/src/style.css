@@ -1,0 +1,69 @@
+:root {
+  --bg: #f6f7fb;
+  --surface: #ffffff;
+  --surface-2: #eef0f6;
+  --border: #e2e5ee;
+  --text: #1c2030;
+  --muted: #6b7185;
+  --accent: #ff6b57;
+  --accent-soft: rgba(255, 107, 87, 0.12);
+  --ok: #1f9d68;
+  --shadow: 0 1px 2px rgba(20, 24, 40, 0.06), 0 8px 24px rgba(20, 24, 40, 0.06);
+  --radius: 10px;
+  --mono: "JetBrains Mono", "Cascadia Code", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --sans: Inter, "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, sans-serif;
+
+  --m-get: #1f9d68;
+  --m-post: #d9822b;
+  --m-put: #2f7de1;
+  --m-patch: #8a5cf6;
+  --m-delete: #e0464f;
+  --p-graphql: #e535ab;
+  --p-grpc: #2aa7b8;
+  --p-websocket: #6b6ff0;
+  --p-soap: #8b8f9c;
+  --p-sse: #c49a1d;
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --bg: #0f1117;
+  --surface: #161922;
+  --surface-2: #1e222d;
+  --border: #272b38;
+  --text: #e6e8ef;
+  --muted: #8a90a3;
+  --accent-soft: rgba(255, 107, 87, 0.16);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.3);
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.45 var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+::selection {
+  background: var(--accent-soft);
+}

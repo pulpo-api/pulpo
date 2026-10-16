@@ -1,0 +1,12 @@
+/target/
+node_modules/
+dist/
+apps/desktop/src-tauri/gen/schemas/
+.pulpo/
+.env
+.env.*
+*.log
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
