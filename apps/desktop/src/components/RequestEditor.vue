@@ -130,6 +130,15 @@ function removeHeader(index: number) {
         <button class="icon" title="Remove" @click="removeHeader(i)">✕</button>
       </div>
       <button class="link" @click="addHeader">+ Add header</button>
+      <label class="toggle" title="Uses the cookie jar of the selected environment (🍪 in the top bar)">
+        <input
+          type="checkbox"
+          :checked="request.cookies ?? true"
+          @change="request.cookies = ($event.target as HTMLInputElement).checked"
+        />
+        Send and store cookies
+        <span class="hint-inline">— a <code>Cookie</code> header written here wins over the jar</span>
+      </label>
     </div>
   </section>
 </template>
@@ -317,5 +326,17 @@ textarea:focus,
   background: transparent;
   color: var(--muted);
   cursor: pointer;
+}
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.hint-inline {
+  opacity: 0.8;
 }
 </style>

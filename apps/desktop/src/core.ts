@@ -132,6 +132,8 @@ export interface HttpRequest {
   form?: Form | null;
   /** A workspace file sent as the whole body; wins over `body`. */
   bodyFile?: string | null;
+  /** Send and store cookies with the environment's jar (default true). */
+  cookies?: boolean;
 }
 
 export interface HttpResponse {

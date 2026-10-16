@@ -5,7 +5,8 @@
 
 mod crypto;
 
-use crate::http::{self, HttpRequest, HttpResponse};
+use crate::cookies::SharedJar;
+use crate::http::{self, HttpRequest, HttpResponse, SendContext};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -23,7 +24,7 @@ const SUB_REQUEST_TIMEOUT_MS: u64 = 15_000;
 
 /// Sends a request for `pm.sendRequest`. Scripts run synchronously, so the request runs
 /// on its own thread and runtime; this works whether or not the caller is async.
-fn send_blocking(request_json: String) -> String {
+fn send_blocking(request_json: String, cookies: Option<Arc<SharedJar>>) -> String {
     let outcome = std::thread::spawn(move || {
         let mut request: HttpRequest = match serde_json::from_str(&request_json) {
             Ok(request) => request,
@@ -41,7 +42,11 @@ fn send_blocking(request_json: String) -> String {
             Ok(runtime) => runtime,
             Err(e) => return serde_json::json!({ "ok": false, "error": e.to_string() }),
         };
-        match runtime.block_on(http::send(&request)) {
+        let context = SendContext {
+            root: None,
+            cookies,
+        };
+        match runtime.block_on(http::send_with(&request, &context)) {
             Ok(response) => serde_json::json!({ "ok": true, "response": response }),
             Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }),
         }
@@ -94,6 +99,8 @@ struct Input<'a> {
     local: &'a HashMap<String, String>,
     request: &'a HttpRequest,
     response: Option<&'a HttpResponse>,
+    /// Cookies of the jar that match the request URL, for `pm.cookies`.
+    cookies: Vec<(String, String)>,
 }
 
 #[derive(Deserialize)]
@@ -113,6 +120,8 @@ pub struct ScriptContext<'a> {
     pub env: &'a HashMap<String, String>,
     /// Local values set by earlier scripts; they win over `env`.
     pub local: &'a HashMap<String, String>,
+    /// The environment's cookie jar, shared with `pm.sendRequest`.
+    pub cookies: Option<Arc<SharedJar>>,
 }
 
 /// Runs the scripts of a phase in order. Pre-request scripts may change the request,
@@ -166,6 +175,11 @@ fn execute(
         local: context.local,
         request,
         response,
+        cookies: context
+            .cookies
+            .as_ref()
+            .map(|jar| jar.pairs_for(&request.url))
+            .unwrap_or_default(),
     };
     let mut program = format!(
         "var __input = {};\n{PRELUDE}\n",
@@ -180,6 +194,7 @@ fn execute(
     }
     program.push_str("__finish();\n");
 
+    let script_cookies = context.cookies.clone();
     let runtime = rquickjs::Runtime::new().map_err(|e| format!("script engine: {e}"))?;
     runtime.set_memory_limit(MEMORY_LIMIT);
     let started = Instant::now();
@@ -204,6 +219,7 @@ fn execute(
         let globals = ctx.globals();
         let http_waited = waited_ms.clone();
         let http_count = sub_requests.clone();
+        let http_cookies = script_cookies.clone();
         let http_bridge = rquickjs::Function::new(ctx.clone(), move |request_json: String| -> String {
             if http_count.fetch_add(1, Ordering::Relaxed) >= MAX_SUB_REQUESTS {
                 return serde_json::json!({
@@ -213,7 +229,7 @@ fn execute(
                 .to_string();
             }
             let t = Instant::now();
-            let out = send_blocking(request_json);
+            let out = send_blocking(request_json, http_cookies.clone());
             http_waited.fetch_add(t.elapsed().as_millis() as u64, Ordering::Relaxed);
             out
         })
@@ -258,6 +274,7 @@ mod tests {
             environment_name: "Local",
             env,
             local,
+            cookies: None,
         }
     }
 

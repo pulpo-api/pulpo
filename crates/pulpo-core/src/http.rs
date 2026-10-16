@@ -1,9 +1,11 @@
 //! HTTP engine: sends a request and measures the response.
 
+use crate::cookies::SharedJar;
 use crate::HttpMethod;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const DEFAULT_TIMEOUT_MS: u64 = 30_000;
@@ -231,6 +233,9 @@ pub struct HttpRequest {
     /// `None` = inherit from the folder (resolved before sending).
     #[serde(default)]
     pub auth: Option<Auth>,
+    /// Send and store cookies with the environment's jar.
+    #[serde(default = "enabled_by_default")]
+    pub cookies: bool,
 }
 
 impl HttpRequest {
@@ -246,8 +251,16 @@ impl HttpRequest {
             disabled_params: Vec::new(),
             path_params: Vec::new(),
             auth: None,
+            cookies: true,
         }
     }
+}
+
+/// What a send may use besides the request: the workspace (for uploads) and a cookie jar.
+#[derive(Debug, Default, Clone)]
+pub struct SendContext<'a> {
+    pub root: Option<&'a Path>,
+    pub cookies: Option<Arc<SharedJar>>,
 }
 
 /// Finds a file a request sends. Paths are relative to the workspace and may not leave
@@ -483,6 +496,23 @@ pub async fn send_in(
     request: &HttpRequest,
     root: Option<&Path>,
 ) -> Result<HttpResponse, SendError> {
+    send_with(
+        request,
+        &SendContext {
+            root,
+            cookies: None,
+        },
+    )
+    .await
+}
+
+/// Sends with a workspace and a cookie jar. A `Cookie` header written by hand wins over
+/// the jar; cookies set by responses (redirects included) go into it.
+pub async fn send_with(
+    request: &HttpRequest,
+    context: &SendContext<'_>,
+) -> Result<HttpResponse, SendError> {
+    let root = context.root;
     let mut raw_url = apply_path_params(request.url.trim(), &request.path_params);
     let mut headers = request.headers.clone();
     if let Some(auth) = &request.auth {
@@ -498,10 +528,13 @@ pub async fn send_in(
     }
 
     let timeout = Duration::from_millis(request.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS));
-    let client = reqwest::Client::builder()
+    let mut client = reqwest::Client::builder()
         .user_agent(USER_AGENT)
-        .timeout(timeout)
-        .build()?;
+        .timeout(timeout);
+    if let (true, Some(jar)) = (request.cookies, &context.cookies) {
+        client = client.cookie_provider(jar.clone());
+    }
+    let client = client.build()?;
 
     let has_header = |name: &str| {
         headers

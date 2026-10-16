@@ -441,6 +441,19 @@ var pm = {
   variables: __variables,
   request: __request,
   get response() { return __response(); },
+  // Cookies of the jar that match the request URL (read-only, like Postman's pm.cookies).
+  cookies: {
+    get: function (name) {
+      var found = (__input.cookies || []).filter(function (c) { return c[0] === name; })[0];
+      return found ? found[1] : undefined;
+    },
+    has: function (name) { return (__input.cookies || []).some(function (c) { return c[0] === name; }); },
+    toObject: function () {
+      var out = {};
+      (__input.cookies || []).forEach(function (c) { out[c[0]] = c[1]; });
+      return out;
+    },
+  },
   test: function (name, fn) {
     try {
       fn();

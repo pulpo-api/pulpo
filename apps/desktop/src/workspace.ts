@@ -89,6 +89,21 @@ export interface Environment {
   variables: Variable[];
 }
 
+/** A cookie of an environment's jar (`.pulpo/cookies.json`). Mirrors pulpo-core. */
+export interface Cookie {
+  name: string;
+  value: string;
+  domain: string;
+  /** Only that exact host gets it back (the server sent no Domain). */
+  hostOnly: boolean;
+  path: string;
+  /** Unix seconds; null = session cookie. */
+  expires: number | null;
+  secure: boolean;
+  httpOnly: boolean;
+  sameSite: string | null;
+}
+
 export interface ImportSummary {
   format: "postmanCollection" | "postmanEnvironment" | "openApi" | "curl" | null;
   folderId: string;
@@ -115,7 +130,13 @@ export function clone<T>(value: T): T {
 
 export function toEntry(node: Extract<TreeNode, { type: "request" }>): RequestEntry {
   const { id, name, protocol, request, scripts } = node;
-  return clone({ id, name, protocol, request: { ...request, auth: request.auth ?? null, form: request.form ?? null, bodyFile: request.bodyFile ?? null }, scripts: scripts ?? { pre: "", test: "" } });
+  return clone({ id, name, protocol, request: {
+      ...request,
+      auth: request.auth ?? null,
+      form: request.form ?? null,
+      bodyFile: request.bodyFile ?? null,
+      cookies: request.cookies ?? true,
+    }, scripts: scripts ?? { pre: "", test: "" } });
 }
 
 /** Where the workspace lives: real files in the desktop app, memory in the browser preview. */
@@ -132,6 +153,10 @@ export interface WorkspaceBackend {
   saveEnvironment(root: string, env: Environment): Promise<void>;
   createEnvironment(root: string, name: string): Promise<Environment>;
   deleteEnvironment(root: string, id: string): Promise<void>;
+  /** The cookie jar of an environment ("" = no environment). */
+  listCookies(root: string, environmentId: string): Promise<Cookie[]>;
+  /** Replaces the cookie jar of an environment. */
+  saveCookies(root: string, environmentId: string, cookies: Cookie[]): Promise<void>;
   /** Sets (or clears, with null) the auth of a folder; "" = the workspace. */
   saveFolderAuth(root: string, folderId: string, auth: Auth | null): Promise<void>;
   /** Desktop only: imports a file (or pasted text) with the Rust importers. */
@@ -163,6 +188,9 @@ const tauriBackend: WorkspaceBackend = {
   createEnvironment: (root, name) => invoke<Environment>("create_environment", { root, name }),
   deleteEnvironment: (root, id) => invoke<void>("delete_environment", { root, id }),
   saveFolderAuth: (root, folderId, auth) => invoke<void>("save_folder_auth", { root, folderId, auth }),
+  listCookies: (root, environmentId) => invoke<Cookie[]>("list_cookies", { root, environmentId: environmentId || null }),
+  saveCookies: (root, environmentId, cookies) =>
+    invoke<void>("save_cookies", { root, environmentId: environmentId || null, cookies }),
   run: (root, entry, environmentId) => invoke<RunReport>("run_request", { root, entry, environmentId }),
   importInto: (root, folderId, source) => invoke<ImportSummary>("import_into", { root, folderId, ...source }),
   async pickImportFile() {
@@ -209,6 +237,8 @@ function memoryBackend(): WorkspaceBackend {
   const environments: Environment[] = sampleEnvironments();
   const secrets = new Map<string, string>();
   const secretKey = (envId: string, name: string) => `${envId}|${name}`;
+  // The browser keeps real cookies itself; this jar only lets the panel be tried out.
+  const jars = new Map<string, Cookie[]>();
 
   function childrenOf(folderId: string): TreeNode[] {
     if (!folderId) return workspace.tree;
@@ -305,6 +335,12 @@ function memoryBackend(): WorkspaceBackend {
     async deleteEnvironment(_root, id) {
       const index = environments.findIndex((e) => e.id === id);
       if (index >= 0) environments.splice(index, 1);
+    },
+    async listCookies(_root, environmentId) {
+      return clone(jars.get(environmentId) ?? []);
+    },
+    async saveCookies(_root, environmentId, cookies) {
+      jars.set(environmentId, clone(cookies));
     },
     async saveFolderAuth(_root, folderId, auth) {
       if (!folderId) {

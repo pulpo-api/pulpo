@@ -4,6 +4,7 @@ import Sidebar from "./components/Sidebar.vue";
 import RequestEditor from "./components/RequestEditor.vue";
 import ResponseViewer from "./components/ResponseViewer.vue";
 import EnvironmentPanel from "./components/EnvironmentPanel.vue";
+import CookiesPanel from "./components/CookiesPanel.vue";
 import ImportDialog from "./components/ImportDialog.vue";
 import { resolveText } from "./variables";
 import { applyPathParams } from "./params";
@@ -85,6 +86,7 @@ const confirmDelete = ref(false);
 const environments = ref<Environment[]>([]);
 const activeEnvId = ref("");
 const showEnvironments = ref(false);
+const showCookies = ref(false);
 
 const envKey = () => `pulpo.env:${workspace.value?.root ?? ""}`;
 watch(activeEnvId, (id) => {
@@ -496,6 +498,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
             <option v-for="env in environments" :key="env.id" :value="env.id">{{ env.name }}</option>
           </select>
           <button class="ghost" title="Manage environments" @click="showEnvironments = true">⚙</button>
+          <button class="ghost" title="Cookies of this environment" @click="showCookies = true">🍪</button>
           <button class="ghost danger" :class="{ armed: confirmDelete }" @click="deleteSelected">
             {{ confirmDelete ? "Click again to delete" : "Delete" }}
           </button>
@@ -566,6 +569,14 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       @save="saveEnvironment"
       @create="createEnvironment"
       @remove="deleteEnvironment"
+    />
+
+    <CookiesPanel
+      v-if="showCookies && workspace"
+      :root="workspace.root"
+      :environment-id="activeEnvId"
+      :environment-name="environments.find((e) => e.id === activeEnvId)?.name ?? ''"
+      @close="showCookies = false"
     />
 
     <ImportDialog

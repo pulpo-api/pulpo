@@ -258,6 +258,8 @@ struct RequestFileV1 {
     body_file: Option<String>,
     #[serde(default)]
     timeout_ms: Option<u64>,
+    #[serde(default = "yes")]
+    cookies: bool,
     #[serde(default)]
     path_params: Vec<Param>,
     #[serde(default)]
@@ -417,6 +419,9 @@ fn request_yaml(entry: &RequestEntry, body: Option<BodyKind>) -> String {
     }
     if let Some(timeout) = entry.request.timeout_ms {
         out.push_str(&format!("timeoutMs: {timeout}\n"));
+    }
+    if !entry.request.cookies {
+        out.push_str("cookies: false\n");
     }
     out
 }
@@ -773,6 +778,7 @@ fn load_request_file(root: &Path, path: &Path) -> Result<RequestEntry, Collectio
             form,
             body_file,
             timeout_ms: file.timeout_ms,
+            cookies: file.cookies,
             disabled_params: file.disabled_params,
             path_params: file.path_params,
             auth: file.auth,
@@ -982,6 +988,7 @@ mod tests {
                 form: None,
                 body_file: None,
                 timeout_ms: Some(5000),
+                cookies: false,
                 disabled_params: vec![Param::new("debug", "true")],
                 path_params: vec![Param::new("tenant", "{{tenantId}}")],
                 auth: Some(Auth::Bearer {
@@ -1080,7 +1087,8 @@ mod tests {
                  \x20 - name: \"X-Debug\"\n    value: \"yes\\tplease\"\n    enabled: false\n\
                  auth:\n  type: \"bearer\"\n  token: \"{{{{token}}}}\"\n\
                  body: \"json\"\n\
-                 timeoutMs: 5000\n"
+                 timeoutMs: 5000\n\
+                 cookies: false\n"
             )
         );
     }

@@ -1,4 +1,5 @@
 use pulpo_core::collection::{self, CollectionError, RequestEntry, Scripts, Workspace};
+use pulpo_core::cookies::{self, Cookie, Jar};
 use pulpo_core::environment::{self, Environment};
 use pulpo_core::http::{self, Auth, HttpRequest, HttpResponse, SendError};
 use pulpo_core::import::{self, ImportSummary};
@@ -59,6 +60,26 @@ async fn run_request(
 #[tauri::command]
 async fn folder_scripts(root: String, folder_id: String) -> Result<Scripts, CollectionError> {
     collection::folder_scripts(Path::new(&root), &folder_id)
+}
+
+/// The cookie jar of an environment (None = no environment), from `.pulpo/cookies.json`.
+#[tauri::command]
+async fn list_cookies(root: String, environment_id: Option<String>) -> Vec<Cookie> {
+    cookies::load_jar(Path::new(&root), environment_id.as_deref()).cookies
+}
+
+/// Replaces the cookie jar of an environment (edits, deletes, "clear all").
+#[tauri::command]
+async fn save_cookies(
+    root: String,
+    environment_id: Option<String>,
+    cookies: Vec<Cookie>,
+) -> Result<(), CollectionError> {
+    cookies::save_jar(
+        Path::new(&root),
+        environment_id.as_deref(),
+        &Jar { cookies },
+    )
 }
 
 #[tauri::command]
@@ -186,6 +207,8 @@ pub fn run() {
             folder_scripts,
             save_folder_scripts,
             save_folder_auth,
+            list_cookies,
+            save_cookies,
             clear_local_values
         ])
         .run(tauri::generate_context!())

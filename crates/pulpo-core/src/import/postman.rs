@@ -271,6 +271,11 @@ fn request_of(item: &Value, warnings: &mut Vec<String>, at: &str) -> Option<Http
         form: body.form,
         body_file: body.file,
         timeout_ms: None,
+        // Postman's per-request "Disable cookie jar" setting.
+        cookies: !item
+            .pointer("/protocolProfileBehavior/disableCookies")
+            .and_then(|d| d.as_bool())
+            .unwrap_or(false),
         disabled_params: params_of("query", |i| {
             i.get("disabled").and_then(|d| d.as_bool()).unwrap_or(false)
         }),
@@ -601,6 +606,20 @@ mod tests {
             request.path_params,
             vec![Param::new("orderId", "{{orderId}}")]
         );
+    }
+
+    #[test]
+    fn keeps_the_disable_cookies_setting() {
+        let plan = parse(
+            r#"{"info": {"name": "x"}, "item": [
+                {"name": "a", "request": {"method": "GET", "url": "https://x.test"},
+                 "protocolProfileBehavior": {"disableCookies": true}},
+                {"name": "b", "request": {"method": "GET", "url": "https://x.test"}}]}"#,
+        )
+        .unwrap();
+        let all = requests(&plan.nodes);
+        assert!(!all[0].1.cookies);
+        assert!(all[1].1.cookies);
     }
 
     #[test]

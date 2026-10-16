@@ -144,6 +144,7 @@ pub fn resolve_request(
             .as_ref()
             .map(|f| resolve_text(f, vars, &mut missing)),
         timeout_ms: request.timeout_ms,
+        cookies: request.cookies,
         disabled_params: request.disabled_params.clone(),
         auth: request.auth.as_ref().map(|auth| match auth {
             Auth::None => Auth::None,

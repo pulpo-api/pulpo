@@ -73,6 +73,7 @@
       }
     },
     "bodyFile": { "type": "string", "description": "With body: file. A workspace file sent as the whole body, e.g. files/photo.png." },
+    "cookies": { "type": "boolean", "default": true, "description": "Send and store cookies with the environment's jar (.pulpo/cookies.json). A Cookie header written by hand wins." },
     "timeoutMs": { "type": "integer", "minimum": 1, "description": "Request timeout in milliseconds (default 30000)." }
   },
   "if": { "properties": { "protocol": { "const": "http" } } },

@@ -523,6 +523,7 @@ pub(super) fn document(doc: &Value) -> Result<ImportPlan, ImportError> {
                         form: body.form,
                         body_file: body.file,
                         timeout_ms: None,
+                        cookies: true,
                         disabled_params: Vec::new(),
                         path_params: Vec::new(),
                         auth,

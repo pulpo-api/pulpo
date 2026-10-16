@@ -2,8 +2,9 @@
 //! variables (environment + local values), send, test scripts, save local values.
 
 use crate::collection::{self, CollectionError, RequestEntry, TreeNode};
+use crate::cookies::{self, SharedJar};
 use crate::environment::{self, SecretStore};
-use crate::http::{self, HttpResponse, SendError};
+use crate::http::{self, HttpResponse, SendContext, SendError};
 use crate::local;
 use crate::script::{self, Phase, Script, ScriptContext, TestResult};
 use crate::variables::{self, Variables};
@@ -11,6 +12,7 @@ use crate::Protocol;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 
 /// Everything that happened while running one request.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -131,11 +133,15 @@ pub async fn run_entry(
         }
     }
 
+    // One jar for the whole request: pm.sendRequest logins, redirects and the request itself.
+    let jar = Arc::new(SharedJar::new(cookies::load_jar(root, environment_id)));
+
     let context = ScriptContext {
         request_name: &entry.name,
         environment_name: &environment_name,
         env: &env,
         local: &local_values,
+        cookies: Some(jar.clone()),
     };
     let (request, outcome) = script::run_phase(Phase::PreRequest, &pre, &context, &effective, None);
     let mut all_changes = outcome.changes.clone();
@@ -148,7 +154,15 @@ pub async fn run_entry(
     vars.extend(local_values.clone());
     match variables::resolve_request(&request, &vars) {
         Err(missing) => report.error = Some(SendError::Unresolved(missing.join(", "))),
-        Ok(resolved) => match http::send_in(&resolved, Some(root)).await {
+        Ok(resolved) => match http::send_with(
+            &resolved,
+            &SendContext {
+                root: Some(root),
+                cookies: Some(jar.clone()),
+            },
+        )
+        .await
+        {
             Err(e) => report.error = Some(e),
             Ok(response) => {
                 let context = ScriptContext {
@@ -156,6 +170,7 @@ pub async fn run_entry(
                     environment_name: &environment_name,
                     env: &env,
                     local: &local_values,
+                    cookies: Some(jar.clone()),
                 };
                 let (_, outcome) =
                     script::run_phase(Phase::Test, &test, &context, &resolved, Some(&response));
@@ -170,6 +185,13 @@ pub async fn run_entry(
         },
     }
 
+    if jar.changed() {
+        if let Err(e) = cookies::save_jar(root, environment_id, &jar.snapshot()) {
+            report
+                .script_errors
+                .push(format!("could not save cookies: {e}"));
+        }
+    }
     if let Err(e) = local::apply_changes(root, environment_id, &all_changes) {
         report
             .script_errors
@@ -271,6 +293,86 @@ mod tests {
             request,
             scripts,
         }
+    }
+
+    /// `/login` redirects to `/home` setting a cookie; every response echoes the Cookie header.
+    async fn cookie_server(count: usize) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            for _ in 0..count {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut buffer = vec![0u8; 8192];
+                let read = socket.read(&mut buffer).await.unwrap();
+                let text = String::from_utf8_lossy(&buffer[..read]).to_string();
+                let path = text.split_whitespace().nth(1).unwrap_or("").to_string();
+                let cookie = text
+                    .lines()
+                    .find_map(|l| l.strip_prefix("cookie: "))
+                    .unwrap_or("")
+                    .to_string();
+                let reply = if path == "/login" {
+                    "HTTP/1.1 302 Found\r\nlocation: /home\r\nset-cookie: sid=xyz; Path=/; HttpOnly\r\ncontent-length: 0\r\nconnection: close\r\n\r\n".to_string()
+                } else {
+                    let body = format!(r#"{{"path":"{path}","cookie":"{cookie}"}}"#);
+                    format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                };
+                socket.write_all(reply.as_bytes()).await.unwrap();
+            }
+        });
+        format!("http://{address}")
+    }
+
+    #[tokio::test]
+    async fn keeps_cookies_across_redirects_and_requests() {
+        // login + redirected home, then me, then a request with cookies off.
+        let base = cookie_server(4).await;
+        let ws = tempfile::tempdir().unwrap();
+        init_workspace(ws.path(), "Demo").unwrap();
+        let store = MemoryStore::default();
+        let plain = |id: &str, path: &str| RequestEntry {
+            id: id.into(),
+            name: id.into(),
+            protocol: Protocol::Http,
+            request: HttpRequest::new(HttpMethod::Get, format!("{base}{path}")),
+            scripts: Scripts::default(),
+        };
+
+        let login = plain("01-login.pulpo.yaml", "/login");
+        let first = run_entry(ws.path(), &login, None, &store).await;
+        assert!(
+            first
+                .response
+                .unwrap()
+                .body
+                .contains(r#""cookie":"sid=xyz""#),
+            "the cookie set during the redirect is sent to /home"
+        );
+
+        let mut me = plain("02-me.pulpo.yaml", "/me");
+        me.scripts.test =
+            "pm.test('jar', () => pm.expect(pm.cookies.get('sid')).to.equal('xyz'));".into();
+        let second = run_entry(ws.path(), &me, None, &store).await;
+        assert!(second.passed(), "{second:?}");
+        assert_eq!(second.tests.len(), 1);
+        assert!(second
+            .response
+            .unwrap()
+            .body
+            .contains(r#""cookie":"sid=xyz""#));
+        assert_eq!(
+            cookies::load_jar(ws.path(), None).cookies[0].name,
+            "sid",
+            "the jar is saved in .pulpo/"
+        );
+
+        let mut off = plain("03-off.pulpo.yaml", "/off");
+        off.request.cookies = false;
+        let third = run_entry(ws.path(), &off, None, &store).await;
+        assert!(third.response.unwrap().body.contains(r#""cookie":"""#));
     }
 
     #[tokio::test]

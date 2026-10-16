@@ -8,6 +8,7 @@ use std::fmt;
 use std::str::FromStr;
 
 pub mod collection;
+pub mod cookies;
 pub mod environment;
 pub mod http;
 pub mod import;

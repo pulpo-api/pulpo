@@ -21,7 +21,22 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ pick: [index: number] }>();
 
-const tab = ref<"body" | "headers" | "tests" | "console">("body");
+const tab = ref<"body" | "headers" | "cookies" | "tests" | "console">("body");
+
+/** Cookies this response sets, from its Set-Cookie headers. */
+const setCookies = computed(() =>
+  (props.response?.headers ?? [])
+    .filter((h) => h.name.toLowerCase() === "set-cookie")
+    .map((h) => {
+      const [pair, ...attributes] = h.value.split(";");
+      const eq = pair.indexOf("=");
+      return {
+        name: eq < 0 ? pair.trim() : pair.slice(0, eq).trim(),
+        value: eq < 0 ? "" : pair.slice(eq + 1).trim(),
+        attributes: attributes.map((a) => a.trim()).filter(Boolean).join("; "),
+      };
+    }),
+);
 const failed = computed(() => props.tests.filter((t) => !t.passed).length);
 
 const pretty = computed(() => {
@@ -94,6 +109,9 @@ const errorTitle: Record<SendError["kind"], string> = {
         </select>
         <button :class="{ on: tab === 'body' }" @click="tab = 'body'">Body</button>
         <button :class="{ on: tab === 'headers' }" @click="tab = 'headers'">Headers {{ response.headers.length }}</button>
+        <button v-if="setCookies.length" :class="{ on: tab === 'cookies' }" @click="tab = 'cookies'">
+          Cookies {{ setCookies.length }}
+        </button>
         <button v-if="tests.length" :class="{ on: tab === 'tests', bad: failed }" @click="tab = 'tests'">
           Tests {{ tests.length - failed }}/{{ tests.length }}
         </button>
@@ -117,6 +135,14 @@ const errorTitle: Record<SendError["kind"], string> = {
         <li v-for="(e, i) in scriptErrors" :key="`e${i}`" class="fail">! {{ e }}</li>
         <li v-for="(l, i) in logs" :key="`l${i}`">{{ l }}</li>
       </ul>
+      <table v-else-if="tab === 'cookies'" class="code table">
+        <tbody>
+          <tr v-for="(c, i) in setCookies" :key="i">
+            <td>{{ c.name }}</td>
+            <td>{{ c.value }}<em v-if="c.attributes" class="attrs"> · {{ c.attributes }}</em></td>
+          </tr>
+        </tbody>
+      </table>
       <table v-else class="code table">
         <tbody>
           <tr v-for="(h, i) in response.headers" :key="i">
@@ -271,5 +297,9 @@ const errorTitle: Record<SendError["kind"], string> = {
   font-family: var(--mono);
   font-size: 13px;
   color: var(--muted);
+}
+.attrs {
+  color: var(--muted);
+  font-style: normal;
 }
 </style>

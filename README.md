@@ -105,6 +105,8 @@ auth:
   token: "{{token}}"
 ```
 
+Cookies work like in a browser: each environment has its own jar in `.pulpo/cookies.json` (local, never committed). Cookies set by responses, including redirects and `pm.sendRequest` logins, go back to the same domain on later requests, and scripts read them with `pm.cookies.get(name)`. Turn the jar off for one request with `cookies: false`.
+
 Keep the secret parts as `{{variables}}` so the file can be committed; the app warns when a token or password is typed literally. A header written by hand with the same name wins over the auth.
 
 ## Scripts and tests
