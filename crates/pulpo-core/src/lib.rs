@@ -16,6 +16,7 @@ pub mod import;
 #[cfg(feature = "keychain")]
 pub mod keychain;
 pub mod local;
+pub mod organize;
 pub mod run;
 pub mod script;
 pub mod variables;

@@ -14,7 +14,9 @@ import {
   backend,
   inheritedAuth,
   inheritedSettings,
+  remapId,
   toEntry,
+  type Organized,
   type CollectionError,
   type Environment,
   type RequestEntry,
@@ -378,6 +380,61 @@ async function deleteSelected() {
   }
 }
 
+/** Runs an organize operation (rename, move, duplicate, delete), reloads the tree and
+ * follows the ids that changed in tabs, selection and history. */
+async function organize(run: (root: string) => Promise<Organized | void>): Promise<Organized | void> {
+  const ws = workspace.value;
+  if (!ws) return;
+  if (dirty.value.size) {
+    problem.value = {
+      kind: "io",
+      message: `Save your ${dirty.value.size} unsaved request(s) first (Ctrl+S): organizing moves files and reloads the tree.`,
+    };
+    return;
+  }
+  try {
+    const result = await run(ws.root);
+    const fresh = await backend.open(ws.root);
+    const renamed = result?.renamed ?? [];
+    const map = (id: string) => remapId(id, renamed);
+    workspace.value = fresh;
+    saved.clear();
+    walk(fresh.tree, (n) => n.type === "request" && saved.set(n.id, snapshot(n)));
+    openTabs.value = openTabs.value.map(map);
+    folderId.value = map(folderId.value);
+    const entries = Object.entries(history);
+    const picks = Object.entries(historyPick);
+    for (const [id] of entries) delete history[id];
+    for (const [id] of picks) delete historyPick[id];
+    for (const [id, list] of entries) history[map(id)] = list;
+    for (const [id, pick] of picks) historyPick[map(id)] = pick;
+    const next = map(selectedId.value);
+    selectedId.value = requests.value.some((n) => n.id === next)
+      ? next
+      : (openTabs.value.find((id) => requests.value.some((n) => n.id === id)) ?? requests.value[0]?.id ?? "");
+    problem.value = null;
+    return result;
+  } catch (e) {
+    problem.value = asCollectionError(e);
+  }
+}
+
+const renameNode = (id: string, name: string) => organize((root) => backend.renameNode(root, id, name));
+const moveNode = (id: string, target: string, index: number) =>
+  organize((root) => backend.moveNode(root, id, target, index));
+
+async function duplicateNode(id: string) {
+  const result = await organize((root) => backend.duplicateNode(root, id));
+  // Open the copy of a request right away.
+  if (result && result.id.endsWith(".pulpo.yaml")) selectedId.value = result.id;
+}
+
+function deleteNode(node: TreeNode) {
+  return organize((root) =>
+    node.type === "folder" ? backend.deleteFolder(root, node.id) : backend.deleteRequest(root, node.id),
+  );
+}
+
 function select(entry: RequestEntry) {
   selectedId.value = entry.id;
   confirmDelete.value = false;
@@ -469,6 +526,10 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       @new-request="newRequest"
       @new-folder="newFolder"
       @import="showImport = true"
+      @rename="renameNode"
+      @duplicate="duplicateNode"
+      @delete="deleteNode"
+      @move="moveNode"
     />
 
     <main v-if="workspace && selected">

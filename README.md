@@ -61,6 +61,8 @@ form:
     file: "files/photo.png"
 ```
 
+Order lives in the `NN-` prefix. Rename, duplicate, move and reorder by dragging in the app: files are renamed with their body and scripts, and Pulpo keeps every number it can, so a move shows up in git as a few renames.
+
 Pulpo always writes files in one canonical form. The [JSON Schema](schemas/request.v1.schema.json) gives you autocompletion in VS Code and IntelliJ.
 
 ```bash

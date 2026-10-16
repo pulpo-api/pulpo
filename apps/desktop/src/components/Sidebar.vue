@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import TreeView from "./TreeView.vue";
 import type { RequestEntry, TreeNode, Workspace } from "../workspace";
+import { dragging, dropHint, parentOf, startRenaming, type DropPosition } from "../treeState";
 
 const props = defineProps<{
   workspace: Workspace | null;
@@ -17,6 +18,10 @@ const emit = defineEmits<{
   newRequest: [name: string];
   newFolder: [name: string];
   import: [];
+  rename: [id: string, name: string];
+  duplicate: [id: string];
+  delete: [node: TreeNode];
+  move: [id: string, target: string, index: number];
 }>();
 
 const query = ref("");
@@ -60,6 +65,95 @@ async function start(kind: "request" | "folder") {
   await nextTick();
   input.value?.focus();
 }
+
+// ---------------------------------------------------------------- organize
+
+function childrenOf(folder: string): TreeNode[] {
+  if (!folder) return props.workspace?.tree ?? [];
+  let found: TreeNode[] = [];
+  const walk = (nodes: TreeNode[]) => {
+    for (const n of nodes) {
+      if (n.type !== "folder") continue;
+      if (n.id === folder) found = n.children;
+      else walk(n.children);
+    }
+  };
+  walk(props.workspace?.tree ?? []);
+  return found;
+}
+
+/** Turns "dropped before/after/into a node" into "move into folder at index", where the
+ * index counts the target's children without the moved node (as pulpo-core expects). */
+function onDrop(id: string, targetId: string, position: DropPosition) {
+  const target = position === "into" ? targetId : parentOf(targetId);
+  const siblings = childrenOf(target).filter((n) => n.id !== id);
+  let index = siblings.length;
+  if (position !== "into") {
+    const at = siblings.findIndex((n) => n.id === targetId);
+    index = at < 0 ? siblings.length : position === "after" ? at + 1 : at;
+  }
+  emit("move", id, target, index);
+}
+
+/** Rows handle their own drops; only the empty part of the tree lands here. */
+function onDragOverEmpty(event: DragEvent) {
+  if (!dragging.value) return;
+  event.preventDefault();
+  dropHint.value = null;
+}
+
+/** Dropping on the empty part of the tree moves to the end of the top level. */
+function onDropOnEmpty(event: DragEvent) {
+  const source = dragging.value;
+  dragging.value = null;
+  dropHint.value = null;
+  if (!source) return;
+  event.preventDefault();
+  emit("move", source.id, "", childrenOf("").filter((n) => n.id !== source.id).length);
+}
+
+// ---------------------------------------------------------------- context menu
+
+const menu = ref<{ node: TreeNode; x: number; y: number } | null>(null);
+const confirmDelete = ref(false);
+
+function openMenu(node: TreeNode, x: number, y: number) {
+  confirmDelete.value = false;
+  // Keep the menu inside the window.
+  menu.value = { node, x: Math.min(x, window.innerWidth - 200), y: Math.min(y, window.innerHeight - 220) };
+}
+
+function closeMenu() {
+  menu.value = null;
+}
+
+function countRequests(node: TreeNode): number {
+  return node.type === "request" ? 1 : node.children.reduce((sum, child) => sum + countRequests(child), 0);
+}
+
+function act(action: "rename" | "duplicate" | "delete" | "newRequest" | "newFolder") {
+  const node = menu.value?.node;
+  if (!node) return;
+  if (action === "delete" && !confirmDelete.value) {
+    confirmDelete.value = true;
+    return;
+  }
+  closeMenu();
+  if (action === "rename") startRenaming(node.id, node.name);
+  else if (action === "duplicate") emit("duplicate", node.id);
+  else if (action === "delete") emit("delete", node);
+  else {
+    // New items go into the folder (or next to the request).
+    emit("folder", node.type === "folder" ? node.id : parentOf(node.id));
+    void start(action === "newRequest" ? "request" : "folder");
+  }
+}
+
+function onWindowKey(event: KeyboardEvent) {
+  if (event.key === "Escape") closeMenu();
+}
+onMounted(() => window.addEventListener("keydown", onWindowKey));
+onBeforeUnmount(() => window.removeEventListener("keydown", onWindowKey));
 
 function confirm() {
   const name = draft.value.trim();
@@ -105,28 +199,105 @@ function confirm() {
         @keydown.esc="creating = null"
         @blur="creating = null"
       />
-      <nav>
+      <nav @dragover="onDragOverEmpty" @drop="onDropOnEmpty">
         <TreeView
           :nodes="visibleTree"
           :selected-id="selectedId"
           :folder-id="folderId"
           :dirty="dirty"
           :expand-all="words.length > 0"
+          :organizable="words.length === 0"
           @select="emit('select', $event)"
           @folder="emit('folder', $event)"
+          @menu="openMenu"
+          @rename="(id, name) => emit('rename', id, name)"
+          @drop="onDrop"
         />
         <p v-if="!workspace.tree.length" class="empty">Empty workspace. Add a request to start.</p>
         <p v-else-if="!visibleTree.length" class="empty">No request matches “{{ query }}”.</p>
       </nav>
+      <p v-if="workspace.tree.length && !words.length" class="tip">Drag to move · double-click or F2 to rename · right-click for more</p>
       <footer :title="workspace.root">
         <span class="dot" :class="{ off: !persistent }"></span>
         {{ persistent ? workspace.root : "In memory: changes are not saved" }}
       </footer>
     </template>
+
+    <div v-if="menu" class="menu-backdrop" @click="closeMenu" @contextmenu.prevent="closeMenu">
+      <div class="menu card" role="menu" :style="{ left: `${menu.x}px`, top: `${menu.y}px` }" @click.stop>
+        <button role="menuitem" @click="act('rename')">Rename <kbd>F2</kbd></button>
+        <button role="menuitem" @click="act('duplicate')">Duplicate</button>
+        <template v-if="menu.node.type === 'folder'">
+          <button role="menuitem" @click="act('newRequest')">New request here</button>
+          <button role="menuitem" @click="act('newFolder')">New folder here</button>
+        </template>
+        <hr />
+        <button role="menuitem" class="danger" :class="{ armed: confirmDelete }" @click="act('delete')">
+          <template v-if="!confirmDelete">Delete</template>
+          <template v-else-if="menu.node.type === 'folder'">
+            Click again: delete the folder and its {{ countRequests(menu.node) }} request(s)
+          </template>
+          <template v-else>Click again to delete</template>
+        </button>
+      </div>
+    </div>
   </aside>
 </template>
 
 <style scoped>
+.tip {
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted);
+  opacity: 0.8;
+}
+.menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+}
+.menu {
+  position: fixed;
+  min-width: 190px;
+  max-width: 280px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+}
+.menu button {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  padding: 7px 10px;
+  text-align: left;
+  cursor: pointer;
+  font-size: 13px;
+}
+.menu button:hover {
+  background: var(--surface-2);
+}
+.menu .danger {
+  color: var(--m-delete);
+}
+.menu .danger.armed {
+  background: rgba(220, 70, 70, 0.12);
+}
+.menu hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 4px 0;
+}
+kbd {
+  font: 11px var(--mono);
+  color: var(--muted);
+}
 .sidebar {
   display: flex;
   flex-direction: column;

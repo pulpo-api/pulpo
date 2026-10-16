@@ -26,7 +26,8 @@ pub const FORMAT_VERSION: u32 = 1;
 pub const REQUEST_SCHEMA_URL: &str =
     "https://raw.githubusercontent.com/pulpo-api/pulpo/main/schemas/request.v1.schema.json";
 
-const SKIPPED_DIRS: [&str; 5] = [".git", ".pulpo", "node_modules", "environments", "target"];
+pub(crate) const SKIPPED_DIRS: [&str; 5] =
+    [".git", ".pulpo", "node_modules", "environments", "target"];
 
 /// How a request body is stored next to the request file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -95,7 +96,7 @@ impl BodyKind {
         }
     }
 
-    fn extension(self) -> &'static str {
+    pub(crate) fn extension(self) -> &'static str {
         match self {
             BodyKind::Json => "json",
             BodyKind::Xml => "xml",
@@ -225,7 +226,7 @@ impl fmt::Display for CollectionError {
 
 impl std::error::Error for CollectionError {}
 
-fn io_error(path: &Path, err: std::io::Error) -> CollectionError {
+pub(crate) fn io_error(path: &Path, err: std::io::Error) -> CollectionError {
     CollectionError::Io(format!("{}: {err}", path.display()))
 }
 
@@ -465,7 +466,7 @@ fn request_yaml(entry: &RequestEntry, body: Option<BodyKind>) -> String {
 // ---------------------------------------------------------------- paths
 
 /// Joins a workspace-relative path, refusing anything that would leave the workspace.
-fn resolve(root: &Path, relative: &str) -> Result<PathBuf, CollectionError> {
+pub(crate) fn resolve(root: &Path, relative: &str) -> Result<PathBuf, CollectionError> {
     let rel = Path::new(relative);
     if relative.is_empty() {
         return Ok(root.to_path_buf());
@@ -476,7 +477,7 @@ fn resolve(root: &Path, relative: &str) -> Result<PathBuf, CollectionError> {
     Ok(root.join(rel))
 }
 
-fn relative_id(root: &Path, path: &Path) -> String {
+pub(crate) fn relative_id(root: &Path, path: &Path) -> String {
     path.strip_prefix(root)
         .unwrap_or(path)
         .components()
@@ -485,7 +486,7 @@ fn relative_id(root: &Path, path: &Path) -> String {
         .join("/")
 }
 
-fn stem_of(request_file: &Path) -> String {
+pub(crate) fn stem_of(request_file: &Path) -> String {
     let name = request_file
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -495,7 +496,7 @@ fn stem_of(request_file: &Path) -> String {
         .to_string()
 }
 
-fn script_path(stem_file: &Path, stem: &str, phase: &str) -> PathBuf {
+pub(crate) fn script_path(stem_file: &Path, stem: &str, phase: &str) -> PathBuf {
     stem_file.with_file_name(format!("{stem}.{phase}.js"))
 }
 
@@ -551,15 +552,15 @@ pub fn save_folder_scripts(
 
 /// What `pulpo.yaml` or a `_folder.yaml` says besides the name.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct FolderMeta {
-    name: String,
-    auth: Option<Auth>,
-    settings: Settings,
+pub(crate) struct FolderMeta {
+    pub(crate) name: String,
+    pub(crate) auth: Option<Auth>,
+    pub(crate) settings: Settings,
 }
 
 /// Reads a folder's meta (`""` = the workspace). A folder without `_folder.yaml` is named
 /// after its directory.
-fn read_meta(root: &Path, folder_id: &str) -> Result<FolderMeta, CollectionError> {
+pub(crate) fn read_meta(root: &Path, folder_id: &str) -> Result<FolderMeta, CollectionError> {
     if folder_id.is_empty() {
         let file = root.join(WORKSPACE_FILE);
         let parsed: WorkspaceFileV1 = parse_yaml(&file)?;
@@ -591,7 +592,11 @@ fn read_meta(root: &Path, folder_id: &str) -> Result<FolderMeta, CollectionError
     })
 }
 
-fn write_meta(root: &Path, folder_id: &str, meta: &FolderMeta) -> Result<(), CollectionError> {
+pub(crate) fn write_meta(
+    root: &Path,
+    folder_id: &str,
+    meta: &FolderMeta,
+) -> Result<(), CollectionError> {
     let (file, text) = if folder_id.is_empty() {
         (
             root.join(WORKSPACE_FILE),
@@ -675,7 +680,7 @@ pub fn ancestor_folders(request_id: &str) -> Vec<String> {
     folders
 }
 
-fn body_path(request_file: &Path, kind: BodyKind) -> PathBuf {
+pub(crate) fn body_path(request_file: &Path, kind: BodyKind) -> PathBuf {
     request_file.with_file_name(format!(
         "{}.body.{}",
         stem_of(request_file),
@@ -708,6 +713,25 @@ pub fn slugify(name: &str) -> String {
     } else {
         slug
     }
+}
+
+/// Splits `07-create-order...` into (Some(7), "create-order...").
+pub(crate) fn split_order(name: &str) -> (Option<u32>, &str) {
+    let digits = name.chars().take_while(|c| c.is_ascii_digit()).count();
+    match (
+        name[..digits].parse::<u32>(),
+        name[digits..].strip_prefix('-'),
+    ) {
+        (Ok(n), Some(rest)) => (Some(n), rest),
+        _ => (None, name),
+    }
+}
+
+/// Sort key for folder entries: by the `NN-` number (so 100 comes after 11), then by name;
+/// entries without a number go last.
+pub(crate) fn order_key(name: &str) -> (u32, String) {
+    let (order, _) = split_order(name);
+    (order.unwrap_or(u32::MAX), name.to_string())
 }
 
 fn next_order(dir: &Path) -> Result<u32, CollectionError> {
@@ -760,7 +784,7 @@ fn load_dir(root: &Path, dir: &Path) -> Result<Vec<TreeNode>, CollectionError> {
         .map_err(|e| io_error(dir, e))?
         .collect::<Result<_, _>>()
         .map_err(|e| io_error(dir, e))?;
-    entries.sort_by_key(|e| e.file_name());
+    entries.sort_by_key(|e| order_key(&e.file_name().to_string_lossy()));
 
     let mut nodes = Vec::new();
     for entry in entries {
@@ -891,7 +915,7 @@ pub fn load_request(root: &Path, id: &str) -> Result<RequestEntry, CollectionErr
     load_request_file(root, &path)
 }
 
-fn request_path(root: &Path, id: &str) -> Result<PathBuf, CollectionError> {
+pub(crate) fn request_path(root: &Path, id: &str) -> Result<PathBuf, CollectionError> {
     if !id.ends_with(REQUEST_SUFFIX) {
         return Err(CollectionError::InvalidPath(id.to_string()));
     }

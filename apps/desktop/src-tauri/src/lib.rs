@@ -5,6 +5,7 @@ use pulpo_core::environment::{self, Environment};
 use pulpo_core::http::{self, Auth, HttpRequest, HttpResponse, SendError, Settings};
 use pulpo_core::import::{self, ImportSummary};
 use pulpo_core::keychain::Keychain;
+use pulpo_core::organize;
 use pulpo_core::run::{self, RunReport};
 use pulpo_core::variables::{self, Variables};
 use pulpo_core::Protocol;
@@ -61,6 +62,38 @@ async fn run_request(
 #[tauri::command]
 async fn folder_scripts(root: String, folder_id: String) -> Result<Scripts, CollectionError> {
     collection::folder_scripts(Path::new(&root), &folder_id)
+}
+
+/// Renames a request or folder ("" = the workspace); returns the new id.
+#[tauri::command]
+async fn rename_node(
+    root: String,
+    id: String,
+    name: String,
+) -> Result<organize::Organized, CollectionError> {
+    organize::rename(Path::new(&root), &id, &name)
+}
+
+/// Moves a request or folder into `target` at `index`; returns the new id.
+#[tauri::command]
+async fn move_node(
+    root: String,
+    id: String,
+    target: String,
+    index: usize,
+) -> Result<organize::Organized, CollectionError> {
+    organize::move_node(Path::new(&root), &id, &target, index)
+}
+
+/// Copies a request or folder right after it; returns the id of the copy.
+#[tauri::command]
+async fn duplicate_node(root: String, id: String) -> Result<organize::Organized, CollectionError> {
+    organize::duplicate(Path::new(&root), &id)
+}
+
+#[tauri::command]
+async fn delete_folder(root: String, id: String) -> Result<(), CollectionError> {
+    organize::delete_folder(Path::new(&root), &id)
 }
 
 /// Client certificates (mTLS) of this machine, from `.pulpo/certificates.json`.
@@ -234,6 +267,10 @@ pub fn run() {
             save_folder_auth,
             list_cookies,
             save_cookies,
+            rename_node,
+            move_node,
+            duplicate_node,
+            delete_folder,
             list_certificates,
             save_certificates,
             save_folder_settings,

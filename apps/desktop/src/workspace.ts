@@ -84,6 +84,22 @@ export function inheritedSettings(workspace: Workspace, requestId: string): Inhe
   };
 }
 
+/** What an organize operation did: the node's id afterwards and every id that changed
+ * (old, new). Ids inside a renamed folder change the same way. */
+export interface Organized {
+  id: string;
+  renamed: [string, string][];
+}
+
+/** Applies the id changes of an organize operation to one id. */
+export function remapId(id: string, renamed: [string, string][]): string {
+  for (const [from, to] of renamed) {
+    if (id === from) return to;
+    if (id.startsWith(`${from}/`)) return to + id.slice(from.length);
+  }
+  return id;
+}
+
 /** A client certificate (mTLS) of this machine, in `.pulpo/certificates.json`. */
 export interface ClientCertificate {
   /** api.bank.test, api.bank.test:8443 or *.bank.test */
@@ -240,6 +256,13 @@ export interface WorkspaceBackend {
   saveEnvironment(root: string, env: Environment): Promise<void>;
   createEnvironment(root: string, name: string): Promise<Environment>;
   deleteEnvironment(root: string, id: string): Promise<void>;
+  /** Renames a request or folder; its file name follows. */
+  renameNode(root: string, id: string, name: string): Promise<Organized>;
+  /** Moves a request or folder into `target` at `index` (counted without the node). */
+  moveNode(root: string, id: string, target: string, index: number): Promise<Organized>;
+  /** Copies a request or folder right after it. */
+  duplicateNode(root: string, id: string): Promise<Organized>;
+  deleteFolder(root: string, id: string): Promise<void>;
   /** Client certificates (mTLS) of this machine. */
   listCertificates(root: string): Promise<ClientCertificate[]>;
   saveCertificates(root: string, certificates: ClientCertificate[]): Promise<void>;
@@ -280,6 +303,10 @@ const tauriBackend: WorkspaceBackend = {
   createEnvironment: (root, name) => invoke<Environment>("create_environment", { root, name }),
   deleteEnvironment: (root, id) => invoke<void>("delete_environment", { root, id }),
   saveFolderAuth: (root, folderId, auth) => invoke<void>("save_folder_auth", { root, folderId, auth }),
+  renameNode: (root, id, name) => invoke<Organized>("rename_node", { root, id, name }),
+  moveNode: (root, id, target, index) => invoke<Organized>("move_node", { root, id, target, index }),
+  duplicateNode: (root, id) => invoke<Organized>("duplicate_node", { root, id }),
+  deleteFolder: (root, id) => invoke<void>("delete_folder", { root, id }),
   listCertificates: (root) => invoke<ClientCertificate[]>("list_certificates", { root }),
   saveCertificates: (root, certificates) => invoke<void>("save_certificates", { root, certificates }),
   saveFolderSettings: (root, folderId, settings) => invoke<void>("save_folder_settings", { root, folderId, settings }),
@@ -359,6 +386,43 @@ function memoryBackend(): WorkspaceBackend {
 
   const prefix = (folderId: string) => (folderId ? `${folderId}/` : "");
 
+  // Organizing works like pulpo-core, simplified: after each change every id is rebuilt
+  // from the node's position and slug, and the ids that changed are reported.
+  const slugOverride = new Map<TreeNode, string>();
+  const slugOf = (node: TreeNode) =>
+    slugOverride.get(node) ??
+    (node.id.split("/").pop() ?? "").replace(/\.pulpo\.yaml$/, "").replace(/^\d+-/, "");
+
+  function reid(nodes: TreeNode[], parent: string, renamed: [string, string][]) {
+    nodes.forEach((node, i) => {
+      const stem = `${String(i + 1).padStart(2, "0")}-${slugOf(node)}`;
+      const id = `${parent}${stem}${node.type === "request" ? ".pulpo.yaml" : ""}`;
+      if (node.id && node.id !== id) renamed.push([node.id, id]);
+      node.id = id;
+      if (node.type === "folder") reid(node.children, `${id}/`, renamed);
+    });
+  }
+
+  function rebuild(node: TreeNode): Organized {
+    const renamed: [string, string][] = [];
+    reid(workspace.tree, "", renamed);
+    slugOverride.clear();
+    return { id: node.id, renamed };
+  }
+
+  function locate(id: string): { list: TreeNode[]; index: number; node: TreeNode } {
+    const parent = id.includes("/") ? id.slice(0, id.lastIndexOf("/")) : "";
+    const list = childrenOf(parent);
+    const index = list.findIndex((n) => n.id === id);
+    if (index < 0) throw { kind: "invalidPath", message: id } satisfies CollectionError;
+    return { list, index, node: list[index] };
+  }
+
+  function clearIds(node: TreeNode) {
+    node.id = "";
+    if (node.type === "folder") node.children.forEach(clearIds);
+  }
+
   return {
     persistent: false,
     pickFolder: async () => null,
@@ -431,6 +495,36 @@ function memoryBackend(): WorkspaceBackend {
     async deleteEnvironment(_root, id) {
       const index = environments.findIndex((e) => e.id === id);
       if (index >= 0) environments.splice(index, 1);
+    },
+    async renameNode(_root, id, name) {
+      const { node } = locate(id);
+      node.name = name.trim();
+      slugOverride.set(node, slugify(node.name));
+      return rebuild(node);
+    },
+    async moveNode(_root, id, target, index) {
+      const { list, index: from, node } = locate(id);
+      if (node.type === "folder" && (target === id || target.startsWith(`${id}/`))) {
+        throw { kind: "invalidPath", message: "a folder cannot go inside itself" } satisfies CollectionError;
+      }
+      list.splice(from, 1);
+      const into = childrenOf(target);
+      into.splice(Math.min(index, into.length), 0, node);
+      return rebuild(node);
+    },
+    async duplicateNode(_root, id) {
+      const { list, index, node } = locate(id);
+      const copy = clone(node);
+      copy.name = `${node.name} copy`;
+      clearIds(copy);
+      slugOverride.set(copy, slugify(copy.name));
+      list.splice(index + 1, 0, copy);
+      return rebuild(copy);
+    },
+    async deleteFolder(_root, id) {
+      const { list, index, node } = locate(id);
+      if (node.type !== "folder") throw { kind: "invalidPath", message: `${id} is not a folder` } satisfies CollectionError;
+      list.splice(index, 1);
     },
     async listCertificates() {
       return clone(certificates);
