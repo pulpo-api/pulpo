@@ -149,6 +149,16 @@ export function inheritedSettings(workspace: Workspace, requestId: string): Inhe
 
 export type QueryLanguage = "jsonpath" | "jq";
 
+/** A saved response of a request (`<request>.examples/` next to it). Mirrors pulpo-core. */
+export interface Example {
+  /** File stem, empty for a new one. */
+  id: string;
+  name: string;
+  status: number;
+  headers: Header[];
+  body: string;
+}
+
 /** JSONPath for the browser preview only: $, .key, ['key'], [n], [*] and ..key. The app
  * runs full RFC 9535 JSONPath and jq in pulpo-core. */
 function previewJsonPath(root: unknown, expression: string): unknown[] {
@@ -403,6 +413,10 @@ export interface WorkspaceBackend {
     language: CodeLanguage,
     options: CodeOptions,
   ): Promise<string>;
+  listExamples(root: string, requestId: string): Promise<Example[]>;
+  /** Saves an example (new when its id is empty) and returns it with its id. */
+  saveExample(root: string, requestId: string, example: Example): Promise<Example>;
+  deleteExample(root: string, requestId: string, id: string): Promise<void>;
   /** Runs a JSONPath or jq query over a response body. */
   queryJson(body: string, language: QueryLanguage, expression: string): Promise<unknown[]>;
   /** Saves a response body to a file the user picks; returns where, or null if cancelled. */
@@ -465,6 +479,9 @@ const tauriBackend: WorkspaceBackend = {
   generateCode: (root, entry, environmentId, language, options) =>
     invoke<string>("generate_code", { root, entry, environmentId: environmentId || null, language, options }),
   queryJson: (body, language, expression) => invoke<unknown[]>("query_json", { body, language, expression }),
+  listExamples: (root, requestId) => invoke<Example[]>("list_examples", { root, requestId }),
+  saveExample: (root, requestId, example) => invoke<Example>("save_example", { root, requestId, example }),
+  deleteExample: (root, requestId, id) => invoke<void>("delete_example", { root, requestId, id }),
   async saveResponse(response, suggestedName) {
     const { save } = await import("@tauri-apps/plugin-dialog");
     const path = await save({ title: "Save the response", defaultPath: suggestedName });
@@ -542,6 +559,7 @@ function memoryBackend(): WorkspaceBackend {
   const jars = new Map<string, Cookie[]>();
   let certificates: ClientCertificate[] = [];
   const folderScripts = new Map<string, Scripts>();
+  const examples = new Map<string, Example[]>();
 
   function folderNode(id: string): Extract<TreeNode, { type: "folder" }> {
     let found: Extract<TreeNode, { type: "folder" }> | null = null;
@@ -688,6 +706,21 @@ function memoryBackend(): WorkspaceBackend {
     async deleteEnvironment(_root, id) {
       const index = environments.findIndex((e) => e.id === id);
       if (index >= 0) environments.splice(index, 1);
+    },
+    async listExamples(_root, requestId) {
+      return clone(examples.get(requestId) ?? []);
+    },
+    async saveExample(_root, requestId, example) {
+      const list = examples.get(requestId) ?? [];
+      const saved = { ...clone(example), id: example.id || `${String(list.length + 1).padStart(2, "0")}-${slugify(example.name)}` };
+      const index = list.findIndex((e) => e.id === saved.id);
+      if (index >= 0) list[index] = saved;
+      else list.push(saved);
+      examples.set(requestId, list);
+      return clone(saved);
+    },
+    async deleteExample(_root, requestId, id) {
+      examples.set(requestId, (examples.get(requestId) ?? []).filter((e) => e.id !== id));
     },
     // The preview has no Rust: a small JSONPath subset, and jq only in the app.
     async queryJson(body, language, expression) {

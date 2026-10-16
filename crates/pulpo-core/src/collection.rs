@@ -312,7 +312,7 @@ struct RequestFileV1 {
     auth: Option<Auth>,
 }
 
-fn check_version(version: u32, path: &Path) -> Result<(), CollectionError> {
+pub(crate) fn check_version(version: u32, path: &Path) -> Result<(), CollectionError> {
     if version == FORMAT_VERSION {
         Ok(())
     } else {
@@ -323,7 +323,7 @@ fn check_version(version: u32, path: &Path) -> Result<(), CollectionError> {
     }
 }
 
-fn parse_yaml<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, CollectionError> {
+pub(crate) fn parse_yaml<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, CollectionError> {
     let text = fs::read_to_string(path).map_err(|e| io_error(path, e))?;
     serde_norway::from_str(&text)
         .map_err(|e| CollectionError::InvalidFile(format!("{}: {e}", path.display())))
@@ -873,7 +873,10 @@ fn load_dir(root: &Path, dir: &Path) -> Result<Vec<TreeNode>, CollectionError> {
         let path = entry.path();
         let file_name = entry.file_name().to_string_lossy().into_owned();
         if path.is_dir() {
-            if file_name.starts_with('.') || SKIPPED_DIRS.contains(&file_name.as_str()) {
+            if file_name.starts_with('.')
+                || SKIPPED_DIRS.contains(&file_name.as_str())
+                || file_name.ends_with(crate::examples::EXAMPLES_SUFFIX)
+            {
                 continue;
             }
             let folder_file = path.join(FOLDER_FILE);
@@ -1081,6 +1084,10 @@ pub fn delete_request(root: &Path, id: &str) -> Result<(), CollectionError> {
         }
     }
     write_scripts(&path, &stem_of(&path), &Scripts::default())?;
+    let examples = crate::examples::examples_dir(&path);
+    if examples.is_dir() {
+        fs::remove_dir_all(&examples).map_err(|e| io_error(&examples, e))?;
+    }
     fs::remove_file(&path).map_err(|e| io_error(&path, e))
 }
 
@@ -1154,6 +1161,9 @@ fn format_nodes(
                     continue;
                 }
                 rewrite(&path, &request_yaml(entry, kind), check, root, changed)?;
+                for file in crate::examples::format_examples(root, &entry.id, check)? {
+                    changed.push(relative_id(root, &file));
+                }
             }
         }
     }

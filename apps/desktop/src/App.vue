@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch, watchEffect } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, watchEffect } from "vue";
 import { varContext } from "./varContext";
 import Sidebar from "./components/Sidebar.vue";
 import RequestEditor from "./components/RequestEditor.vue";
@@ -120,6 +120,38 @@ const notice = ref("");
 function flash(message: string) {
   notice.value = message;
   setTimeout(() => (notice.value = notice.value === message ? "" : notice.value), 2000);
+}
+
+const requestEditor = ref<InstanceType<typeof RequestEditor> | null>(null);
+
+/** Keeps the shown response next to the request, named after its status. */
+async function saveExample(response: HttpResponse) {
+  const ws = workspace.value;
+  const node = selected.value;
+  if (!ws || !node) return;
+  try {
+    await backend.saveExample(ws.root, node.id, {
+      id: "",
+      name: `${response.status} ${response.statusText}`.trim(),
+      status: response.status,
+      headers: response.headers.filter((h) => h.name.toLowerCase() === "content-type"),
+      body: response.bodyBase64 ? "" : response.body,
+    });
+    pinTab(node.id);
+    requestEditor.value?.openExamples(false);
+    flash("Saved as an example: see the Examples tab");
+  } catch (e) {
+    problem.value = asCollectionError(e);
+  }
+}
+
+/** "Add example" from the tree: open the request with a new example to fill in. */
+async function addExample(id: string) {
+  editingFolder.value = null;
+  selectedId.value = id;
+  pinTab(id);
+  await nextTick();
+  requestEditor.value?.openExamples(true);
 }
 
 /** A test made from the response filter goes to the end of the request's test script. */
@@ -308,6 +340,7 @@ const historyItems = computed(() =>
     label: `${h.at.toLocaleTimeString()} · ${
       h.result.response ? `${h.result.response.status} · ${h.result.response.durationMs} ms` : (h.result.error?.kind ?? "error")
     }`,
+    response: h.result.response,
   })),
 );
 
@@ -640,6 +673,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       @move="moveNode"
       @edit-folder="editingFolder = $event"
       @copy-curl="copyCurl"
+      @add-example="addExample"
     />
 
     <main v-if="workspace && editingFolder !== null" class="folder-main">
@@ -711,6 +745,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       <p v-if="problem" class="problem">{{ problem.message }}</p>
 
       <RequestEditor
+        ref="requestEditor"
         :key="selected.id"
         :request="selected.request"
         :scripts="selected.scripts"
@@ -720,6 +755,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         :inherited-auth="selectedInheritedAuth"
         :inherited-settings="selectedInheritedSettings"
         :inherited-headers="selectedInheritedHeaders"
+        :request-id="selected.id"
         :version="info?.version ?? ''"
         :environment-name="environments.find((e) => e.id === activeEnvId)?.name ?? ''"
         :root="workspace?.root ?? ''"
@@ -739,6 +775,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         :url="preview?.url ?? selected.request.url"
         @pick="historyPick[selectedId] = $event"
         @add-test="addTest"
+        @save-example="saveExample"
       />
 
       <footer class="statusbar">

@@ -309,6 +309,10 @@ mod tests {
             body_base64: None,
             size_bytes: body.len(),
             duration_ms: 42,
+            url: String::new(),
+            redirects: Vec::new(),
+            timings: None,
+            sent: None,
         }
     }
 

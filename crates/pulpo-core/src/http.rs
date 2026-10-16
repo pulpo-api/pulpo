@@ -476,7 +476,54 @@ pub struct HttpResponse {
     pub body_base64: Option<String>,
     pub size_bytes: usize,
     pub duration_ms: u64,
+    /// The URL that answered, after redirects.
+    #[serde(default)]
+    pub url: String,
+    /// Each redirect followed, in order.
+    #[serde(default)]
+    pub redirects: Vec<Redirect>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timings: Option<Timings>,
+    /// The request as it went out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sent: Option<SentRequest>,
 }
+
+/// Where the time of a request went. DNS and connection add up over redirects.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Timings {
+    pub dns_ms: u64,
+    /// TCP and TLS together: the HTTP client opens both in one step.
+    pub connect_ms: u64,
+    /// From the request sent to the first byte of the answer (the server's time).
+    pub wait_ms: u64,
+    pub download_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Redirect {
+    pub status: u16,
+    /// The URL that answered with the redirect.
+    pub url: String,
+    pub location: String,
+}
+
+/// What actually went out: the headers the client adds included.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SentRequest {
+    pub method: String,
+    pub url: String,
+    pub headers: Vec<Header>,
+    /// The body as text; forms and files are described (`name=@path (12 bytes)`).
+    #[serde(default)]
+    pub body: Option<String>,
+}
+
+/// Bodies longer than this are cut in the "sent" view.
+const MAX_SENT_BODY: usize = 64 * 1024;
 
 /// Binary bodies bigger than this are not kept for preview or saving.
 pub const MAX_BINARY_BYTES: usize = 25 * 1024 * 1024;
@@ -660,13 +707,36 @@ pub async fn send_with(
             .iter()
             .any(|h| !h.enabled && h.name.trim().eq_ignore_ascii_case(name))
     };
-    let mut client = reqwest::Client::builder().timeout(timeout).redirect(
-        if settings.follow_redirects == Some(false) {
-            reqwest::redirect::Policy::none()
-        } else {
-            reqwest::redirect::Policy::limited(MAX_REDIRECTS)
-        },
-    );
+    let probe = Arc::new(crate::timing::Probe::default());
+    let redirects: Arc<std::sync::Mutex<Vec<Redirect>>> = Arc::default();
+    let policy = if settings.follow_redirects == Some(false) {
+        reqwest::redirect::Policy::none()
+    } else {
+        let redirects = redirects.clone();
+        reqwest::redirect::Policy::custom(move |attempt| {
+            if let Ok(mut list) = redirects.lock() {
+                list.push(Redirect {
+                    status: attempt.status().as_u16(),
+                    url: attempt
+                        .previous()
+                        .last()
+                        .map(|u| u.to_string())
+                        .unwrap_or_default(),
+                    location: attempt.url().to_string(),
+                });
+            }
+            if attempt.previous().len() > MAX_REDIRECTS {
+                attempt.error(format!("more than {MAX_REDIRECTS} redirects"))
+            } else {
+                attempt.follow()
+            }
+        })
+    };
+    let mut client = reqwest::Client::builder()
+        .timeout(timeout)
+        .redirect(policy)
+        .dns_resolver(Arc::new(crate::timing::TimedResolver(probe.clone())))
+        .connector_layer(crate::timing::TimingLayer(probe.clone()));
     if !stopped("user-agent") {
         client = client.user_agent(USER_AGENT);
     }
@@ -690,10 +760,12 @@ pub async fn send_with(
             .map_err(|e| SendError::File(format!("client certificate: {e}")))?;
         client = client.identity(identity);
     }
-    if let (true, Some(jar)) = (request.cookies, &context.cookies) {
+    let jar = context.cookies.clone().filter(|_| request.cookies);
+    if let Some(jar) = &jar {
         client = client.cookie_provider(jar.clone());
     }
     let client = client.build()?;
+    let mut sent_body: Option<String> = None;
 
     let has_header = |name: &str| {
         headers
@@ -730,13 +802,21 @@ pub async fn send_with(
                         "application/x-www-form-urlencoded",
                     );
                 }
+                sent_body = Some(pairs.join("&"));
                 builder = builder.body(pairs.join("&"));
             }
             FormKind::Multipart => {
                 let mut parts = reqwest::multipart::Form::new();
+                let mut described = Vec::new();
                 for field in fields {
                     if field.file {
                         let bytes = read_file(root, &field.value)?;
+                        described.push(format!(
+                            "{}=@{} ({} bytes)",
+                            field.name,
+                            field.value,
+                            bytes.len()
+                        ));
                         let file_name = Path::new(&field.value)
                             .file_name()
                             .map(|n| n.to_string_lossy().into_owned())
@@ -747,9 +827,11 @@ pub async fn send_with(
                             .map_err(|e| SendError::Other(e.to_string()))?;
                         parts = parts.part(field.name.clone(), part);
                     } else {
+                        described.push(format!("{}={}", field.name, field.value));
                         parts = parts.text(field.name.clone(), field.value.clone());
                     }
                 }
+                sent_body = Some(format!("multipart/form-data:\n{}", described.join("\n")));
                 builder = builder.multipart(parts);
             }
         }
@@ -759,6 +841,7 @@ pub async fn send_with(
         .filter(|f| !f.trim().is_empty())
     {
         let bytes = read_file(root, file)?;
+        sent_body = Some(format!("@{file} ({} bytes)", bytes.len()));
         if !has_header("content-type") && !stopped("content-type") {
             builder = builder.header(reqwest::header::CONTENT_TYPE, mime_for(file));
         }
@@ -767,11 +850,27 @@ pub async fn send_with(
         if !body.is_empty() && !has_header("content-type") && !stopped("content-type") {
             builder = builder.header(reqwest::header::CONTENT_TYPE, sniff_content_type(body));
         }
+        if !body.is_empty() {
+            sent_body = Some(if body.len() > MAX_SENT_BODY {
+                let mut cut = MAX_SENT_BODY;
+                while !body.is_char_boundary(cut) {
+                    cut -= 1;
+                }
+                format!("{}… ({} bytes in all)", &body[..cut], body.len())
+            } else {
+                body.clone()
+            });
+        }
         builder = builder.body(body.clone());
     }
 
+    let built = builder.build()?;
+    let sent = describe_sent(&built, sent_body, &stopped, jar.as_deref());
+
     let started = Instant::now();
-    let response = builder.send().await?;
+    let response = client.execute(built).await?;
+    let first_byte_ms = started.elapsed().as_millis() as u64;
+    let final_url = response.url().to_string();
     let status = response.status();
     let http_version = format!("{:?}", response.version());
     let headers: Vec<Header> = response
@@ -781,6 +880,14 @@ pub async fn send_with(
         .collect();
     let bytes = response.bytes().await?;
     let duration_ms = started.elapsed().as_millis() as u64;
+    let (dns_ms, connect_ms) = (probe.dns_ms(), probe.connect_ms());
+    let timings = Timings {
+        dns_ms,
+        connect_ms,
+        wait_ms: first_byte_ms.saturating_sub(dns_ms + connect_ms),
+        download_ms: duration_ms.saturating_sub(first_byte_ms),
+    };
+    let redirects = redirects.lock().map(|r| r.clone()).unwrap_or_default();
 
     let content_type = headers
         .iter()
@@ -805,7 +912,62 @@ pub async fn send_with(
         body_base64,
         size_bytes: bytes.len(),
         duration_ms,
+        url: final_url,
+        redirects,
+        timings: Some(timings),
+        sent: Some(sent),
     })
+}
+
+/// The request as it goes on the wire: its headers plus the ones the client adds when
+/// sending (User-Agent, Accept, Accept-Encoding, Cookie, Host, Content-Length).
+fn describe_sent(
+    request: &reqwest::Request,
+    body: Option<String>,
+    stopped: &dyn Fn(&str) -> bool,
+    jar: Option<&SharedJar>,
+) -> SentRequest {
+    let mut headers: Vec<Header> = request
+        .headers()
+        .iter()
+        .map(|(n, v)| Header::new(n.as_str(), String::from_utf8_lossy(v.as_bytes())))
+        .collect();
+    let has = |headers: &Vec<Header>, name: &str| {
+        headers.iter().any(|h| h.name.eq_ignore_ascii_case(name))
+    };
+    if !has(&headers, "user-agent") && !stopped("user-agent") {
+        headers.push(Header::new("user-agent", USER_AGENT));
+    }
+    if !has(&headers, "accept") {
+        headers.push(Header::new("accept", "*/*"));
+    }
+    if !has(&headers, "accept-encoding") && !stopped("accept-encoding") {
+        headers.push(Header::new("accept-encoding", "gzip, deflate, br"));
+    }
+    if let (Some(jar), false) = (jar, has(&headers, "cookie")) {
+        if let Some(cookie) = reqwest::cookie::CookieStore::cookies(jar, request.url()) {
+            headers.push(Header::new(
+                "cookie",
+                String::from_utf8_lossy(cookie.as_bytes()),
+            ));
+        }
+    }
+    let url = request.url();
+    let host = match (url.host_str(), url.port()) {
+        (Some(h), Some(p)) => format!("{h}:{p}"),
+        (Some(h), None) => h.to_string(),
+        _ => String::new(),
+    };
+    headers.push(Header::new("host", host));
+    if let Some(len) = request.body().and_then(|b| b.as_bytes()).map(|b| b.len()) {
+        headers.push(Header::new("content-length", len.to_string()));
+    }
+    SentRequest {
+        method: request.method().to_string(),
+        url: url.to_string(),
+        headers,
+        body,
+    }
 }
 
 #[cfg(test)]
@@ -1189,6 +1351,69 @@ connection: close
             .await
             .unwrap();
         assert_eq!(text.body_base64, None, "text bodies are not doubled");
+    }
+
+    /// `/a` redirects to `/b`, which answers 200.
+    async fn redirect_server() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            for _ in 0..2 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut buffer = [0u8; 4096];
+                let read = socket.read(&mut buffer).await.unwrap();
+                let text = String::from_utf8_lossy(&buffer[..read]).to_string();
+                let reply = if text.starts_with("POST /a") || text.starts_with("GET /a") {
+                    "HTTP/1.1 302 Found\r\nlocation: /b\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+                } else {
+                    "HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\nok"
+                };
+                socket.write_all(reply.as_bytes()).await.unwrap();
+            }
+        });
+        format!("http://{address}")
+    }
+
+    #[tokio::test]
+    async fn reports_redirects_timings_and_what_was_sent() {
+        let base = redirect_server().await;
+        let mut request = HttpRequest::new(HttpMethod::Post, format!("{base}/a"));
+        request.headers.push(Header::new("X-Tenant", "t1"));
+        request.body = Some("{\"a\": 1}".into());
+        let response = send(&request).await.unwrap();
+
+        assert_eq!(response.status, 200);
+        assert_eq!(response.url, format!("{base}/b"));
+        assert_eq!(
+            response.redirects,
+            [Redirect {
+                status: 302,
+                url: format!("{base}/a"),
+                location: format!("{base}/b"),
+            }]
+        );
+        let t = response.timings.unwrap();
+        assert_eq!(t.dns_ms, 0, "an IP address needs no DNS");
+        assert!(t.connect_ms + t.wait_ms + t.download_ms <= response.duration_ms + 1);
+
+        let sent = response.sent.unwrap();
+        assert_eq!(
+            (sent.method.as_str(), sent.url.as_str()),
+            ("POST", format!("{base}/a").as_str())
+        );
+        assert_eq!(sent.body.as_deref(), Some("{\"a\": 1}"));
+        let header = |name: &str| {
+            sent.headers
+                .iter()
+                .find(|h| h.name == name)
+                .map(|h| h.value.clone())
+        };
+        assert_eq!(header("x-tenant").as_deref(), Some("t1"));
+        assert_eq!(header("content-type").as_deref(), Some("application/json"));
+        assert_eq!(header("content-length").as_deref(), Some("8"));
+        assert_eq!(header("accept").as_deref(), Some("*/*"));
+        assert!(header("user-agent").unwrap().starts_with("Pulpo/"));
+        assert!(header("host").unwrap().starts_with("127.0.0.1:"));
     }
 
     #[test]

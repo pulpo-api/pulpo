@@ -65,6 +65,32 @@ async fn folder_scripts(root: String, folder_id: String) -> Result<Scripts, Coll
     collection::folder_scripts(Path::new(&root), &folder_id)
 }
 
+#[tauri::command]
+async fn list_examples(
+    root: String,
+    request_id: String,
+) -> Result<Vec<pulpo_core::examples::Example>, CollectionError> {
+    pulpo_core::examples::list_examples(Path::new(&root), &request_id)
+}
+
+#[tauri::command]
+async fn save_example(
+    root: String,
+    request_id: String,
+    example: pulpo_core::examples::Example,
+) -> Result<pulpo_core::examples::Example, CollectionError> {
+    pulpo_core::examples::save_example(Path::new(&root), &request_id, &example)
+}
+
+#[tauri::command]
+async fn delete_example(
+    root: String,
+    request_id: String,
+    id: String,
+) -> Result<(), CollectionError> {
+    pulpo_core::examples::delete_example(Path::new(&root), &request_id, &id)
+}
+
 /// Runs a JSONPath or jq query over a response body, for the response filter.
 #[tauri::command]
 async fn query_json(
@@ -340,6 +366,9 @@ pub fn run() {
             save_cookies,
             save_response,
             query_json,
+            list_examples,
+            save_example,
+            delete_example,
             folder_meta,
             save_folder_meta,
             rename_node,

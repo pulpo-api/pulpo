@@ -12,6 +12,7 @@ pub mod codegen;
 pub mod collection;
 pub mod cookies;
 pub mod environment;
+pub mod examples;
 pub mod http;
 pub mod import;
 #[cfg(feature = "keychain")]
@@ -21,6 +22,7 @@ pub mod organize;
 pub mod query;
 pub mod run;
 pub mod script;
+mod timing;
 pub mod variables;
 
 /// Version of the Pulpo core engine.

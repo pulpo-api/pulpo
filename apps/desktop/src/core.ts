@@ -160,6 +160,12 @@ export interface HttpResponse {
   bodyBase64?: string;
   sizeBytes: number;
   durationMs: number;
+  /** The URL that answered, after redirects. */
+  url?: string;
+  redirects?: { status: number; url: string; location: string }[];
+  timings?: { dnsMs: number; connectMs: number; waitMs: number; downloadMs: number };
+  /** The request as it went out (headers the client adds included). */
+  sent?: { method: string; url: string; headers: Header[]; body: string | null };
 }
 
 export interface SendError {
@@ -220,6 +226,30 @@ export async function sendHttp(
   return sendWithFetch(resolved);
 }
 
+const REASONS: Record<number, string> = {
+  200: "OK",
+  201: "Created",
+  202: "Accepted",
+  204: "No Content",
+  301: "Moved Permanently",
+  302: "Found",
+  304: "Not Modified",
+  307: "Temporary Redirect",
+  308: "Permanent Redirect",
+  400: "Bad Request",
+  401: "Unauthorized",
+  403: "Forbidden",
+  404: "Not Found",
+  405: "Method Not Allowed",
+  409: "Conflict",
+  422: "Unprocessable Entity",
+  429: "Too Many Requests",
+  500: "Internal Server Error",
+  502: "Bad Gateway",
+  503: "Service Unavailable",
+  504: "Gateway Timeout",
+};
+
 async function sendWithFetch(request: HttpRequest): Promise<HttpResponse> {
   const headers = new Headers();
   for (const h of request.headers) {
@@ -270,12 +300,30 @@ async function sendWithFetch(request: HttpRequest): Promise<HttpResponse> {
   const binary = !bodyIsText || isBinaryType(response.headers.get("content-type") ?? "");
   return {
     status: response.status,
-    statusText: response.statusText,
+    // HTTP/2 has no reason phrase; reqwest fills the standard one, so do the same.
+    statusText: response.statusText || REASONS[response.status] || "",
     httpVersion: "HTTP/1.1",
     headers: [...response.headers.entries()].map(([name, value]) => ({ name, value, enabled: true })),
     body,
     bodyIsText,
     bodyBase64: binary && bytes.length <= 25 * 1024 * 1024 ? bytesToBase64(bytes) : undefined,
+    url: response.url,
+    sent: {
+      method: request.method,
+      url: request.url,
+      headers: [
+        ...[...headers.entries()].map(([name, value]) => ({ name, value, enabled: true })),
+        { name: "(browser)", value: "the browser adds its own User-Agent, Origin and others", enabled: true },
+      ],
+      body:
+        typeof payload === "string"
+          ? payload
+          : payload instanceof URLSearchParams
+            ? payload.toString()
+            : payload instanceof FormData
+              ? [...payload.entries()].map(([k, v]) => `${k}=${v}`).join("\n")
+              : null,
+    },
     sizeBytes: buffer.byteLength,
     durationMs: Math.round(performance.now() - started),
   };

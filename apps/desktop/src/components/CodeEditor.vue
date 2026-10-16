@@ -3,7 +3,13 @@ import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { basicSetup } from "codemirror";
 import { Compartment, EditorState, Prec } from "@codemirror/state";
 import { EditorView, keymap, placeholder as placeholderExt } from "@codemirror/view";
-import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
+import {
+  HighlightStyle,
+  foldEffect,
+  foldable,
+  syntaxHighlighting,
+  unfoldAll,
+} from "@codemirror/language";
 import { json } from "@codemirror/lang-json";
 import { javascript } from "@codemirror/lang-javascript";
 import { xml } from "@codemirror/lang-xml";
@@ -25,7 +31,13 @@ const props = withDefaults(
   }>(),
   { language: "text", readonly: false, placeholder: "", variables: false },
 );
-const emit = defineEmits<{ "update:modelValue": [value: string]; run: []; save: [] }>();
+const emit = defineEmits<{
+  "update:modelValue": [value: string];
+  run: [];
+  save: [];
+  /** Right click: the document position under the pointer, and where to show a menu. */
+  nodeMenu: [pos: number, x: number, y: number];
+}>();
 
 const host = ref<HTMLDivElement | null>(null);
 let view: EditorView | null = null;
@@ -92,6 +104,15 @@ onMounted(() => {
         props.variables ? variablesExt({ ownCompletion: false }) : [],
         languageSlot.of(languageExtension(props.language)),
         readonlySlot.of([EditorState.readOnly.of(props.readonly), EditorView.editable.of(!props.readonly)]),
+        EditorView.domEventHandlers({
+          contextmenu: (event, view) => {
+            const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+            if (pos === null) return false;
+            event.preventDefault();
+            emit("nodeMenu", pos, event.clientX, event.clientY);
+            return true;
+          },
+        }),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) emit("update:modelValue", update.state.doc.toString());
         }),
@@ -128,9 +149,34 @@ watch(varContext, () => {
 
 onBeforeUnmount(() => view?.destroy());
 
+/** Folds the block (object or array) that starts on the line of `pos`. */
+function foldAt(pos: number) {
+  if (!view) return;
+  const line = view.state.doc.lineAt(pos);
+  const range = foldable(view.state, line.from, line.to);
+  if (range) view.dispatch({ effects: foldEffect.of(range) });
+}
+
+/** Opens everything, then folds the blocks that start on the lines of `positions`. */
+function foldOnly(positions: number[]) {
+  if (!view) return;
+  unfoldAll(view);
+  const effects = positions
+    .map((pos) => {
+      const line = view!.state.doc.lineAt(pos);
+      return foldable(view!.state, line.from, line.to);
+    })
+    .filter((range): range is { from: number; to: number } => !!range)
+    .map((range) => foldEffect.of(range));
+  if (effects.length) view.dispatch({ effects });
+}
+
 defineExpose({
   /** Opens the find (and replace) panel, as Ctrl+F does inside the editor. */
   openSearch: () => view && openSearchPanel(view),
+  foldAt,
+  foldOnly,
+  unfoldAll: () => view && unfoldAll(view),
 });
 </script>
 

@@ -7,6 +7,7 @@ import HeadersEditor from "./HeadersEditor.vue";
 import { automaticHeaders } from "../autoHeaders";
 import VarInput from "./VarInput.vue";
 import SettingsEditor from "./SettingsEditor.vue";
+import ExamplesEditor from "./ExamplesEditor.vue";
 import AuthEditor from "./AuthEditor.vue";
 import CodeEditor from "./CodeEditor.vue";
 import BodyEditor from "./BodyEditor.vue";
@@ -23,13 +24,15 @@ const props = defineProps<{
   inheritedSettings: InheritedSettings;
   inheritedHeaders: { header: Header; from: string }[];
   root: string;
+  /** The request's id, for its saved examples. */
+  requestId: string;
   /** For the automatic headers: Pulpo's version and the selected environment. */
   version: string;
   environmentName: string;
 }>();
 const emit = defineEmits<{ send: []; save: [] }>();
 
-const tab = ref<"params" | "auth" | "body" | "headers" | "settings" | "pre" | "test">(
+const tab = ref<"params" | "auth" | "body" | "headers" | "settings" | "pre" | "test" | "examples">(
   props.request.method === "GET" || splitUrl(props.request.url).params.length ? "params" : "body",
 );
 const paramCount = computed(() => splitUrl(props.request.url).params.length + pathParamNames(props.request.url).length);
@@ -38,6 +41,19 @@ const BODY_BADGES: Partial<Record<ReturnType<typeof bodyMode>, string>> = {
   multipart: "Form",
   file: "File",
 };
+const examplesNew = ref(false);
+const examplesEditor = ref<InstanceType<typeof ExamplesEditor> | null>(null);
+defineExpose({
+  /** Opens the Examples tab; with `startNew`, with a new example to fill in. */
+  openExamples(startNew: boolean) {
+    examplesNew.value = startNew;
+    if (tab.value === "examples") {
+      if (startNew) examplesEditor.value?.addNew();
+      else void examplesEditor.value?.reload();
+    }
+    tab.value = "examples";
+  },
+});
 const settingsCount = computed(() => Object.keys(props.request.settings ?? {}).length);
 const bodyBadge = computed(() => BODY_BADGES[bodyMode(props.request)] ?? "");
 const auth = computed({
@@ -118,6 +134,7 @@ const inheritedCount = computed(
       <button :class="{ on: tab === 'pre' }" @click="tab = 'pre'">
         Pre-request <span v-if="scripts.pre.trim()" class="dot"></span>
       </button>
+      <button :class="{ on: tab === 'examples' }" @click="(examplesNew = false), (tab = 'examples')">Examples</button>
       <button :class="{ on: tab === 'test' }" @click="tab = 'test'">
         Tests <span v-if="scripts.test.trim()" class="dot"></span>
       </button>
@@ -128,6 +145,14 @@ const inheritedCount = computed(
     <ParamsEditor v-if="tab === 'params'" :request="request" />
 
     <AuthEditor v-else-if="tab === 'auth'" v-model="auth" :inherited="inheritedAuth" />
+
+    <ExamplesEditor
+      v-else-if="tab === 'examples'"
+      ref="examplesEditor"
+      :root="root"
+      :request-id="requestId"
+      :start-new="examplesNew"
+    />
 
     <SettingsEditor
       v-else-if="tab === 'settings'"

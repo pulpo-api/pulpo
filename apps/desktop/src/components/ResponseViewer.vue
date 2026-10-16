@@ -4,10 +4,13 @@ import type { HttpResponse, SendError } from "../core";
 import { asCollectionError, backend, type QueryLanguage, type TestResult } from "../workspace";
 import { base64ToBytes, contentTypeOf, previewKind, suggestedFileName } from "../responseFiles";
 import CodeEditor, { type Language } from "./CodeEditor.vue";
+import { jsonNodes, jsonPathOf, nodeAt, valueAt, type JsonNode } from "../jsonNodes";
+import { jsonDiff, lineDiff } from "../responseDiff";
 
 export interface HistoryItem {
   at: string;
   label: string;
+  response?: HttpResponse | null;
 }
 
 const props = defineProps<{
@@ -22,9 +25,78 @@ const props = defineProps<{
   /** The request URL, to name saved files. */
   url: string;
 }>();
-const emit = defineEmits<{ pick: [index: number]; addTest: [code: string] }>();
+const emit = defineEmits<{ pick: [index: number]; addTest: [code: string]; saveExample: [response: HttpResponse] }>();
 
-const tab = ref<"body" | "headers" | "cookies" | "tests" | "console">("body");
+const tab = ref<"body" | "headers" | "cookies" | "tests" | "console" | "timing" | "sent" | "diff">("body");
+
+// ---------------------------------------------------------------- timing (B2.3)
+
+const PHASES: { key: "dnsMs" | "connectMs" | "waitMs" | "downloadMs"; label: string }[] = [
+  { key: "dnsMs", label: "DNS" },
+  { key: "connectMs", label: "Connection (TCP + TLS)" },
+  { key: "waitMs", label: "Server (to first byte)" },
+  { key: "downloadMs", label: "Download" },
+];
+
+/** Average time of the other responses of this request, to compare with. */
+const previousAverage = computed(() => {
+  const others = props.history
+    .filter((_, i) => i !== props.historyIndex)
+    .map((h) => h.response?.durationMs)
+    .filter((d): d is number => typeof d === "number");
+  return others.length ? { ms: Math.round(others.reduce((a, b) => a + b, 0) / others.length), count: others.length } : null;
+});
+
+function share(ms: number) {
+  const total = props.response?.durationMs || 1;
+  return `${Math.max(1, Math.round((ms / total) * 100))}%`;
+}
+
+// ---------------------------------------------------------------- sent (B2.7)
+
+const SENSITIVE = /authorization|cookie|token|secret|password|api[-_]?key|x-key/i;
+const showSecrets = ref(false);
+function shownValue(name: string, value: string) {
+  if (showSecrets.value || !SENSITIVE.test(name)) return value;
+  return value.length <= 8 ? "••••" : `${value.slice(0, 6)}••••`;
+}
+
+// ---------------------------------------------------------------- compare (B2.4)
+
+const compareIndex = ref<number | null>(null);
+watch(
+  () => props.historyIndex,
+  () => {
+    compareIndex.value = null;
+    if (tab.value === "diff") tab.value = "body";
+  },
+);
+const compared = computed(() => (compareIndex.value === null ? null : (props.history[compareIndex.value]?.response ?? null)));
+const diff = computed(() => {
+  const before = compared.value;
+  const after = props.response;
+  if (!before || !after) return null;
+  let fields: ReturnType<typeof jsonDiff> | null = null;
+  try {
+    fields = jsonDiff(JSON.parse(before.body), JSON.parse(after.body));
+  } catch {
+    fields = null;
+  }
+  return {
+    status: before.status !== after.status ? `${before.status} → ${after.status}` : "",
+    time: after.durationMs - before.durationMs,
+    fields,
+    lines: fields === null ? lineDiff(before.body, after.body).filter((l, _i, all) => l.kind !== "same" || all.length < 200) : [],
+  };
+});
+function compareWith(value: string) {
+  compareIndex.value = value === "" ? null : Number(value);
+  if (compareIndex.value !== null) tab.value = "diff";
+}
+const short = (v: unknown) => {
+  const text = JSON.stringify(v);
+  return text === undefined ? "undefined" : text.length > 120 ? `${text.slice(0, 120)}…` : text;
+};
 
 /** Cookies this response sets, from its Set-Cookie headers. */
 const setCookies = computed(() =>
@@ -142,6 +214,71 @@ async function copyResult() {
 
 const bodyEditor = ref<InstanceType<typeof CodeEditor> | null>(null);
 
+// ---------------------------------------------------------------- node menu (B2.6)
+
+const nodes = computed(() => (isJson.value ? jsonNodes(pretty.value) : null));
+const nodeMenu = ref<{ node: JsonNode; x: number; y: number } | null>(null);
+const canUseNodes = computed(() => view.value === "pretty" && filtered.value === null && !!nodes.value);
+
+function openNodeMenu(pos: number, x: number, y: number) {
+  if (!canUseNodes.value || !nodes.value) return;
+  // The node that starts on the clicked line (also when clicking its indentation);
+  // on a line that only closes a block, the innermost node around it.
+  const text = pretty.value;
+  const lineFrom = text.lastIndexOf("\n", pos - 1) + 1;
+  const lineEnd = text.indexOf("\n", pos);
+  const lineTo = lineEnd < 0 ? text.length : lineEnd;
+  const onLine = nodes.value.filter((n) => n.from >= lineFrom && n.from <= lineTo).sort((a, b) => a.from - b.from)[0];
+  const node = onLine ?? nodeAt(nodes.value, pos);
+  if (node) nodeMenu.value = { node, x: Math.min(x, window.innerWidth - 230), y: Math.min(y, window.innerHeight - 260) };
+}
+
+async function nodeAction(action: "fold" | "foldOthers" | "unfold" | "copyValue" | "copyPath" | "filter" | "test") {
+  const menu = nodeMenu.value;
+  nodeMenu.value = null;
+  if (!menu || !props.response) return;
+  const { node } = menu;
+  const path = jsonPathOf(node.path);
+  const value = valueAt(JSON.parse(props.response.body), node.path);
+  try {
+    if (action === "fold") bodyEditor.value?.foldAt(node.valueFrom);
+    else if (action === "foldOthers") {
+      // Fold the blocks next to each level of the path; the path down to the node stays open.
+      const prefix = (a: JsonNode["path"], b: JsonNode["path"]) => a.length <= b.length && a.every((s, i) => s === b[i]);
+      const others = (nodes.value ?? []).filter(
+        (n) =>
+          n.container &&
+          n.path.length > 0 &&
+          !prefix(n.path, node.path) &&
+          !prefix(node.path, n.path) &&
+          prefix(n.path.slice(0, -1), node.path),
+      );
+      bodyEditor.value?.foldOnly(others.map((n) => n.valueFrom));
+    }
+    else if (action === "unfold") bodyEditor.value?.unfoldAll();
+    else if (action === "copyValue") {
+      await navigator.clipboard.writeText(typeof value === "string" ? value : JSON.stringify(value, null, 2));
+      saved.value = "Value copied";
+    } else if (action === "copyPath") {
+      await navigator.clipboard.writeText(path);
+      saved.value = `Copied ${path}`;
+    } else if (action === "filter") {
+      queryLanguage.value = "jsonpath";
+      expression.value = path;
+    } else {
+      const expected = JSON.stringify([value]);
+      const check =
+        expected.length > 400
+          ? `pm.expect(pm.response.jsonPath(${JSON.stringify(path)})).to.have.lengthOf(1);`
+          : `pm.expect(pm.response.jsonPath(${JSON.stringify(path)})).to.eql(${expected});`;
+      emit("addTest", `pm.test(${JSON.stringify(path)}, () => {\n  ${check}\n});\n`);
+      saved.value = "Test added to the Tests tab";
+    }
+  } catch {
+    saved.value = "Could not copy";
+  }
+}
+
 async function saveBody() {
   if (!props.response) return;
   try {
@@ -231,6 +368,22 @@ const errorTitle: Record<SendError["kind"], string> = {
         <button v-if="logs.length || scriptErrors.length" :class="{ on: tab === 'console', bad: scriptErrors.length }" @click="tab = 'console'">
           Console
         </button>
+        <button :class="{ on: tab === 'timing' }" @click="tab = 'timing'">
+          Timing<template v-if="response.redirects?.length"> · {{ response.redirects.length }} redirect{{ response.redirects.length > 1 ? "s" : "" }}</template>
+        </button>
+        <button v-if="response.sent" :class="{ on: tab === 'sent' }" @click="tab = 'sent'">Sent</button>
+        <select
+          v-if="history.length > 1"
+          class="history"
+          :value="compareIndex ?? ''"
+          title="Compare this response with another one of the history"
+          @change="compareWith(($event.target as HTMLSelectElement).value)"
+        >
+          <option value="">Compare with…</option>
+          <template v-for="(h, i) in history" :key="`c${i}`">
+            <option v-if="i !== historyIndex && h.response" :value="i">{{ h.label }}</option>
+          </template>
+        </select>
       </div>
       <template v-if="tab === 'body'">
         <div class="views">
@@ -247,6 +400,9 @@ const errorTitle: Record<SendError["kind"], string> = {
             Find
           </button>
           <button class="save" title="Save the body to a file" @click="saveBody">Save</button>
+          <button class="save" title="Keep this response next to the request (Examples tab)" @click="emit('saveExample', response)">
+            Save as example
+          </button>
         </div>
         <div v-if="isJson && view !== 'preview'" class="filter">
           <select v-model="queryLanguage" aria-label="Filter language">
@@ -289,8 +445,90 @@ const errorTitle: Record<SendError["kind"], string> = {
           :model-value="filtered ?? ((view === 'raw' ? response.body : pretty) || '(empty body)')"
           :language="filtered !== null ? 'json' : view === 'raw' ? 'text' : bodyLanguage"
           readonly
+          @node-menu="openNodeMenu"
         />
+        <div v-if="nodeMenu" class="menu-backdrop" @click="nodeMenu = null" @contextmenu.prevent="nodeMenu = null">
+          <div class="node-menu card" role="menu" :style="{ left: `${nodeMenu.x}px`, top: `${nodeMenu.y}px` }" @click.stop>
+            <p class="node-path">{{ jsonPathOf(nodeMenu.node.path) }}</p>
+            <button v-if="nodeMenu.node.container" role="menuitem" @click="nodeAction('fold')">Collapse this</button>
+            <button role="menuitem" @click="nodeAction('foldOthers')">Collapse all but this</button>
+            <button role="menuitem" @click="nodeAction('unfold')">Expand all</button>
+            <hr />
+            <button role="menuitem" @click="nodeAction('copyValue')">Copy value</button>
+            <button role="menuitem" @click="nodeAction('copyPath')">Copy path</button>
+            <button role="menuitem" @click="nodeAction('filter')">Filter by this path</button>
+            <button role="menuitem" @click="nodeAction('test')">Create test from this</button>
+          </div>
+        </div>
       </template>
+      <div v-else-if="tab === 'timing'" class="timing">
+        <template v-if="response.timings">
+          <div v-for="p in PHASES" :key="p.key" class="phase">
+            <span class="label">{{ p.label }}</span>
+            <span class="track"><span class="bar" :style="{ width: share(response.timings[p.key]) }"></span></span>
+            <span class="ms">{{ response.timings[p.key] }} ms</span>
+          </div>
+          <div class="phase total">
+            <span class="label">Total</span>
+            <span class="track"></span>
+            <span class="ms">{{ response.durationMs }} ms</span>
+          </div>
+        </template>
+        <p v-else class="muted">Detailed times come from the desktop app; the browser preview only knows the total.</p>
+        <p v-if="previousAverage" class="compare-time">
+          {{ response.durationMs - previousAverage.ms >= 0 ? "+" : "" }}{{ response.durationMs - previousAverage.ms }} ms against the
+          average of the {{ previousAverage.count }} other response{{ previousAverage.count > 1 ? "s" : "" }} in the history
+          ({{ previousAverage.ms }} ms).
+        </p>
+        <template v-if="response.redirects?.length">
+          <h4>Redirects</h4>
+          <ol class="redirects">
+            <li v-for="(r, i) in response.redirects" :key="i">
+              <code>{{ r.status }}</code> {{ r.url }} <span class="muted">→</span> {{ r.location }}
+            </li>
+          </ol>
+        </template>
+        <p v-if="response.url" class="muted final-url">Answered by {{ response.url }}</p>
+      </div>
+      <div v-else-if="tab === 'sent' && response.sent" class="sent">
+        <p class="line">
+          <code>{{ response.sent.method }} {{ response.sent.url }}</code>
+          <label class="reveal"><input v-model="showSecrets" type="checkbox" /> Show secret values</label>
+        </p>
+        <table class="code table">
+          <tbody>
+            <tr v-for="(h, i) in response.sent.headers" :key="i">
+              <td>{{ h.name }}</td>
+              <td>{{ shownValue(h.name, h.value) }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <pre v-if="response.sent.body" class="code sent-body">{{ response.sent.body }}</pre>
+      </div>
+      <div v-else-if="tab === 'diff' && diff" class="diff">
+        <p class="muted">
+          Compared with {{ history[compareIndex ?? 0]?.label }}
+          <template v-if="diff.status"> · status {{ diff.status }}</template>
+          · time {{ diff.time >= 0 ? "+" : "" }}{{ diff.time }} ms
+        </p>
+        <template v-if="diff.fields">
+          <p v-if="!diff.fields.length" class="muted">Same JSON body.</p>
+          <table v-else class="code table">
+            <tbody>
+              <tr v-for="(c, i) in diff.fields" :key="i" :class="c.kind">
+                <td>{{ c.kind === "added" ? "+" : c.kind === "removed" ? "−" : "~" }} {{ c.path }}</td>
+                <td>
+                  <template v-if="c.kind !== 'added'"><span class="before">{{ short(c.before) }}</span></template>
+                  <template v-if="c.kind === 'changed'"> → </template>
+                  <template v-if="c.kind !== 'removed'"><span class="after">{{ short(c.after) }}</span></template>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </template>
+        <pre v-else class="code lines"><span v-for="(l, i) in diff.lines" :key="i" :class="l.kind">{{ l.kind === "added" ? "+ " : l.kind === "removed" ? "- " : "  " }}{{ l.text }}
+</span></pre>
+      </div>
       <ul v-else-if="tab === 'tests'" class="code list">
         <li v-for="(t, i) in tests" :key="i" :class="t.passed ? 'pass' : 'fail'">
           <span>{{ t.passed ? "✓" : "✗" }}</span> {{ t.name }}<em v-if="t.error"> — {{ t.error }}</em>
@@ -574,5 +812,139 @@ const errorTitle: Record<SendError["kind"], string> = {
   margin: 0 0 6px;
   font-size: 12px;
   color: var(--m-post);
+}
+.menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+}
+.node-menu {
+  position: fixed;
+  min-width: 210px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+}
+.node-menu button {
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  padding: 6px 10px;
+  text-align: left;
+  cursor: pointer;
+  font-size: 13px;
+}
+.node-menu button:hover {
+  background: var(--surface-2);
+}
+.node-menu hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 4px 0;
+}
+.node-path {
+  margin: 2px 10px 6px;
+  font: 11px var(--mono);
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.timing,
+.sent,
+.diff {
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+}
+.phase {
+  display: grid;
+  grid-template-columns: minmax(120px, 190px) 1fr 70px;
+  gap: 10px;
+  align-items: center;
+}
+.phase .track {
+  height: 10px;
+  border-radius: 5px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.phase .bar {
+  display: block;
+  height: 100%;
+  border-radius: 5px;
+  background: var(--accent);
+}
+.phase .ms {
+  text-align: right;
+  font-family: var(--mono);
+}
+.phase.total {
+  font-weight: 600;
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
+}
+.compare-time,
+.final-url {
+  margin: 0;
+}
+.timing h4 {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.redirects {
+  margin: 0;
+  padding-left: 18px;
+  font-family: var(--mono);
+  font-size: 12px;
+  word-break: break-all;
+}
+.sent .line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin: 0;
+  word-break: break-all;
+}
+.reveal {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--muted);
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+.sent-body {
+  margin: 0;
+  padding: 10px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.diff tr.added td,
+.diff .lines .added {
+  color: var(--m-get);
+}
+.diff tr.removed td,
+.diff .lines .removed {
+  color: var(--m-delete);
+}
+.diff .before {
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+.diff .lines {
+  margin: 0;
+  white-space: pre-wrap;
 }
 </style>

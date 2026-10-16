@@ -30,6 +30,8 @@ fn request_suffixes() -> Vec<String> {
     }
     suffixes.push(".pre.js".into());
     suffixes.push(".test.js".into());
+    // The examples folder moves with its request (fs::rename works on folders too).
+    suffixes.push(crate::examples::EXAMPLES_SUFFIX.into());
     suffixes
 }
 
@@ -69,7 +71,9 @@ fn children(dir: &Path) -> Result<Vec<Child>, CollectionError> {
             continue;
         }
         if entry.path().is_dir() {
-            if !SKIPPED_DIRS.contains(&name.as_str()) {
+            if !SKIPPED_DIRS.contains(&name.as_str())
+                && !name.ends_with(crate::examples::EXAMPLES_SUFFIX)
+            {
                 found.push(Child::new(dir, name, true));
             }
         } else if let Some(stem) = name.strip_suffix(REQUEST_SUFFIX) {
@@ -315,6 +319,14 @@ pub fn duplicate(root: &Path, id: &str) -> Result<Organized, CollectionError> {
         entry.id = relative_id(root, &dir.join(format!("{temp}{REQUEST_SUFFIX}")));
         copy_name = entry.name.clone();
         save_request(root, &entry)?;
+        let examples =
+            crate::examples::examples_dir(&dir.join(format!("{}{REQUEST_SUFFIX}", child.name)));
+        if examples.is_dir() {
+            copy_dir(
+                &examples,
+                &crate::examples::examples_dir(&dir.join(format!("{temp}{REQUEST_SUFFIX}"))),
+            )?;
+        }
     }
     let mut list = children(&dir)?;
     let at = list
