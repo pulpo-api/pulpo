@@ -1,6 +1,6 @@
 //! `{{variable}}` substitution, including dynamic variables like `{{$guid}}`.
 
-use crate::http::{Header, HttpRequest};
+use crate::http::{Auth, Header, HttpRequest};
 use std::collections::{BTreeSet, HashMap};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -123,6 +123,25 @@ pub fn resolve_request(
             .map(|b| resolve_text(b, vars, &mut missing)),
         timeout_ms: request.timeout_ms,
         disabled_params: request.disabled_params.clone(),
+        auth: request.auth.as_ref().map(|auth| match auth {
+            Auth::None => Auth::None,
+            Auth::Bearer { token } => Auth::Bearer {
+                token: resolve_text(token, vars, &mut missing),
+            },
+            Auth::Basic { username, password } => Auth::Basic {
+                username: resolve_text(username, vars, &mut missing),
+                password: resolve_text(password, vars, &mut missing),
+            },
+            Auth::ApiKey {
+                key,
+                value,
+                location,
+            } => Auth::ApiKey {
+                key: resolve_text(key, vars, &mut missing),
+                value: resolve_text(value, vars, &mut missing),
+                location: *location,
+            },
+        }),
         path_params: request
             .path_params
             .iter()

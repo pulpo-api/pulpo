@@ -51,6 +51,7 @@
         }
       }
     },
+    "auth": { "$ref": "#/$defs/auth" },
     "body": {
       "enum": ["json", "xml", "graphql", "text"],
       "description": "Kind of the body file next to this one (.body.json, .body.xml, .body.graphql or .body.txt)."
@@ -58,5 +59,18 @@
     "timeoutMs": { "type": "integer", "minimum": 1, "description": "Request timeout in milliseconds (default 30000)." }
   },
   "if": { "properties": { "protocol": { "const": "http" } } },
-  "then": { "required": ["method"] }
+  "then": { "required": ["method"] },
+  "$defs": {
+    "auth": {
+      "description": "How the request authenticates. Missing = inherit from the folder (_folder.yaml) or workspace (pulpo.yaml), which use the same block. Use {{variables}} for secrets.",
+      "type": "object",
+      "required": ["type"],
+      "oneOf": [
+        { "additionalProperties": false, "properties": { "type": { "const": "none" } } },
+        { "additionalProperties": false, "required": ["token"], "properties": { "type": { "const": "bearer" }, "token": { "type": "string" } } },
+        { "additionalProperties": false, "required": ["username"], "properties": { "type": { "const": "basic" }, "username": { "type": "string" }, "password": { "type": "string" } } },
+        { "additionalProperties": false, "required": ["key", "value"], "properties": { "type": { "const": "apiKey" }, "key": { "type": "string" }, "value": { "type": "string" }, "in": { "enum": ["header", "query"], "default": "header" } } }
+      ]
+    }
+  }
 }

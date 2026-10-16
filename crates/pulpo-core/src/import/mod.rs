@@ -9,7 +9,7 @@ mod postman;
 
 use crate::collection::{self, CollectionError, RequestEntry, Scripts};
 use crate::environment::{self, Environment, SecretStore};
-use crate::http::HttpRequest;
+use crate::http::{Auth, HttpRequest};
 use crate::Protocol;
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -24,6 +24,8 @@ pub enum ImportNode {
         name: String,
         children: Vec<ImportNode>,
         scripts: Scripts,
+        /// `None` = inherit.
+        auth: Option<Auth>,
     },
     Request {
         name: String,
@@ -40,6 +42,8 @@ pub struct ImportPlan {
     pub folder: Option<String>,
     /// Scripts of the top level (a Postman collection's own scripts).
     pub folder_scripts: Scripts,
+    /// Auth of the top level (a Postman collection's or an OpenAPI document's global one).
+    pub folder_auth: Option<Auth>,
     pub nodes: Vec<ImportNode>,
     pub environments: Vec<Environment>,
     pub warnings: Vec<String>,
@@ -206,6 +210,9 @@ pub fn apply(
     if !plan.folder_scripts.is_empty() {
         collection::save_folder_scripts(root, &target, &plan.folder_scripts)?;
     }
+    if plan.folder_auth.is_some() {
+        collection::save_folder_auth(root, &target, plan.folder_auth.as_ref())?;
+    }
     write_nodes(root, &target, &plan.nodes, &mut summary)?;
 
     for env in &plan.environments {
@@ -245,10 +252,14 @@ fn write_nodes(
                 name,
                 children,
                 scripts,
+                auth,
             } => {
                 let id = collection::create_folder(root, folder_id, name)?;
                 if !scripts.is_empty() {
                     collection::save_folder_scripts(root, &id, scripts)?;
+                }
+                if auth.is_some() {
+                    collection::save_folder_auth(root, &id, auth.as_ref())?;
                 }
                 summary.folders += 1;
                 write_nodes(root, &id, children, summary)?;

@@ -17,6 +17,81 @@ export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | 
 
 export const HTTP_METHODS: HttpMethod[] = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
 
+export type ApiKeyLocation = "header" | "query";
+
+/** How a request authenticates. Mirrors `Auth` in pulpo-core. */
+export type Auth =
+  | { type: "none" }
+  | { type: "bearer"; token: string }
+  | { type: "basic"; username: string; password: string }
+  | { type: "apiKey"; key: string; value: string; in: ApiKeyLocation };
+
+export const AUTH_LABELS: Record<Auth["type"], string> = {
+  none: "No auth",
+  bearer: "Bearer token",
+  basic: "Basic",
+  apiKey: "API key",
+};
+
+function base64Utf8(text: string): string {
+  let binary = "";
+  for (const byte of new TextEncoder().encode(text)) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+/** Percent-encodes a query value but leaves `{{variables}}` readable (only the URL preview
+ * still has them; sending fails before that if one is missing). */
+function encodeKeepingVars(text: string): string {
+  return text
+    .split(/(\{\{[^{}]*\}\})/)
+    .map((part) => (part.startsWith("{{") && part.endsWith("}}") ? part : encodeURIComponent(part)))
+    .join("");
+}
+
+/** Adds the (resolved) auth to the URL or headers. A header written by hand wins.
+ * Mirrors `apply_auth` in pulpo-core. */
+export function applyAuth(url: string, headers: Header[], auth: Auth | null | undefined): string {
+  if (!auth) return url;
+  const has = (name: string) => headers.some((h) => h.enabled && h.name.trim().toLowerCase() === name.toLowerCase());
+  switch (auth.type) {
+    case "bearer":
+      if (!has("authorization")) headers.push({ name: "Authorization", value: `Bearer ${auth.token}`, enabled: true });
+      return url;
+    case "basic":
+      if (!has("authorization")) {
+        headers.push({ name: "Authorization", value: `Basic ${base64Utf8(`${auth.username}:${auth.password}`)}`, enabled: true });
+      }
+      return url;
+    case "apiKey": {
+      if (auth.in === "header") {
+        if (!has(auth.key)) headers.push({ name: auth.key, value: auth.value, enabled: true });
+        return url;
+      }
+      const hashAt = url.indexOf("#");
+      const base = hashAt >= 0 ? url.slice(0, hashAt) : url;
+      const hash = hashAt >= 0 ? url.slice(hashAt) : "";
+      const pair = `${encodeKeepingVars(auth.key)}=${encodeKeepingVars(auth.value)}`;
+      return `${base}${base.includes("?") ? "&" : "?"}${pair}${hash}`;
+    }
+    default:
+      return url;
+  }
+}
+
+/** Applies `resolve` to every text field of the auth. */
+export function resolveAuth(auth: Auth, resolve: (text: string) => string): Auth {
+  switch (auth.type) {
+    case "bearer":
+      return { ...auth, token: resolve(auth.token) };
+    case "basic":
+      return { ...auth, username: resolve(auth.username), password: resolve(auth.password) };
+    case "apiKey":
+      return { ...auth, key: resolve(auth.key), value: resolve(auth.value) };
+    default:
+      return auth;
+  }
+}
+
 export interface HttpRequest {
   method: HttpMethod;
   url: string;
@@ -27,6 +102,8 @@ export interface HttpRequest {
   disabledParams: Param[];
   /** Values for `:name` path segments. */
   pathParams: Param[];
+  /** Own auth; `null`/missing = inherit from the folder. */
+  auth?: Auth | null;
 }
 
 export interface HttpResponse {
@@ -76,6 +153,8 @@ export async function sendHttp(
     ),
     body: request.body === null ? null : resolveText(request.body, vars, missing),
   };
+  const auth = request.auth ? resolveAuth(request.auth, (text) => resolveText(text, vars, missing)) : null;
+  resolved.url = applyAuth(resolved.url, resolved.headers, auth);
   if (missing.size) {
     throw { kind: "unresolved", message: [...missing].sort().join(", ") } satisfies SendError;
   }

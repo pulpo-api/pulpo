@@ -10,7 +10,7 @@
 //! ```
 //! Pulpo always writes these files in one canonical form so diffs stay small.
 
-use crate::http::{Header, HttpRequest, Param};
+use crate::http::{ApiKeyLocation, Auth, Header, HttpRequest, Param};
 use crate::{HttpMethod, Protocol};
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -129,6 +129,9 @@ pub enum TreeNode {
         id: String,
         name: String,
         children: Vec<TreeNode>,
+        /// Auth for the requests inside (`None` = inherit from the parent).
+        #[serde(default)]
+        auth: Option<Auth>,
     },
     Request(RequestEntry),
 }
@@ -140,6 +143,9 @@ pub struct Workspace {
     pub root: String,
     pub name: String,
     pub tree: Vec<TreeNode>,
+    /// Auth for every request of the workspace, unless a folder or request says otherwise.
+    #[serde(default)]
+    pub auth: Option<Auth>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -177,6 +183,8 @@ fn io_error(path: &Path, err: std::io::Error) -> CollectionError {
 struct WorkspaceFileV1 {
     version: u32,
     name: String,
+    #[serde(default)]
+    auth: Option<Auth>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -184,6 +192,8 @@ struct WorkspaceFileV1 {
 struct FolderFileV1 {
     version: u32,
     name: String,
+    #[serde(default)]
+    auth: Option<Auth>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -205,6 +215,8 @@ struct RequestFileV1 {
     path_params: Vec<Param>,
     #[serde(default)]
     disabled_params: Vec<Param>,
+    #[serde(default)]
+    auth: Option<Auth>,
 }
 
 fn check_version(version: u32, path: &Path) -> Result<(), CollectionError> {
@@ -247,12 +259,55 @@ pub(crate) fn quote(value: &str) -> String {
     out
 }
 
-fn workspace_yaml(name: &str) -> String {
-    format!("version: {FORMAT_VERSION}\nname: {}\n", quote(name))
+/// Writes an `auth:` block (nothing when `auth` is None = inherit).
+fn auth_yaml(auth: Option<&Auth>) -> String {
+    let Some(auth) = auth else {
+        return String::new();
+    };
+    let mut out = String::from("auth:\n");
+    match auth {
+        Auth::None => out.push_str("  type: \"none\"\n"),
+        Auth::Bearer { token } => {
+            out.push_str("  type: \"bearer\"\n");
+            out.push_str(&format!("  token: {}\n", quote(token)));
+        }
+        Auth::Basic { username, password } => {
+            out.push_str("  type: \"basic\"\n");
+            out.push_str(&format!("  username: {}\n", quote(username)));
+            out.push_str(&format!("  password: {}\n", quote(password)));
+        }
+        Auth::ApiKey {
+            key,
+            value,
+            location,
+        } => {
+            out.push_str("  type: \"apiKey\"\n");
+            out.push_str(&format!("  key: {}\n", quote(key)));
+            out.push_str(&format!("  value: {}\n", quote(value)));
+            let place = match location {
+                ApiKeyLocation::Header => "header",
+                ApiKeyLocation::Query => "query",
+            };
+            out.push_str(&format!("  in: {}\n", quote(place)));
+        }
+    }
+    out
 }
 
-fn folder_yaml(name: &str) -> String {
-    format!("version: {FORMAT_VERSION}\nname: {}\n", quote(name))
+fn workspace_yaml(name: &str, auth: Option<&Auth>) -> String {
+    format!(
+        "version: {FORMAT_VERSION}\nname: {}\n{}",
+        quote(name),
+        auth_yaml(auth)
+    )
+}
+
+fn folder_yaml(name: &str, auth: Option<&Auth>) -> String {
+    format!(
+        "version: {FORMAT_VERSION}\nname: {}\n{}",
+        quote(name),
+        auth_yaml(auth)
+    )
 }
 
 fn request_yaml(entry: &RequestEntry, body: Option<BodyKind>) -> String {
@@ -289,6 +344,7 @@ fn request_yaml(entry: &RequestEntry, body: Option<BodyKind>) -> String {
             }
         }
     }
+    out.push_str(&auth_yaml(entry.request.auth.as_ref()));
     if let Some(kind) = body {
         out.push_str(&format!("body: {}\n", quote(kind.as_str())));
     }
@@ -385,6 +441,66 @@ pub fn save_folder_scripts(
     write_scripts(&dir.join(FOLDER_FILE), FOLDER_SCRIPT_STEM, scripts)
 }
 
+/// Auth set on a folder (`""` = the workspace, from `pulpo.yaml`). `None` = not set.
+pub fn folder_auth(root: &Path, folder_id: &str) -> Result<Option<Auth>, CollectionError> {
+    if folder_id.is_empty() {
+        let file = root.join(WORKSPACE_FILE);
+        let parsed: WorkspaceFileV1 = parse_yaml(&file)?;
+        return Ok(parsed.auth);
+    }
+    let file = resolve(root, folder_id)?.join(FOLDER_FILE);
+    if !file.is_file() {
+        return Ok(None);
+    }
+    let parsed: FolderFileV1 = parse_yaml(&file)?;
+    Ok(parsed.auth)
+}
+
+/// Sets (or clears, with `None`) the auth of a folder (`""` = the workspace).
+pub fn save_folder_auth(
+    root: &Path,
+    folder_id: &str,
+    auth: Option<&Auth>,
+) -> Result<(), CollectionError> {
+    if folder_id.is_empty() {
+        let file = root.join(WORKSPACE_FILE);
+        let parsed: WorkspaceFileV1 = parse_yaml(&file)?;
+        return fs::write(&file, workspace_yaml(&parsed.name, auth))
+            .map_err(|e| io_error(&file, e));
+    }
+    let dir = resolve(root, folder_id)?;
+    if !dir.is_dir() {
+        return Err(CollectionError::InvalidPath(folder_id.to_string()));
+    }
+    let file = dir.join(FOLDER_FILE);
+    let name = if file.is_file() {
+        let parsed: FolderFileV1 = parse_yaml(&file)?;
+        parsed.name
+    } else {
+        dir.file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    };
+    fs::write(&file, folder_yaml(&name, auth)).map_err(|e| io_error(&file, e))
+}
+
+/// The auth a request really uses: its own, or the nearest folder's going up to the
+/// workspace. Returns the auth and where it comes from (request id, folder id or "").
+pub fn effective_auth(
+    root: &Path,
+    entry: &RequestEntry,
+) -> Result<(Auth, String), CollectionError> {
+    if let Some(auth) = &entry.request.auth {
+        return Ok((auth.clone(), entry.id.clone()));
+    }
+    for folder in ancestor_folders(&entry.id).into_iter().rev() {
+        if let Some(auth) = folder_auth(root, &folder)? {
+            return Ok((auth, folder));
+        }
+    }
+    Ok((Auth::None, String::new()))
+}
+
 /// The folders a request lives in, from the workspace root down: `["", "a", "a/b"]`.
 pub fn ancestor_folders(request_id: &str) -> Vec<String> {
     let mut folders = vec![String::new()];
@@ -454,7 +570,7 @@ pub fn init_workspace(root: &Path, name: &str) -> Result<(), CollectionError> {
         ));
     }
     fs::create_dir_all(root).map_err(|e| io_error(root, e))?;
-    fs::write(&file, workspace_yaml(name)).map_err(|e| io_error(&file, e))
+    fs::write(&file, workspace_yaml(name, None)).map_err(|e| io_error(&file, e))
 }
 
 /// Reads the whole workspace tree.
@@ -469,6 +585,7 @@ pub fn load_workspace(root: &Path) -> Result<Workspace, CollectionError> {
         root: root.display().to_string(),
         name: workspace.name,
         tree: load_dir(root, root)?,
+        auth: workspace.auth,
     })
 }
 
@@ -488,17 +605,18 @@ fn load_dir(root: &Path, dir: &Path) -> Result<Vec<TreeNode>, CollectionError> {
                 continue;
             }
             let folder_file = path.join(FOLDER_FILE);
-            let name = if folder_file.is_file() {
+            let (name, auth) = if folder_file.is_file() {
                 let folder: FolderFileV1 = parse_yaml(&folder_file)?;
                 check_version(folder.version, &folder_file)?;
-                folder.name
+                (folder.name, folder.auth)
             } else {
-                file_name.clone()
+                (file_name.clone(), None)
             };
             nodes.push(TreeNode::Folder {
                 id: relative_id(root, &path),
                 name,
                 children: load_dir(root, &path)?,
+                auth,
             });
         } else if file_name.ends_with(REQUEST_SUFFIX) {
             nodes.push(TreeNode::Request(load_request_file(root, &path)?));
@@ -539,6 +657,7 @@ fn load_request_file(root: &Path, path: &Path) -> Result<RequestEntry, Collectio
             timeout_ms: file.timeout_ms,
             disabled_params: file.disabled_params,
             path_params: file.path_params,
+            auth: file.auth,
         },
         scripts: read_scripts(path, &stem_of(path))?,
     })
@@ -617,7 +736,7 @@ pub fn create_folder(root: &Path, parent_id: &str, name: &str) -> Result<String,
     let dir = parent.join(format!("{:02}-{}", next_order(&parent)?, slugify(name)));
     fs::create_dir_all(&dir).map_err(|e| io_error(&dir, e))?;
     let file = dir.join(FOLDER_FILE);
-    fs::write(&file, folder_yaml(name)).map_err(|e| io_error(&file, e))?;
+    fs::write(&file, folder_yaml(name, None)).map_err(|e| io_error(&file, e))?;
     Ok(relative_id(root, &dir))
 }
 
@@ -642,7 +761,7 @@ pub fn format_workspace(root: &Path, check: bool) -> Result<Vec<String>, Collect
     let ws_file = root.join(WORKSPACE_FILE);
     rewrite(
         &ws_file,
-        &workspace_yaml(&workspace.name),
+        &workspace_yaml(&workspace.name, workspace.auth.as_ref()),
         check,
         root,
         &mut changed,
@@ -660,10 +779,21 @@ fn format_nodes(
 ) -> Result<(), CollectionError> {
     for node in nodes {
         match node {
-            TreeNode::Folder { id, name, children } => {
+            TreeNode::Folder {
+                id,
+                name,
+                children,
+                auth,
+            } => {
                 let file = resolve(root, id)?.join(FOLDER_FILE);
                 if file.is_file() {
-                    rewrite(&file, &folder_yaml(name), check, root, changed)?;
+                    rewrite(
+                        &file,
+                        &folder_yaml(name, auth.as_ref()),
+                        check,
+                        root,
+                        changed,
+                    )?;
                 }
                 format_nodes(root, children, check, changed)?;
             }
@@ -735,6 +865,9 @@ mod tests {
                 timeout_ms: Some(5000),
                 disabled_params: vec![Param::new("debug", "true")],
                 path_params: vec![Param::new("tenant", "{{tenantId}}")],
+                auth: Some(Auth::Bearer {
+                    token: "{{token}}".into(),
+                }),
             },
             scripts: Scripts::default(),
         }
@@ -826,6 +959,7 @@ mod tests {
                  disabledParams:\n  - name: \"debug\"\n    value: \"true\"\n\
                  headers:\n  - name: \"Content-Type\"\n    value: \"application/json\"\n\
                  \x20 - name: \"X-Debug\"\n    value: \"yes\\tplease\"\n    enabled: false\n\
+                 auth:\n  type: \"bearer\"\n  token: \"{{{{token}}}}\"\n\
                  body: \"json\"\n\
                  timeoutMs: 5000\n"
             )
@@ -844,6 +978,62 @@ mod tests {
             load_request(ws.path(), &entry.id).unwrap().request.body,
             None
         );
+    }
+
+    #[test]
+    fn inherits_auth_from_the_nearest_folder() {
+        let ws = workspace();
+        let orders = create_folder(ws.path(), "", "Orders").unwrap();
+        let public = create_folder(ws.path(), &orders, "Public").unwrap();
+        let mut entry = create_request(ws.path(), &public, "Health").unwrap();
+
+        assert_eq!(
+            effective_auth(ws.path(), &entry).unwrap(),
+            (Auth::None, String::new())
+        );
+
+        let bearer = Auth::Bearer {
+            token: "{{token}}".into(),
+        };
+        save_folder_auth(ws.path(), "", Some(&bearer)).unwrap();
+        assert_eq!(
+            effective_auth(ws.path(), &entry).unwrap(),
+            (bearer.clone(), String::new())
+        );
+
+        let key = Auth::ApiKey {
+            key: "X-Key".into(),
+            value: "{{key}}".into(),
+            location: ApiKeyLocation::Header,
+        };
+        save_folder_auth(ws.path(), &orders, Some(&key)).unwrap();
+        assert_eq!(
+            effective_auth(ws.path(), &entry).unwrap(),
+            (key, orders.clone())
+        );
+
+        save_folder_auth(ws.path(), &public, Some(&Auth::None)).unwrap();
+        assert_eq!(
+            effective_auth(ws.path(), &entry).unwrap(),
+            (Auth::None, public.clone()),
+            "none stops inheritance"
+        );
+
+        entry.request.auth = Some(Auth::Basic {
+            username: "u".into(),
+            password: "{{pw}}".into(),
+        });
+        save_request(ws.path(), &entry).unwrap();
+        let loaded = load_request(ws.path(), &entry.id).unwrap();
+        assert_eq!(effective_auth(ws.path(), &loaded).unwrap().1, entry.id);
+
+        let tree = load_workspace(ws.path()).unwrap();
+        assert_eq!(tree.auth, Some(bearer));
+        assert!(format_workspace(ws.path(), true).unwrap().is_empty());
+        assert_eq!(folder_auth(ws.path(), &public).unwrap(), Some(Auth::None));
+        save_folder_auth(ws.path(), &public, None).unwrap();
+        assert_eq!(folder_auth(ws.path(), &public).unwrap(), None);
+        assert_eq!(load_workspace(ws.path()).unwrap().name, "Demo");
     }
 
     #[test]

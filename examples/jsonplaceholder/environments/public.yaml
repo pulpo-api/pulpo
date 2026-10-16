@@ -5,3 +5,5 @@ variables:
     value: "https://jsonplaceholder.typicode.com"
   - name: "userId"
     value: "1"
+  - name: "token"
+    value: "demo-token"

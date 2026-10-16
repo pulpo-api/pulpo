@@ -43,7 +43,7 @@ COMMANDS:
     help       Print this help
 
 Secrets can also come from PULPO_SECRET_<NAME> variables (handy in CI).
-More commands (run, scan) are coming. See https://github.com/pulpo-api/pulpo";
+More commands (scan, gRPC, WebSocket...) are coming. See https://github.com/pulpo-api/pulpo";
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();

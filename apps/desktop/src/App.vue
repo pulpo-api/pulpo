@@ -7,10 +7,11 @@ import EnvironmentPanel from "./components/EnvironmentPanel.vue";
 import ImportDialog from "./components/ImportDialog.vue";
 import { resolveText } from "./variables";
 import { applyPathParams } from "./params";
-import { asSendError, coreInfo, type CoreInfo, type HttpResponse, type SendError } from "./core";
+import { applyAuth, asSendError, coreInfo, resolveAuth, type CoreInfo, type HttpResponse, type SendError } from "./core";
 import {
   asCollectionError,
   backend,
+  inheritedAuth,
   toEntry,
   type CollectionError,
   type Environment,
@@ -104,11 +105,17 @@ const previewVars = computed(() => {
   return vars;
 });
 
+const selectedInheritedAuth = computed(() =>
+  workspace.value && selected.value
+    ? inheritedAuth(workspace.value, selected.value.id)
+    : { auth: { type: "none" as const }, sourceId: "", sourceName: "", found: false },
+);
+
 const preview = computed(() => {
   const node = selected.value;
   if (!node) return null;
   const missing = new Set<string>();
-  const url = applyPathParams(
+  const pathed = applyPathParams(
     resolveText(node.request.url, previewVars.value, missing, true),
     node.request.pathParams.map((p) => ({ name: p.name, value: resolveText(p.value, previewVars.value, missing, true) })),
   );
@@ -117,6 +124,11 @@ const preview = computed(() => {
     resolveText(h.value, previewVars.value, missing, true);
   }
   if (node.request.body) resolveText(node.request.body, previewVars.value, missing, true);
+  const auth = resolveAuth(node.request.auth ?? selectedInheritedAuth.value.auth, (text) =>
+    resolveText(text, previewVars.value, missing, true),
+  );
+  // Only the URL is shown, so headers added by the auth are thrown away.
+  const url = applyAuth(pathed, [...node.request.headers], auth);
   return { url, changed: url !== node.request.url, missing: [...missing].sort() };
 });
 
@@ -500,6 +512,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         :sending="result.sending"
         :supported="selected.protocol === 'http'"
         :preview="preview"
+        :inherited-auth="selectedInheritedAuth"
         @send="send"
         @save="save()"
       />

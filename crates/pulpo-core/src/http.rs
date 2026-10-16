@@ -48,6 +48,107 @@ impl Param {
     }
 }
 
+/// Where an API key goes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ApiKeyLocation {
+    #[default]
+    Header,
+    Query,
+}
+
+/// How a request authenticates. In files and requests, `None` means "inherit from the folder".
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum Auth {
+    /// No authentication; also stops inheritance from parent folders.
+    None,
+    Bearer {
+        token: String,
+    },
+    Basic {
+        username: String,
+        #[serde(default)]
+        password: String,
+    },
+    ApiKey {
+        key: String,
+        value: String,
+        #[serde(default, rename = "in")]
+        location: ApiKeyLocation,
+    },
+}
+
+impl Auth {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Auth::None => "No auth",
+            Auth::Bearer { .. } => "Bearer token",
+            Auth::Basic { .. } => "Basic",
+            Auth::ApiKey { .. } => "API key",
+        }
+    }
+}
+
+fn encode_query(value: &str) -> String {
+    let mut out = String::new();
+    for b in value.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// Adds the auth to a (resolved) request. A header written by hand wins over the auth.
+pub fn apply_auth(url: &mut String, headers: &mut Vec<Header>, auth: &Auth) {
+    let has = |headers: &Vec<Header>, name: &str| {
+        headers
+            .iter()
+            .any(|h| h.enabled && h.name.eq_ignore_ascii_case(name))
+    };
+    match auth {
+        Auth::None => {}
+        Auth::Bearer { token } => {
+            if !has(headers, "authorization") {
+                headers.push(Header::new("Authorization", format!("Bearer {token}")));
+            }
+        }
+        Auth::Basic { username, password } => {
+            if !has(headers, "authorization") {
+                let encoded = crate::import::base64(format!("{username}:{password}").as_bytes());
+                headers.push(Header::new("Authorization", format!("Basic {encoded}")));
+            }
+        }
+        Auth::ApiKey {
+            key,
+            value,
+            location,
+        } => match location {
+            ApiKeyLocation::Header => {
+                if !has(headers, key) {
+                    headers.push(Header::new(key.clone(), value.clone()));
+                }
+            }
+            ApiKeyLocation::Query => {
+                let (base, hash) = match url.find('#') {
+                    Some(i) => (url[..i].to_string(), url[i..].to_string()),
+                    None => (url.clone(), String::new()),
+                };
+                let sep = if base.contains('?') { '&' } else { '?' };
+                *url = format!(
+                    "{base}{sep}{}={}{hash}",
+                    encode_query(key),
+                    encode_query(value)
+                );
+            }
+        },
+    }
+}
+
 /// An HTTP request ready to be sent. Variables must already be resolved.
 ///
 /// Enabled query params live in `url`; disabled ones are kept in `disabled_params` so the
@@ -67,6 +168,9 @@ pub struct HttpRequest {
     pub disabled_params: Vec<Param>,
     #[serde(default)]
     pub path_params: Vec<Param>,
+    /// `None` = inherit from the folder (resolved before sending).
+    #[serde(default)]
+    pub auth: Option<Auth>,
 }
 
 impl HttpRequest {
@@ -79,6 +183,7 @@ impl HttpRequest {
             timeout_ms: None,
             disabled_params: Vec::new(),
             path_params: Vec::new(),
+            auth: None,
         }
     }
 }
@@ -236,7 +341,11 @@ fn to_reqwest_method(method: HttpMethod) -> reqwest::Method {
 
 /// Sends the request and returns the response, whatever its status code.
 pub async fn send(request: &HttpRequest) -> Result<HttpResponse, SendError> {
-    let raw_url = apply_path_params(request.url.trim(), &request.path_params);
+    let mut raw_url = apply_path_params(request.url.trim(), &request.path_params);
+    let mut headers = request.headers.clone();
+    if let Some(auth) = &request.auth {
+        apply_auth(&mut raw_url, &mut headers, auth);
+    }
     let url = reqwest::Url::parse(&raw_url)
         .map_err(|e| SendError::InvalidUrl(format!("{raw_url}: {e}")))?;
     if !matches!(url.scheme(), "http" | "https") {
@@ -253,8 +362,7 @@ pub async fn send(request: &HttpRequest) -> Result<HttpResponse, SendError> {
         .build()?;
 
     let mut builder = client.request(to_reqwest_method(request.method), url);
-    for header in request
-        .headers
+    for header in headers
         .iter()
         .filter(|h| h.enabled && !h.name.trim().is_empty())
     {
@@ -300,6 +408,52 @@ pub async fn send(request: &HttpRequest) -> Result<HttpResponse, SendError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn applies_each_kind_of_auth() {
+        let mut url = "https://api.test/x?a=1#top".to_string();
+        let mut headers = vec![];
+        apply_auth(&mut url, &mut headers, &Auth::Bearer { token: "t".into() });
+        assert_eq!(headers, vec![Header::new("Authorization", "Bearer t")]);
+
+        let mut headers = vec![];
+        apply_auth(
+            &mut url,
+            &mut headers,
+            &Auth::Basic {
+                username: "ana".into(),
+                password: "pw".into(),
+            },
+        );
+        assert_eq!(headers[0].value, "Basic YW5hOnB3");
+
+        let mut headers = vec![Header::new("authorization", "Bearer by-hand")];
+        apply_auth(&mut url, &mut headers, &Auth::Bearer { token: "t".into() });
+        assert_eq!(headers.len(), 1, "a header written by hand wins");
+
+        let mut headers = vec![];
+        apply_auth(
+            &mut url,
+            &mut headers,
+            &Auth::ApiKey {
+                key: "X-Key".into(),
+                value: "k".into(),
+                location: ApiKeyLocation::Header,
+            },
+        );
+        assert_eq!(headers, vec![Header::new("X-Key", "k")]);
+
+        apply_auth(
+            &mut url,
+            &mut headers,
+            &Auth::ApiKey {
+                key: "api key".into(),
+                value: "a&b".into(),
+                location: ApiKeyLocation::Query,
+            },
+        );
+        assert_eq!(url, "https://api.test/x?a=1&api%20key=a%26b#top");
+    }
 
     #[test]
     fn finds_path_params_but_not_ports() {

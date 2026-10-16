@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { insideTauri, sendHttp, asSendError, type HttpRequest, type HttpResponse, type SendError } from "./core";
+import { insideTauri, sendHttp, asSendError, type Auth, type HttpRequest, type HttpResponse, type SendError } from "./core";
 import { sampleEnvironments, sampleWorkspace } from "./sample";
 
 export type Protocol = "http" | "graphql" | "grpc" | "websocket" | "soap" | "sse";
@@ -33,12 +33,46 @@ export interface RunReport {
   scriptErrors: string[];
 }
 
-export type TreeNode = ({ type: "request" } & RequestEntry) | { type: "folder"; id: string; name: string; children: TreeNode[] };
+export type TreeNode =
+  | ({ type: "request" } & RequestEntry)
+  | { type: "folder"; id: string; name: string; children: TreeNode[]; auth?: Auth | null };
 
 export interface Workspace {
   root: string;
   name: string;
   tree: TreeNode[];
+  /** Auth for every request unless a folder or the request sets its own. */
+  auth?: Auth | null;
+}
+
+/** Where a request's auth comes from when it does not set its own. */
+export interface InheritedAuth {
+  auth: Auth;
+  /** Folder id, or "" for the workspace (pulpo.yaml). */
+  sourceId: string;
+  sourceName: string;
+  /** False when nothing up the tree sets an auth. */
+  found: boolean;
+}
+
+/** The auth a request inherits: the nearest folder that sets one, else the workspace.
+ * Mirrors `effective_auth` in pulpo-core. */
+export function inheritedAuth(workspace: Workspace, requestId: string): InheritedAuth {
+  const parts = requestId.split("/").slice(0, -1);
+  const folders: { id: string; name: string; auth?: Auth | null }[] = [];
+  let nodes = workspace.tree;
+  for (let i = 0; i < parts.length; i++) {
+    const id = parts.slice(0, i + 1).join("/");
+    const folder = nodes.find((n): n is Extract<TreeNode, { type: "folder" }> => n.type === "folder" && n.id === id);
+    if (!folder) break;
+    folders.push(folder);
+    nodes = folder.children;
+  }
+  for (const folder of folders.reverse()) {
+    if (folder.auth) return { auth: folder.auth, sourceId: folder.id, sourceName: folder.name, found: true };
+  }
+  if (workspace.auth) return { auth: workspace.auth, sourceId: "", sourceName: workspace.name, found: true };
+  return { auth: { type: "none" }, sourceId: "", sourceName: workspace.name, found: false };
 }
 
 export interface Variable {
@@ -81,7 +115,7 @@ export function clone<T>(value: T): T {
 
 export function toEntry(node: Extract<TreeNode, { type: "request" }>): RequestEntry {
   const { id, name, protocol, request, scripts } = node;
-  return clone({ id, name, protocol, request, scripts: scripts ?? { pre: "", test: "" } });
+  return clone({ id, name, protocol, request: { ...request, auth: request.auth ?? null }, scripts: scripts ?? { pre: "", test: "" } });
 }
 
 /** Where the workspace lives: real files in the desktop app, memory in the browser preview. */
@@ -98,6 +132,8 @@ export interface WorkspaceBackend {
   saveEnvironment(root: string, env: Environment): Promise<void>;
   createEnvironment(root: string, name: string): Promise<Environment>;
   deleteEnvironment(root: string, id: string): Promise<void>;
+  /** Sets (or clears, with null) the auth of a folder; "" = the workspace. */
+  saveFolderAuth(root: string, folderId: string, auth: Auth | null): Promise<void>;
   /** Desktop only: imports a file (or pasted text) with the Rust importers. */
   importInto?(root: string, folderId: string, source: { path?: string; text?: string }): Promise<ImportSummary>;
   pickImportFile?(): Promise<string | null>;
@@ -124,6 +160,7 @@ const tauriBackend: WorkspaceBackend = {
   saveEnvironment: (root, env) => invoke<void>("save_environment", { root, env }),
   createEnvironment: (root, name) => invoke<Environment>("create_environment", { root, name }),
   deleteEnvironment: (root, id) => invoke<void>("delete_environment", { root, id }),
+  saveFolderAuth: (root, folderId, auth) => invoke<void>("save_folder_auth", { root, folderId, auth }),
   run: (root, entry, environmentId) => invoke<RunReport>("run_request", { root, entry, environmentId }),
   importInto: (root, folderId, source) => invoke<ImportSummary>("import_into", { root, folderId, ...source }),
   async pickImportFile() {
@@ -249,6 +286,22 @@ function memoryBackend(): WorkspaceBackend {
       const index = environments.findIndex((e) => e.id === id);
       if (index >= 0) environments.splice(index, 1);
     },
+    async saveFolderAuth(_root, folderId, auth) {
+      if (!folderId) {
+        workspace.auth = clone(auth);
+        return;
+      }
+      const find = (nodes: TreeNode[]): boolean =>
+        nodes.some((node) => {
+          if (node.type !== "folder") return false;
+          if (node.id === folderId) {
+            node.auth = clone(auth);
+            return true;
+          }
+          return find(node.children);
+        });
+      if (!find(workspace.tree)) throw { kind: "invalidPath", message: folderId } satisfies CollectionError;
+    },
     async run(_root, entry, environmentId) {
       const report: RunReport = {
         id: entry.id,
@@ -262,7 +315,8 @@ function memoryBackend(): WorkspaceBackend {
       const hasScripts = !!(entry.scripts.pre.trim() || entry.scripts.test.trim());
       if (hasScripts) report.scriptErrors.push("Scripts run in the desktop app; the browser preview only sends the request.");
       try {
-        report.response = await sendHttp(entry.request, {
+        const auth = entry.request.auth ?? inheritedAuth(workspace, entry.id).auth;
+        report.response = await sendHttp({ ...entry.request, auth }, {
           environmentId,
           browserVars: environmentId ? this.browserVariables!(environmentId) : {},
         });

@@ -50,6 +50,8 @@ export function sampleWorkspace(): Workspace {
         type: "folder",
         id: "02-users",
         name: "Users",
+        // Shows auth inheritance; JSONPlaceholder ignores the header, so a demo value is enough.
+        auth: { type: "bearer", token: "{{token}}" },
         children: [
           request("02-users/01-list-users.pulpo.yaml", "List users", {
             method: "GET",
@@ -69,6 +71,7 @@ export function sampleEnvironments(): Environment[] {
       variables: [
         { name: "base", value: "https://jsonplaceholder.typicode.com", secret: false, hasValue: true },
         { name: "userId", value: "1", secret: false, hasValue: true },
+        { name: "token", value: "demo-token", secret: false, hasValue: true },
       ],
     },
   ];

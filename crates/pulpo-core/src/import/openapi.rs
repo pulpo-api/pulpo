@@ -2,7 +2,7 @@
 
 use super::{ImportError, ImportFormat, ImportNode, ImportPlan};
 use crate::environment::{Environment, Variable};
-use crate::http::{Header, HttpRequest};
+use crate::http::{ApiKeyLocation, Auth, Header, HttpRequest};
 use crate::HttpMethod;
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
@@ -167,7 +167,8 @@ fn path_template(path: &str) -> String {
     out
 }
 
-fn bearer_schemes(doc: &Value) -> Vec<(String, Header)> {
+/// The security schemes Pulpo can express, by name, as auth that uses variables.
+fn auth_schemes(doc: &Value) -> Vec<(String, Auth)> {
     let mut schemes = Vec::new();
     if let Some(defs) = doc
         .pointer("/components/securitySchemes")
@@ -181,46 +182,55 @@ fn bearer_schemes(doc: &Value) -> Vec<(String, Header)> {
                 .and_then(|s| s.as_str())
                 .unwrap_or("")
                 .to_ascii_lowercase();
-            if (kind == "http" && scheme == "bearer") || kind == "oauth2" || kind == "openIdConnect"
+            let auth = if (kind == "http" && scheme == "bearer")
+                || kind == "oauth2"
+                || kind == "openIdConnect"
             {
-                schemes.push((
-                    name.clone(),
-                    Header::new("Authorization", "Bearer {{token}}"),
-                ));
-            } else if kind == "apiKey" && def.get("in").and_then(|i| i.as_str()) == Some("header") {
-                let header = def
-                    .get("name")
-                    .and_then(|n| n.as_str())
-                    .unwrap_or("X-API-Key");
-                schemes.push((name.clone(), Header::new(header, "{{apiKey}}")));
+                Auth::Bearer {
+                    token: "{{token}}".into(),
+                }
             } else if kind == "http" && scheme == "basic" {
-                schemes.push((
-                    name.clone(),
-                    Header::new("Authorization", "Basic {{basicAuth}}"),
-                ));
-            }
+                Auth::Basic {
+                    username: "{{username}}".into(),
+                    password: "{{password}}".into(),
+                }
+            } else if kind == "apiKey" {
+                let location = match def.get("in").and_then(|i| i.as_str()) {
+                    Some("header") => ApiKeyLocation::Header,
+                    Some("query") => ApiKeyLocation::Query,
+                    _ => continue,
+                };
+                Auth::ApiKey {
+                    key: def
+                        .get("name")
+                        .and_then(|n| n.as_str())
+                        .unwrap_or("X-API-Key")
+                        .to_string(),
+                    value: "{{apiKey}}".into(),
+                    location,
+                }
+            } else {
+                continue;
+            };
+            schemes.push((name.clone(), auth));
         }
     }
     schemes
 }
 
-fn security_headers(doc: &Value, operation: &Value, schemes: &[(String, Header)]) -> Vec<Header> {
-    let requirements = operation.get("security").or_else(|| doc.get("security"));
-    let Some(list) = requirements.and_then(|r| r.as_array()) else {
-        return Vec::new();
-    };
+/// The auth of a `security` requirement list: `[]` means none; otherwise the first
+/// scheme of the first requirement that Pulpo knows. `None` when not given.
+fn security_auth(requirements: Option<&Value>, schemes: &[(String, Auth)]) -> Option<Auth> {
+    let list = requirements?.as_array()?;
     let Some(first) = list.first().and_then(|r| r.as_object()) else {
-        return Vec::new();
+        return Some(Auth::None);
     };
-    first
-        .keys()
-        .filter_map(|name| {
-            schemes
-                .iter()
-                .find(|(n, _)| n == name)
-                .map(|(_, h)| h.clone())
-        })
-        .collect()
+    first.keys().find_map(|name| {
+        schemes
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, auth)| auth.clone())
+    })
 }
 
 /// Replaces `$ref`s that point to other files (`common.yml#/components/schemas/X`)
@@ -329,7 +339,9 @@ pub(super) fn document(doc: &Value) -> Result<ImportPlan, ImportError> {
         .unwrap_or("Imported API")
         .to_string();
     let mut warnings = Vec::new();
-    let schemes = bearer_schemes(doc);
+    let schemes = auth_schemes(doc);
+    let folder_auth = security_auth(doc.get("security"), &schemes);
+    let mut used_auth: Vec<Auth> = folder_auth.iter().cloned().collect();
 
     let mut folders: Vec<(String, Vec<ImportNode>)> = Vec::new();
     let mut add =
@@ -338,7 +350,6 @@ pub(super) fn document(doc: &Value) -> Result<ImportPlan, ImportError> {
             None => folders.push((folder, vec![node])),
         };
 
-    let mut used_auth = Vec::new();
     for (path, item) in paths {
         let item = deref(doc, item);
         let shared_params: Vec<Value> = item
@@ -380,11 +391,13 @@ pub(super) fn document(doc: &Value) -> Result<ImportPlan, ImportError> {
                     _ => {}
                 }
             }
-            for header in security_headers(doc, operation, &schemes) {
-                if !used_auth.contains(&header.value) {
-                    used_auth.push(header.value.clone());
+            // Only an operation that differs from the document's security gets its own auth.
+            let auth = security_auth(operation.get("security"), &schemes)
+                .filter(|auth| Some(auth) != folder_auth.as_ref());
+            if let Some(auth) = &auth {
+                if !used_auth.contains(auth) {
+                    used_auth.push(auth.clone());
                 }
-                headers.insert(0, header);
             }
             let body = request_body(doc, operation, &mut headers);
             let mut url = format!("{{{{baseUrl}}}}{}", path_template(path));
@@ -424,6 +437,7 @@ pub(super) fn document(doc: &Value) -> Result<ImportPlan, ImportError> {
                         timeout_ms: None,
                         disabled_params: Vec::new(),
                         path_params: Vec::new(),
+                        auth,
                     },
                     scripts: Default::default(),
                 },
@@ -460,16 +474,21 @@ pub(super) fn document(doc: &Value) -> Result<ImportPlan, ImportError> {
         secret: false,
         has_value: false,
     }];
-    for (needle, name) in [
-        ("{{token}}", "token"),
-        ("{{apiKey}}", "apiKey"),
-        ("{{basicAuth}}", "basicAuth"),
-    ] {
-        if used_auth.iter().any(|v| v.contains(needle)) {
+    let used: Vec<&str> = used_auth
+        .iter()
+        .flat_map(|auth| match auth {
+            Auth::Bearer { .. } => vec!["token"],
+            Auth::Basic { .. } => vec!["username", "password"],
+            Auth::ApiKey { .. } => vec!["apiKey"],
+            Auth::None => vec![],
+        })
+        .collect();
+    for name in ["token", "apiKey", "username", "password"] {
+        if used.contains(&name) {
             variables.push(Variable {
                 name: name.into(),
                 value: String::new(),
-                secret: true,
+                secret: name != "username",
                 has_value: false,
             });
         }
@@ -479,12 +498,14 @@ pub(super) fn document(doc: &Value) -> Result<ImportPlan, ImportError> {
         format: ImportFormat::OpenApi,
         folder: Some(title.clone()),
         folder_scripts: Default::default(),
+        folder_auth,
         nodes: folders
             .into_iter()
             .map(|(name, children)| ImportNode::Folder {
                 name,
                 children,
                 scripts: Default::default(),
+                auth: None,
             })
             .collect(),
         environments: vec![Environment {
@@ -600,9 +621,12 @@ components:
         assert_eq!(name, "List orders");
         assert_eq!(request.url, "{{baseUrl}}/orders?status={{status}}");
         assert_eq!(
-            request.headers[0],
-            Header::new("Authorization", "Bearer {{token}}")
+            plan.folder_auth,
+            Some(Auth::Bearer {
+                token: "{{token}}".into()
+            })
         );
+        assert_eq!(request.auth, None, "inherits the document's security");
         assert!(request
             .headers
             .iter()
@@ -623,10 +647,7 @@ components:
         };
         assert_eq!(name, "DELETE /orders/{orderId}");
         assert_eq!(request.url, "{{baseUrl}}/orders/{{orderId}}");
-        assert!(
-            !request.headers.iter().any(|h| h.name == "Authorization"),
-            "security: [] disables auth"
-        );
+        assert_eq!(request.auth, Some(Auth::None), "security: [] disables auth");
 
         let env = &plan.environments[0];
         assert_eq!(env.variables[0].value, "https://dev.shop.test/api");

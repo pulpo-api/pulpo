@@ -120,14 +120,24 @@ pub async fn run_entry(
         }
     };
 
+    // The request carries the auth it really uses (its own or a folder's), so scripts
+    // see it and `send` applies it.
+    let mut effective = entry.request.clone();
+    match collection::effective_auth(root, entry) {
+        Ok((auth, _)) => effective.auth = Some(auth),
+        Err(e) => {
+            report.error = Some(SendError::Other(e.to_string()));
+            return report;
+        }
+    }
+
     let context = ScriptContext {
         request_name: &entry.name,
         environment_name: &environment_name,
         env: &env,
         local: &local_values,
     };
-    let (request, outcome) =
-        script::run_phase(Phase::PreRequest, &pre, &context, &entry.request, None);
+    let (request, outcome) = script::run_phase(Phase::PreRequest, &pre, &context, &effective, None);
     let mut all_changes = outcome.changes.clone();
     merge(&mut local_values, &outcome.changes);
     report.logs.extend(outcome.logs);
@@ -261,6 +271,47 @@ mod tests {
             request,
             scripts,
         }
+    }
+
+    #[tokio::test]
+    async fn sends_the_auth_inherited_from_the_workspace() {
+        let base = server(1).await;
+        let ws = tempfile::tempdir().unwrap();
+        init_workspace(ws.path(), "Demo").unwrap();
+        crate::collection::save_folder_auth(
+            ws.path(),
+            "",
+            Some(&crate::http::Auth::Basic {
+                username: "{{user}}".into(),
+                password: "pw".into(),
+            }),
+        )
+        .unwrap();
+        let request = RequestEntry {
+            id: "01-me.pulpo.yaml".into(),
+            name: "me".into(),
+            protocol: Protocol::Http,
+            request: HttpRequest::new(HttpMethod::Get, format!("{base}/me")),
+            scripts: Scripts::default(),
+        };
+        save_request(ws.path(), &request).unwrap();
+        local::apply_changes(
+            ws.path(),
+            None,
+            &HashMap::from([("user".to_string(), Some("ana".to_string()))]),
+        )
+        .unwrap();
+
+        let report = run_entry(ws.path(), &request, None, &MemoryStore::default()).await;
+        assert!(report.passed(), "{report:?}");
+        assert!(
+            report
+                .response
+                .unwrap()
+                .body
+                .contains(r#""auth":"Basic YW5hOnB3""#),
+            "variables are resolved before encoding"
+        );
     }
 
     #[tokio::test]

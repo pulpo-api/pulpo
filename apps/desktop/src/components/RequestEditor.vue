@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { HTTP_METHODS, type HttpRequest } from "../core";
-import type { Scripts } from "../workspace";
+import type { InheritedAuth, Scripts } from "../workspace";
+import AuthEditor from "./AuthEditor.vue";
 import CodeEditor, { type Language } from "./CodeEditor.vue";
 import ParamsEditor from "./ParamsEditor.vue";
 import { pathParamNames, splitUrl } from "../params";
@@ -12,10 +13,11 @@ const props = defineProps<{
   sending: boolean;
   supported: boolean;
   preview: { url: string; changed: boolean; missing: string[] } | null;
+  inheritedAuth: InheritedAuth;
 }>();
 const emit = defineEmits<{ send: []; save: [] }>();
 
-const tab = ref<"params" | "body" | "headers" | "pre" | "test">(
+const tab = ref<"params" | "auth" | "body" | "headers" | "pre" | "test">(
   props.request.method === "GET" || splitUrl(props.request.url).params.length ? "params" : "body",
 );
 const paramCount = computed(() => splitUrl(props.request.url).params.length + pathParamNames(props.request.url).length);
@@ -35,6 +37,19 @@ const body = computed({
   set: (value: string) => {
     props.request.body = value || null;
   },
+});
+const auth = computed({
+  get: () => props.request.auth ?? null,
+  set: (value) => {
+    props.request.auth = value;
+  },
+});
+const SHORT: Record<string, string> = { bearer: "Bearer", basic: "Basic", apiKey: "Key" };
+const authBadge = computed(() => {
+  const own = props.request.auth;
+  if (own) return SHORT[own.type] ?? "";
+  const inherited = props.inheritedAuth;
+  return inherited.found && SHORT[inherited.auth.type] ? `${SHORT[inherited.auth.type]} ↑` : "";
 });
 const activeHeaders = computed(() => props.request.headers.filter((h) => h.enabled && h.name.trim()).length);
 
@@ -79,6 +94,9 @@ function formatBody() {
       <button :class="{ on: tab === 'params' }" @click="tab = 'params'">
         Params <span v-if="paramCount" class="count">{{ paramCount }}</span>
       </button>
+      <button :class="{ on: tab === 'auth' }" @click="tab = 'auth'">
+        Auth <span v-if="authBadge" class="count" :title="request.auth ? 'Set on this request' : 'Inherited from a parent'">{{ authBadge }}</span>
+      </button>
       <button :class="{ on: tab === 'body' }" @click="tab = 'body'">Body</button>
       <button :class="{ on: tab === 'headers' }" @click="tab = 'headers'">
         Headers <span v-if="activeHeaders" class="count">{{ activeHeaders }}</span>
@@ -95,6 +113,8 @@ function formatBody() {
     </div>
 
     <ParamsEditor v-if="tab === 'params'" :request="request" />
+
+    <AuthEditor v-else-if="tab === 'auth'" v-model="auth" :inherited="inheritedAuth" />
 
     <template v-else-if="tab === 'body'">
       <CodeEditor
@@ -231,6 +251,12 @@ textarea:focus,
   align-items: center;
   gap: 4px;
   margin: 12px 0 8px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.tabs > * {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 .tabs button {
   border: 0;

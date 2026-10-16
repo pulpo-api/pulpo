@@ -1,7 +1,7 @@
 //! curl commands, as copied from a terminal, docs or the browser's "Copy as cURL".
 
-use super::{base64, ImportError, ImportFormat, ImportNode, ImportPlan};
-use crate::http::{Header, HttpRequest};
+use super::{ImportError, ImportFormat, ImportNode, ImportPlan};
+use crate::http::{Auth, Header, HttpRequest};
 use crate::HttpMethod;
 
 /// Splits a shell command into words. Handles single and double quotes, backslash
@@ -119,6 +119,7 @@ pub fn parse_curl(command: &str) -> Result<(HttpRequest, Vec<String>), ImportErr
     let mut method: Option<String> = None;
     let mut url: Option<String> = None;
     let mut headers: Vec<Header> = Vec::new();
+    let mut auth = None;
     let mut data: Vec<String> = Vec::new();
     let mut get_mode = false;
     let mut head = false;
@@ -192,11 +193,13 @@ pub fn parse_curl(command: &str) -> Result<(HttpRequest, Vec<String>), ImportErr
             }
             "-u" | "--user" => {
                 let credentials = value(&mut args)?;
-                set_header(
-                    &mut headers,
-                    "Authorization",
-                    format!("Basic {}", base64(credentials.as_bytes())),
-                );
+                let (username, password) = credentials
+                    .split_once(':')
+                    .unwrap_or((credentials.as_str(), ""));
+                auth = Some(Auth::Basic {
+                    username: username.to_string(),
+                    password: password.to_string(),
+                });
             }
             "-A" | "--user-agent" => set_header(&mut headers, "User-Agent", value(&mut args)?),
             "-e" | "--referer" => set_header(&mut headers, "Referer", value(&mut args)?),
@@ -273,6 +276,7 @@ pub fn parse_curl(command: &str) -> Result<(HttpRequest, Vec<String>), ImportErr
             timeout_ms: None,
             disabled_params: Vec::new(),
             path_params: Vec::new(),
+            auth,
         },
         warnings,
     ))
@@ -297,6 +301,7 @@ pub(super) fn plan(command: &str) -> Result<ImportPlan, ImportError> {
         format: ImportFormat::Curl,
         folder: None,
         folder_scripts: Default::default(),
+        folder_auth: None,
         nodes: vec![ImportNode::Request {
             name: name_for(&request),
             request,
@@ -347,7 +352,14 @@ mod tests {
             .headers
             .iter()
             .any(|h| h.name == "Content-Type" && h.value == "application/json"));
-        assert!(req.headers.iter().any(|h| h.value == "Basic YW5hOnB3"));
+        assert_eq!(
+            req.auth,
+            Some(Auth::Basic {
+                username: "ana".into(),
+                password: "pw".into()
+            })
+        );
+        assert!(!req.headers.iter().any(|h| h.name == "Authorization"));
 
         let (req, _) = parse_curl("curl -G https://x.test/search -d q=pulpo -d page=2").unwrap();
         assert_eq!(req.method, HttpMethod::Get);

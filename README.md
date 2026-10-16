@@ -82,6 +82,20 @@ pulpo send GET "{{base}}/health" -w my-api -e local
 PULPO_SECRET_TOKEN=... pulpo send ...         # in CI, secrets come from env vars
 ```
 
+## Auth
+
+Set auth once on a folder (`_folder.yaml`) or the whole workspace (`pulpo.yaml`) and every request inside inherits it. A request or subfolder can set its own, or `type: "none"` to send nothing. Supported: `bearer`, `basic` and `apiKey` (in a header or the query string).
+
+```yaml
+version: 1
+name: "Orders"
+auth:
+  type: "bearer"
+  token: "{{token}}"
+```
+
+Keep the secret parts as `{{variables}}` so the file can be committed; the app warns when a token or password is typed literally. A header written by hand with the same name wins over the auth.
+
 ## Scripts and tests
 
 Pre-request and test scripts are JavaScript files next to the request, with Postman's `pm.*` API, so imported collections keep working:

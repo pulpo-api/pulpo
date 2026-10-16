@@ -1,9 +1,9 @@
 //! Postman collection v2.0/v2.1 and Postman environment files.
 
-use super::{base64, ImportError, ImportFormat, ImportNode, ImportPlan};
+use super::{ImportError, ImportFormat, ImportNode, ImportPlan};
 use crate::collection::Scripts;
 use crate::environment::{Environment, Variable};
-use crate::http::{Header, HttpRequest, Param};
+use crate::http::{ApiKeyLocation, Auth, Header, HttpRequest, Param};
 use crate::HttpMethod;
 use serde_json::Value;
 
@@ -14,10 +14,6 @@ fn text(value: Option<&Value>) -> String {
         Some(other) => other.to_string(),
     }
 }
-
-/// How a level of the collection authenticates, as headers to add to its requests.
-#[derive(Clone, Default)]
-struct Auth(Option<Vec<Header>>);
 
 fn kv(list: Option<&Value>, key: &str) -> String {
     list.and_then(|l| l.as_array())
@@ -30,68 +26,44 @@ fn kv(list: Option<&Value>, key: &str) -> String {
         .unwrap_or_default()
 }
 
-fn parse_auth(
-    auth: Option<&Value>,
-    inherited: &Auth,
-    warnings: &mut Vec<String>,
-    at: &str,
-) -> Auth {
-    let Some(auth) = auth else {
-        return inherited.clone();
-    };
+/// The auth a level of the collection sets. `None` = inherit from the parent.
+fn parse_auth(auth: Option<&Value>, warnings: &mut Vec<String>, at: &str) -> Option<Auth> {
+    let auth = auth?;
     let kind = auth
         .get("type")
         .and_then(|t| t.as_str())
         .unwrap_or("noauth");
     match kind {
-        "noauth" => Auth(Some(Vec::new())),
-        "inherit" => inherited.clone(),
-        "bearer" => {
-            let token = kv(auth.get("bearer"), "token");
-            Auth(Some(vec![Header::new(
-                "Authorization",
-                format!("Bearer {token}"),
-            )]))
-        }
-        "basic" => {
-            let user = kv(auth.get("basic"), "username");
-            let pass = kv(auth.get("basic"), "password");
-            if user.contains("{{") || pass.contains("{{") {
-                warnings.push(format!(
-                    "{at}: basic auth uses variables; set the Authorization header by hand"
-                ));
-                Auth(Some(Vec::new()))
-            } else {
-                let encoded = base64(format!("{user}:{pass}").as_bytes());
-                Auth(Some(vec![Header::new(
-                    "Authorization",
-                    format!("Basic {encoded}"),
-                )]))
-            }
-        }
+        "noauth" => Some(Auth::None),
+        "inherit" => None,
+        "bearer" => Some(Auth::Bearer {
+            token: kv(auth.get("bearer"), "token"),
+        }),
+        "basic" => Some(Auth::Basic {
+            username: kv(auth.get("basic"), "username"),
+            password: kv(auth.get("basic"), "password"),
+        }),
         "apikey" => {
             let key = kv(auth.get("apikey"), "key");
-            let value = kv(auth.get("apikey"), "value");
-            let place = kv(auth.get("apikey"), "in");
-            if place == "query" {
-                warnings.push(format!(
-                    "{at}: API key in the query string is not imported; add it to the URL"
-                ));
-                Auth(Some(Vec::new()))
-            } else {
-                Auth(Some(vec![Header::new(
-                    if key.is_empty() {
-                        "X-API-Key".into()
-                    } else {
-                        key
-                    },
-                    value,
-                )]))
-            }
+            Some(Auth::ApiKey {
+                key: if key.is_empty() {
+                    "X-API-Key".into()
+                } else {
+                    key
+                },
+                value: kv(auth.get("apikey"), "value"),
+                location: if kv(auth.get("apikey"), "in") == "query" {
+                    ApiKeyLocation::Query
+                } else {
+                    ApiKeyLocation::Header
+                },
+            })
         }
         other => {
-            warnings.push(format!("{at}: '{other}' auth is not supported yet"));
-            inherited.clone()
+            warnings.push(format!(
+                "{at}: '{other}' auth is not supported yet; it inherits from its folder"
+            ));
+            None
         }
     }
 }
@@ -212,17 +184,10 @@ fn body_of(
     }
 }
 
-fn request_of(
-    item: &Value,
-    auth: &Auth,
-    warnings: &mut Vec<String>,
-    at: &str,
-) -> Option<HttpRequest> {
+fn request_of(item: &Value, warnings: &mut Vec<String>, at: &str) -> Option<HttpRequest> {
     let request = item.get("request")?;
     if let Value::String(url) = request {
-        let mut req = HttpRequest::new(HttpMethod::Get, url.clone());
-        req.headers = auth.0.clone().unwrap_or_default();
-        return Some(req);
+        return Some(HttpRequest::new(HttpMethod::Get, url.clone()));
     }
     let method_name = request
         .get("method")
@@ -248,12 +213,7 @@ fn request_of(
                 .collect()
         })
         .unwrap_or_default();
-    let own_auth = parse_auth(request.get("auth"), auth, warnings, at);
-    for header in own_auth.0.unwrap_or_default() {
-        if !has_header(&headers, &header.name) {
-            headers.insert(0, header);
-        }
-    }
+    let auth = parse_auth(request.get("auth"), warnings, at);
     let body = body_of(request.get("body"), &mut headers, warnings, at);
     let url = request.get("url");
     // Postman keeps disabled query params out of `raw`, in `query` with `disabled: true`,
@@ -281,6 +241,7 @@ fn request_of(
             i.get("disabled").and_then(|d| d.as_bool()).unwrap_or(false)
         }),
         path_params: params_of("variable", |_| true),
+        auth,
     })
 }
 
@@ -321,7 +282,7 @@ fn scripts_of(item: &Value) -> Scripts {
     scripts
 }
 
-fn items(list: &Value, auth: &Auth, path: &str, warnings: &mut Vec<String>) -> Vec<ImportNode> {
+fn items(list: &Value, path: &str, warnings: &mut Vec<String>) -> Vec<ImportNode> {
     let mut nodes = Vec::new();
     for item in list.as_array().into_iter().flatten() {
         let name = text(item.get("name"));
@@ -337,13 +298,14 @@ fn items(list: &Value, auth: &Auth, path: &str, warnings: &mut Vec<String>) -> V
         };
         let own_scripts = scripts_of(item);
         if let Some(children) = item.get("item") {
-            let folder_auth = parse_auth(item.get("auth"), auth, warnings, &at);
+            let auth = parse_auth(item.get("auth"), warnings, &at);
             nodes.push(ImportNode::Folder {
                 name,
-                children: items(children, &folder_auth, &at, warnings),
+                children: items(children, &at, warnings),
                 scripts: own_scripts,
+                auth,
             });
-        } else if let Some(request) = request_of(item, auth, warnings, &at) {
+        } else if let Some(request) = request_of(item, warnings, &at) {
             nodes.push(ImportNode::Request {
                 name,
                 request,
@@ -365,9 +327,9 @@ pub(super) fn collection(value: &Value) -> Result<ImportPlan, ImportError> {
         name
     };
     let mut warnings = Vec::new();
-    let root_auth = parse_auth(value.get("auth"), &Auth::default(), &mut warnings, &name);
+    let folder_auth = parse_auth(value.get("auth"), &mut warnings, &name);
     let folder_scripts = scripts_of(value);
-    let nodes = items(item, &root_auth, "", &mut warnings);
+    let nodes = items(item, "", &mut warnings);
 
     let variables: Vec<Variable> = value
         .get("variable")
@@ -399,6 +361,7 @@ pub(super) fn collection(value: &Value) -> Result<ImportPlan, ImportError> {
         format: ImportFormat::PostmanCollection,
         folder: Some(name),
         folder_scripts,
+        folder_auth,
         nodes,
         environments,
         warnings,
@@ -439,6 +402,7 @@ pub(super) fn environment(value: &Value) -> Result<ImportPlan, ImportError> {
         format: ImportFormat::PostmanEnvironment,
         folder: None,
         folder_scripts: Default::default(),
+        folder_auth: None,
         nodes: Vec::new(),
         environments: vec![Environment {
             id: String::new(),
@@ -506,10 +470,7 @@ mod tests {
         let login = &all[0].1;
         assert_eq!(login.method, HttpMethod::Post);
         assert_eq!(login.url, "{{base}}/login");
-        assert!(
-            !login.headers.iter().any(|h| h.name == "Authorization"),
-            "noauth folder"
-        );
+        assert_eq!(login.auth, None, "inherits the folder's");
         assert!(login
             .headers
             .iter()
@@ -520,11 +481,15 @@ mod tests {
             .any(|h| h.name == "Content-Type" && h.value == "application/json"));
         assert_eq!(login.body.as_deref(), Some(r#"{"user": "{{user}}"}"#));
 
-        let create = &all[1].1;
         assert_eq!(
-            create.headers[0],
-            Header::new("Authorization", "Bearer {{token}}")
+            plan.folder_auth,
+            Some(Auth::Bearer {
+                token: "{{token}}".into()
+            })
         );
+        let create = &all[1].1;
+        assert_eq!(create.auth, None);
+        assert!(!create.headers.iter().any(|h| h.name == "Authorization"));
         assert_eq!(create.body.as_deref(), Some("a=1"));
 
         let query = &all[2].1;
@@ -533,16 +498,20 @@ mod tests {
         assert_eq!(payload["variables"]["n"], 1);
 
         assert_eq!(all[3].1.body, None);
-        assert!(all[4]
-            .1
-            .headers
-            .iter()
-            .any(|h| h.name == "X-Key" && h.value == "{{key}}"));
+        assert_eq!(
+            all[4].1.auth,
+            Some(Auth::ApiKey {
+                key: "X-Key".into(),
+                value: "{{key}}".into(),
+                location: ApiKeyLocation::Header
+            })
+        );
 
         assert_eq!(plan.folder_scripts.pre, "pm.environment.set('a', 1);\n");
-        let ImportNode::Folder { children, .. } = &plan.nodes[0] else {
+        let ImportNode::Folder { children, auth, .. } = &plan.nodes[0] else {
             panic!()
         };
+        assert_eq!(auth, &Some(Auth::None), "noauth folder");
         let ImportNode::Request { scripts, .. } = &children[0] else {
             panic!()
         };
@@ -605,8 +574,11 @@ mod tests {
         let (_, request) = &requests(&plan.nodes)[0];
         assert_eq!(request.url, "https://api.example.com/v1/users");
         assert_eq!(
-            request.headers[0],
-            Header::new("Authorization", "Basic YW5hOnB3")
+            request.auth,
+            Some(Auth::Basic {
+                username: "ana".into(),
+                password: "pw".into()
+            })
         );
     }
 }

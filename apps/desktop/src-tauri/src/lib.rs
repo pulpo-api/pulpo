@@ -1,6 +1,6 @@
 use pulpo_core::collection::{self, CollectionError, RequestEntry, Scripts, Workspace};
 use pulpo_core::environment::{self, Environment};
-use pulpo_core::http::{self, HttpRequest, HttpResponse, SendError};
+use pulpo_core::http::{self, Auth, HttpRequest, HttpResponse, SendError};
 use pulpo_core::import::{self, ImportSummary};
 use pulpo_core::keychain::Keychain;
 use pulpo_core::run::{self, RunReport};
@@ -59,6 +59,15 @@ async fn run_request(
 #[tauri::command]
 async fn folder_scripts(root: String, folder_id: String) -> Result<Scripts, CollectionError> {
     collection::folder_scripts(Path::new(&root), &folder_id)
+}
+
+#[tauri::command]
+async fn save_folder_auth(
+    root: String,
+    folder_id: String,
+    auth: Option<Auth>,
+) -> Result<(), CollectionError> {
+    collection::save_folder_auth(Path::new(&root), &folder_id, auth.as_ref())
 }
 
 #[tauri::command]
@@ -176,6 +185,7 @@ pub fn run() {
             run_request,
             folder_scripts,
             save_folder_scripts,
+            save_folder_auth,
             clear_local_values
         ])
         .run(tauri::generate_context!())
