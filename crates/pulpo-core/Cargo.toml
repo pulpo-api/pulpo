@@ -16,6 +16,11 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 serde_norway = "0.9"
 uuid = { version = "1", features = ["v4"] }
 rquickjs = "0.14"
+tokio = { workspace = true, features = ["rt"] }
+sha1 = "0.10"
+sha2 = "0.10"
+md-5 = "0.10"
+hmac = "0.12"
 keyring = { version = "3.6", optional = true, features = ["apple-native", "windows-native", "linux-native-sync-persistent", "crypto-rust"] }
 
 [features]

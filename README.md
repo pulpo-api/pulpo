@@ -99,11 +99,14 @@ pm.test("created", () => pm.response.to.have.status(201));
 pm.environment.set("orderId", pm.response.json().id);   // used later as {{orderId}}
 ```
 
-Values set by scripts stay on your machine in `.pulpo/` (which ignores itself in git), so tokens never end up in a commit. Scripts run in a sandboxed QuickJS engine with time and memory limits. `pm.sendRequest` and `CryptoJS` are coming next.
+Values set by scripts stay on your machine in `.pulpo/` (which ignores itself in git), so tokens never end up in a commit. Scripts run in a sandboxed QuickJS engine with time and memory limits.
+
+Also supported: `pm.sendRequest` (for logins and setup calls, with or without a callback), `CryptoJS` (`SHA256`, `SHA1`, `SHA512`, `MD5` and their `Hmac*`, with `enc.Hex`, `enc.Base64`, `enc.Utf8`; also via `require('crypto-js')`), `atob` and `btoa`.
 
 ```bash
 pulpo run -w my-api -e local              # run every request in order, fail on a failed test
 pulpo run 01-orders -w my-api -e local --bail
+pulpo run -w my-api -e ci --junit report.xml   # for GitHub Actions, GitLab, Jenkins
 ```
 
 ## Import what you already have

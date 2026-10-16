@@ -27,10 +27,11 @@ COMMANDS:
     import <FILE|-> [DIR] [--into FOLDER]
                Import a Postman collection or environment, an OpenAPI 3
                document or a curl command (use - to read it from stdin)
-    run [TARGET] [-w DIR] [-e ENV] [--bail]
+    run [TARGET] [-w DIR] [-e ENV] [--bail] [--junit FILE]
                Run requests with their scripts and tests, in order. TARGET is a
                request or folder path inside the workspace (default: all).
                Exits with 1 if a test fails or a request cannot be sent.
+               --junit writes a JUnit XML report for CI.
     env [DIR]  List environments and their variables (secrets are masked)
     secret set <DIR> <ENV> <NAME>
                Store a secret in the OS keychain, reading the value from stdin
@@ -368,6 +369,7 @@ fn run_run(args: &[String]) -> ExitCode {
     let mut dir = PathBuf::from(".");
     let mut env_name: Option<String> = None;
     let mut bail = false;
+    let mut junit: Option<PathBuf> = None;
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
         match arg.as_str() {
@@ -380,6 +382,10 @@ fn run_run(args: &[String]) -> ExitCode {
                 None => return usage_error("run: -e needs an ENV"),
             },
             "--bail" => bail = true,
+            "--junit" => match rest.next() {
+                Some(f) => junit = Some(PathBuf::from(f)),
+                None => return usage_error("run: --junit needs a FILE"),
+            },
             other if !other.starts_with('-') && target.is_empty() => {
                 target = other.replace('\\', "/")
             }
@@ -410,6 +416,7 @@ fn run_run(args: &[String]) -> ExitCode {
     };
 
     let (mut passed, mut failed, mut tests_ok, mut tests_ko) = (0, 0, 0, 0);
+    let mut reports = Vec::new();
     for entry in &requests {
         let report = runtime.block_on(run::run_entry(
             &dir,
@@ -418,6 +425,7 @@ fn run_run(args: &[String]) -> ExitCode {
             &Keychain,
         ));
         print_report(&report);
+        reports.push(report.clone());
         tests_ok += report.tests.iter().filter(|t| t.passed).count();
         tests_ko += report.tests.iter().filter(|t| !t.passed).count();
         if report.passed() {
@@ -430,15 +438,98 @@ fn run_run(args: &[String]) -> ExitCode {
         }
     }
     println!(
-        "
-{} requests: {passed} passed, {failed} failed · tests: {tests_ok} passed, {tests_ko} failed",
+        "\n{} requests: {passed} passed, {failed} failed · tests: {tests_ok} passed, {tests_ko} failed",
         passed + failed
     );
+    if let Some(path) = junit {
+        if let Err(e) = std::fs::write(&path, junit_xml(&workspace.name, &reports)) {
+            return fail(format!("{}: {e}", path.display()));
+        }
+        println!("JUnit report written to {}", path.display());
+    }
     if failed == 0 {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE
     }
+}
+
+fn xml_escape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            c if (c as u32) < 0x20 && !matches!(c, '\n' | '\r' | '\t') => {}
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// JUnit XML: one testsuite per request, one testcase per `pm.test`.
+/// A request that could not be sent becomes a failed testcase named after it.
+fn junit_xml(workspace: &str, reports: &[RunReport]) -> String {
+    let mut suites = String::new();
+    let (mut total, mut failures) = (0, 0);
+    for report in reports {
+        let name = xml_escape(&report.name);
+        let time = report
+            .response
+            .as_ref()
+            .map(|r| r.duration_ms as f64 / 1000.0)
+            .unwrap_or(0.0);
+        let mut cases = String::new();
+        let (mut count, mut failed) = (0, 0);
+        if let Some(error) = &report.error {
+            count += 1;
+            failed += 1;
+            cases.push_str(&format!(
+                "    <testcase classname=\"{name}\" name=\"{name}\" time=\"0\"><failure message=\"{}\"/></testcase>\n",
+                xml_escape(&error.to_string())
+            ));
+        }
+        for test in &report.tests {
+            count += 1;
+            let test_name = xml_escape(&test.name);
+            match &test.error {
+                None => cases.push_str(&format!(
+                    "    <testcase classname=\"{name}\" name=\"{test_name}\" time=\"{time:.3}\"/>\n"
+                )),
+                Some(error) => {
+                    failed += 1;
+                    cases.push_str(&format!(
+                        "    <testcase classname=\"{name}\" name=\"{test_name}\" time=\"{time:.3}\"><failure message=\"{}\"/></testcase>\n",
+                        xml_escape(error)
+                    ));
+                }
+            }
+        }
+        if count == 0 {
+            count = 1;
+            cases.push_str(&format!(
+                "    <testcase classname=\"{name}\" name=\"{name}\" time=\"{time:.3}\"/>\n"
+            ));
+        }
+        if !report.script_errors.is_empty() {
+            cases.push_str(&format!(
+                "    <system-err>{}</system-err>\n",
+                xml_escape(&report.script_errors.join("\n"))
+            ));
+        }
+        total += count;
+        failures += failed;
+        suites.push_str(&format!(
+            "  <testsuite name=\"{name}\" tests=\"{count}\" failures=\"{failed}\" time=\"{time:.3}\">\n{cases}  </testsuite>\n"
+        ));
+    }
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<testsuites name=\"{}\" tests=\"{total}\" failures=\"{failures}\">\n{suites}</testsuites>\n",
+        xml_escape(workspace)
+    )
 }
 
 fn print_report(report: &RunReport) {
@@ -600,6 +691,44 @@ mod tests {
         assert!(options.include_headers);
         assert_eq!(options.environment.as_deref(), Some("Local"));
         assert_eq!(options.workspace, Some(PathBuf::from(".")));
+    }
+
+    #[test]
+    fn writes_junit_reports() {
+        use pulpo_core::script::TestResult;
+        let ok = RunReport {
+            id: "a".into(),
+            name: "List <orders>".into(),
+            tests: vec![
+                TestResult {
+                    name: "200".into(),
+                    passed: true,
+                    error: None,
+                },
+                TestResult {
+                    name: "has \"id\"".into(),
+                    passed: false,
+                    error: Some("expected: x & y".into()),
+                },
+            ],
+            ..Default::default()
+        };
+        let broken = RunReport {
+            id: "b".into(),
+            name: "Create".into(),
+            error: Some(pulpo_core::http::SendError::Unresolved("base".into())),
+            script_errors: vec!["boom".into()],
+            ..Default::default()
+        };
+        let xml = junit_xml("Shop", &[ok, broken]);
+        assert!(
+            xml.contains(r#"<testsuites name="Shop" tests="3" failures="2">"#),
+            "{xml}"
+        );
+        assert!(xml.contains(r#"name="List &lt;orders&gt;""#));
+        assert!(xml.contains(r#"<failure message="expected: x &amp; y"/>"#));
+        assert!(xml.contains(r#"<failure message="unresolved variables: base"/>"#));
+        assert!(xml.contains("<system-err>boom</system-err>"));
     }
 
     #[test]

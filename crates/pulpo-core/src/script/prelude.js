@@ -18,6 +18,7 @@ function __str(value) {
   if (value === undefined) return "undefined";
   if (value === null) return "null";
   if (typeof value === "string") return value;
+  if (value instanceof Error) return value.name + ": " + value.message;
   try {
     var json = JSON.stringify(value);
     return json === undefined ? String(value) : json;
@@ -135,8 +136,10 @@ var __request = {
 // ------------------------------------------------------------------ response
 
 function __response() {
-  var r = __state.response;
-  if (!r) return undefined;
+  return __state.response ? __responseApi(__state.response) : undefined;
+}
+
+function __responseApi(r) {
   var api = {
     code: r.status,
     status: r.statusText,
@@ -262,6 +265,174 @@ function __expect(actual) {
 
 var __current = "";
 
+// ------------------------------------------------------------------ pm.sendRequest
+
+function __toRequest(req) {
+  if (typeof req === "string") req = { url: req };
+  var headers = [];
+  var h = req.header || req.headers;
+  if (Array.isArray(h)) {
+    h.forEach(function (x) {
+      if (x && !x.disabled) headers.push({ name: String(x.key || x.name), value: __replaceIn(String(x.value)), enabled: true });
+    });
+  } else if (h && typeof h === "object") {
+    Object.keys(h).forEach(function (k) { headers.push({ name: k, value: __replaceIn(String(h[k])), enabled: true }); });
+  }
+  function hasHeader(name) {
+    return headers.some(function (x) { return x.name.toLowerCase() === name; });
+  }
+  var body = null;
+  var b = req.body;
+  if (typeof b === "string") {
+    body = b;
+  } else if (b && b.mode === "urlencoded") {
+    body = (b.urlencoded || [])
+      .filter(function (x) { return !x.disabled; })
+      .map(function (x) { return encodeURIComponent(x.key) + "=" + encodeURIComponent(__replaceIn(String(x.value))); })
+      .join("&");
+    if (!hasHeader("content-type")) headers.push({ name: "Content-Type", value: "application/x-www-form-urlencoded", enabled: true });
+  } else if (b && b.mode === "graphql") {
+    body = JSON.stringify({ query: b.graphql && b.graphql.query, variables: (b.graphql && b.graphql.variables) || {} });
+    if (!hasHeader("content-type")) headers.push({ name: "Content-Type", value: "application/json", enabled: true });
+  } else if (b && b.mode === "formdata") {
+    throw new Error("pm.sendRequest: form-data bodies are not supported yet");
+  } else if (b && b.raw !== undefined) {
+    body = String(b.raw);
+  }
+  if (body !== null) body = __replaceIn(body);
+  var url = req.url;
+  if (url && typeof url === "object") url = url.raw || url.toString();
+  return {
+    method: String(req.method || "GET").toUpperCase(),
+    url: __replaceIn(String(url)),
+    headers: headers,
+    body: body,
+    timeoutMs: typeof req.timeout === "number" ? req.timeout : null,
+  };
+}
+
+// ------------------------------------------------------------------ CryptoJS (digests computed in Rust)
+
+function __utf8Bytes(str) {
+  var out = [];
+  for (var i = 0; i < str.length; i++) {
+    var c = str.charCodeAt(i);
+    if (c >= 0xd800 && c < 0xdc00 && i + 1 < str.length) {
+      c = 0x10000 + ((c - 0xd800) << 10) + (str.charCodeAt(++i) - 0xdc00);
+    }
+    if (c < 0x80) out.push(c);
+    else if (c < 0x800) out.push(0xc0 | (c >> 6), 0x80 | (c & 63));
+    else if (c < 0x10000) out.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+    else out.push(0xf0 | (c >> 18), 0x80 | ((c >> 12) & 63), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+  }
+  return out;
+}
+
+function __utf8Decode(bytes) {
+  var out = "";
+  for (var i = 0; i < bytes.length; i++) {
+    var b = bytes[i], c;
+    if (b < 0x80) c = b;
+    else if (b < 0xe0) c = ((b & 31) << 6) | (bytes[++i] & 63);
+    else if (b < 0xf0) c = ((b & 15) << 12) | ((bytes[++i] & 63) << 6) | (bytes[++i] & 63);
+    else c = ((b & 7) << 18) | ((bytes[++i] & 63) << 12) | ((bytes[++i] & 63) << 6) | (bytes[++i] & 63);
+    if (c > 0xffff) {
+      c -= 0x10000;
+      out += String.fromCharCode(0xd800 + (c >> 10), 0xdc00 + (c & 1023));
+    } else {
+      out += String.fromCharCode(c);
+    }
+  }
+  return out;
+}
+
+function __toHex(bytes) {
+  var out = "";
+  for (var i = 0; i < bytes.length; i++) out += (bytes[i] < 16 ? "0" : "") + bytes[i].toString(16);
+  return out;
+}
+
+function __fromHex(hex) {
+  var out = [];
+  for (var i = 0; i + 1 < hex.length; i += 2) out.push(parseInt(hex.substr(i, 2), 16));
+  return out;
+}
+
+function __toBase64(bytes) {
+  var out = "";
+  for (var i = 0; i < bytes.length; i += 3) {
+    var a = bytes[i], b = bytes[i + 1], c = bytes[i + 2];
+    var n = (a << 16) | ((b || 0) << 8) | (c || 0);
+    out += __b64[(n >> 18) & 63] + __b64[(n >> 12) & 63] + (b === undefined ? "=" : __b64[(n >> 6) & 63]) + (c === undefined ? "=" : __b64[n & 63]);
+  }
+  return out;
+}
+
+function __fromBase64(str) {
+  var clean = String(str).replace(/[^A-Za-z0-9+/]/g, ""), out = [], bits = 0, value = 0;
+  for (var i = 0; i < clean.length; i++) {
+    value = (value << 6) | __b64.indexOf(clean[i]);
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      out.push((value >> bits) & 255);
+    }
+  }
+  return out;
+}
+
+function __wordArray(bytes) {
+  return {
+    __bytes: bytes,
+    sigBytes: bytes.length,
+    toString: function (encoder) { return (encoder || __enc.Hex).stringify(this); },
+    concat: function (other) {
+      this.__bytes = this.__bytes.concat(__bytesOf(other));
+      this.sigBytes = this.__bytes.length;
+      return this;
+    },
+  };
+}
+
+var __enc = {
+  Hex: { stringify: function (wa) { return __toHex(wa.__bytes); }, parse: function (s) { return __wordArray(__fromHex(String(s))); } },
+  Base64: { stringify: function (wa) { return __toBase64(wa.__bytes); }, parse: function (s) { return __wordArray(__fromBase64(s)); } },
+  Utf8: { stringify: function (wa) { return __utf8Decode(wa.__bytes); }, parse: function (s) { return __wordArray(__utf8Bytes(String(s))); } },
+  Latin1: {
+    stringify: function (wa) { return wa.__bytes.map(function (b) { return String.fromCharCode(b); }).join(""); },
+    parse: function (s) { var out = []; for (var i = 0; i < s.length; i++) out.push(s.charCodeAt(i) & 255); return __wordArray(out); },
+  },
+};
+
+function __bytesOf(value) {
+  if (value && value.__bytes) return value.__bytes;
+  return __utf8Bytes(String(value));
+}
+
+function __digest(algorithm, data, key) {
+  var hex = __pulpo_crypto(algorithm, key === undefined ? "" : __toHex(__bytesOf(key)), __toHex(__bytesOf(data)));
+  if (hex.indexOf("error:") === 0) throw new Error("CryptoJS: " + hex.slice(6));
+  return __wordArray(__fromHex(hex));
+}
+
+var CryptoJS = {
+  MD5: function (data) { return __digest("md5", data); },
+  SHA1: function (data) { return __digest("sha1", data); },
+  SHA256: function (data) { return __digest("sha256", data); },
+  SHA512: function (data) { return __digest("sha512", data); },
+  HmacMD5: function (data, key) { return __digest("hmac-md5", data, key); },
+  HmacSHA1: function (data, key) { return __digest("hmac-sha1", data, key); },
+  HmacSHA256: function (data, key) { return __digest("hmac-sha256", data, key); },
+  HmacSHA512: function (data, key) { return __digest("hmac-sha512", data, key); },
+  enc: __enc,
+  lib: { WordArray: { create: function (bytes) { return __wordArray(Array.prototype.slice.call(bytes || [])); } } },
+};
+
+function require(name) {
+  if (name === "crypto-js") return CryptoJS;
+  throw new Error("require('" + name + "') is not available in Pulpo scripts");
+}
+
 var pm = {
   info: { get requestName() { return __input.requestName; }, get eventName() { return __input.phase; } },
   environment: Object.assign({ get name() { return __input.environmentName || ""; } }, __variables),
@@ -279,8 +450,16 @@ var pm = {
     }
   },
   expect: __expect,
-  sendRequest: function () {
-    throw new Error("pm.sendRequest is not supported yet (coming in phase 2b)");
+  sendRequest: function (req, callback) {
+    var out = JSON.parse(__pulpo_http(JSON.stringify(__toRequest(req))));
+    var err = out.ok ? null : new Error(out.error);
+    var res = out.ok ? __responseApi(out.response) : undefined;
+    if (typeof callback === "function") {
+      callback(err, res);
+    } else if (err) {
+      throw err;
+    }
+    return res;
   },
 };
 
@@ -321,8 +500,8 @@ function atob(input) {
 function __run(label, source) {
   __current = label;
   try {
-    var fn = new Function("pm", "console", "postman", "atob", "btoa", source);
-    fn(pm, console, pm, atob, btoa);
+    var fn = new Function("pm", "console", "postman", "atob", "btoa", "CryptoJS", "require", source);
+    fn(pm, console, pm, atob, btoa, CryptoJS, require);
   } catch (e) {
     __state.errors.push(label + ": " + String((e && e.message) || e));
   }

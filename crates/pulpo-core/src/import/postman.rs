@@ -301,46 +301,7 @@ fn scripts_of(item: &Value) -> Scripts {
     scripts
 }
 
-/// Things the script runtime cannot do yet, to warn about them once.
-fn unsupported_in(scripts: &Scripts, uses: &mut [usize; 2]) {
-    for source in [&scripts.pre, &scripts.test] {
-        if source.contains("pm.sendRequest") {
-            uses[0] += 1;
-        }
-        if source.contains("CryptoJS") {
-            uses[1] += 1;
-        }
-    }
-}
-
-fn count_scripts(item: &Value) -> usize {
-    item.get("event")
-        .and_then(|e| e.as_array())
-        .map(|events| {
-            events
-                .iter()
-                .filter(|e| {
-                    e.pointer("/script/exec")
-                        .and_then(|x| x.as_array())
-                        .is_some_and(|lines| {
-                            lines
-                                .iter()
-                                .any(|l| l.as_str().is_some_and(|s| !s.trim().is_empty()))
-                        })
-                })
-                .count()
-        })
-        .unwrap_or(0)
-}
-
-fn items(
-    list: &Value,
-    auth: &Auth,
-    path: &str,
-    warnings: &mut Vec<String>,
-    scripts: &mut usize,
-    uses: &mut [usize; 2],
-) -> Vec<ImportNode> {
+fn items(list: &Value, auth: &Auth, path: &str, warnings: &mut Vec<String>) -> Vec<ImportNode> {
     let mut nodes = Vec::new();
     for item in list.as_array().into_iter().flatten() {
         let name = text(item.get("name"));
@@ -354,14 +315,12 @@ fn items(
         } else {
             format!("{path} / {name}")
         };
-        *scripts += count_scripts(item);
         let own_scripts = scripts_of(item);
-        unsupported_in(&own_scripts, uses);
         if let Some(children) = item.get("item") {
             let folder_auth = parse_auth(item.get("auth"), auth, warnings, &at);
             nodes.push(ImportNode::Folder {
                 name,
-                children: items(children, &folder_auth, &at, warnings, scripts, uses),
+                children: items(children, &folder_auth, &at, warnings),
                 scripts: own_scripts,
             });
         } else if let Some(request) = request_of(item, auth, warnings, &at) {
@@ -386,31 +345,9 @@ pub(super) fn collection(value: &Value) -> Result<ImportPlan, ImportError> {
         name
     };
     let mut warnings = Vec::new();
-    let mut scripts = count_scripts(value);
     let root_auth = parse_auth(value.get("auth"), &Auth::default(), &mut warnings, &name);
-    let mut uses = [0usize; 2];
     let folder_scripts = scripts_of(value);
-    unsupported_in(&folder_scripts, &mut uses);
-    let nodes = items(item, &root_auth, "", &mut warnings, &mut scripts, &mut uses);
-    if uses[0] > 0 {
-        warnings.insert(
-            0,
-            format!(
-                "{} scripts use pm.sendRequest, which is not supported yet (phase 2b)",
-                uses[0]
-            ),
-        );
-    }
-    if uses[1] > 0 {
-        warnings.insert(
-            0,
-            format!(
-                "{} scripts use CryptoJS, which is not supported yet (phase 2b)",
-                uses[1]
-            ),
-        );
-    }
-    let _ = scripts;
+    let nodes = items(item, &root_auth, "", &mut warnings);
 
     let variables: Vec<Variable> = value
         .get("variable")
