@@ -318,6 +318,8 @@ export interface WorkspaceBackend {
   saveEnvironment(root: string, env: Environment): Promise<void>;
   createEnvironment(root: string, name: string): Promise<Environment>;
   deleteEnvironment(root: string, id: string): Promise<void>;
+  /** Values set by scripts for an environment ("" = none), from `.pulpo/local.json`. */
+  localValues(root: string, environmentId: string): Promise<Record<string, string>>;
   /** What a folder ("" = the workspace) sets for the requests inside. */
   folderMeta(root: string, folderId: string): Promise<FolderMeta>;
   /** Saves headers, auth and settings of a folder (the name is kept). */
@@ -371,6 +373,8 @@ const tauriBackend: WorkspaceBackend = {
   createEnvironment: (root, name) => invoke<Environment>("create_environment", { root, name }),
   deleteEnvironment: (root, id) => invoke<void>("delete_environment", { root, id }),
   saveFolderAuth: (root, folderId, auth) => invoke<void>("save_folder_auth", { root, folderId, auth }),
+  localValues: (root, environmentId) =>
+    invoke<Record<string, string>>("local_values", { root, environmentId: environmentId || null }),
   folderMeta: (root, folderId) => invoke<FolderMeta>("folder_meta", { root, folderId }),
   saveFolderMeta: (root, folderId, meta) => invoke<void>("save_folder_meta", { root, folderId, meta }),
   folderScripts: (root, folderId) => invoke<Scripts>("folder_scripts", { root, folderId }),
@@ -581,6 +585,10 @@ function memoryBackend(): WorkspaceBackend {
     async deleteEnvironment(_root, id) {
       const index = environments.findIndex((e) => e.id === id);
       if (index >= 0) environments.splice(index, 1);
+    },
+    // Scripts only run in the desktop app, so nothing sets local values here.
+    async localValues() {
+      return {};
     },
     async folderMeta(_root, folderId) {
       const source = folderId ? folderNode(folderId) : workspace;

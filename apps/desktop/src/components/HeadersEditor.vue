@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { Header } from "../core";
+import VarInput from "./VarInput.vue";
 
 /** Edits a list of headers. Inherited ones (from folders) are shown above, read-only. */
 const props = defineProps<{ headers: Header[]; inherited?: { header: Header; from: string }[] }>();
@@ -48,7 +49,7 @@ function remove(index: number) {
     <div v-for="(header, i) in headers" :key="i" class="row">
       <input v-model="header.enabled" type="checkbox" :title="header.enabled ? 'Sent' : 'Not sent'" />
       <input v-model="header.name" placeholder="Name" spellcheck="false" />
-      <input v-model="header.value" placeholder="Value" spellcheck="false" />
+      <VarInput v-model="header.value" placeholder="Value" :aria-label="`Value of ${header.name || 'header'}`" />
       <button class="icon" title="Remove" @click="remove(i)">✕</button>
     </div>
     <button class="link add" @click="add()">+ Add header</button>

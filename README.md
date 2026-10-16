@@ -86,7 +86,7 @@ variables:
     secret: true
 ```
 
-Use them anywhere as `{{base}}`, plus dynamic values: `{{$guid}}`, `{{$timestamp}}`, `{{$isoTimestamp}}`, `{{$randomInt}}`.
+In the app, `{{variables}}` are coloured by where their value comes from (environment, set by a script, dynamic) and missing ones are underlined in red; hover one to see its value (never a secret's) and type `{{` to complete. Use them anywhere as `{{base}}`, plus dynamic values: `{{$guid}}`, `{{$timestamp}}`, `{{$isoTimestamp}}`, `{{$randomInt}}`.
 
 ```bash
 pulpo env my-api                              # list environments (secrets masked)

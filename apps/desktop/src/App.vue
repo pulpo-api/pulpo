@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch, watchEffect } from "vue";
+import { varContext } from "./varContext";
 import Sidebar from "./components/Sidebar.vue";
 import RequestEditor from "./components/RequestEditor.vue";
 import ResponseViewer from "./components/ResponseViewer.vue";
@@ -91,6 +92,25 @@ async function importFile() {
 const confirmDelete = ref(false);
 const environments = ref<Environment[]>([]);
 const activeEnvId = ref("");
+/** Values scripts set for the active environment; they win over it (as in pulpo-core). */
+const localValues = ref<Record<string, string>>({});
+
+async function loadLocalValues() {
+  const ws = workspace.value;
+  if (!ws) return;
+  try {
+    localValues.value = await backend.localValues(ws.root, activeEnvId.value);
+  } catch {
+    localValues.value = {};
+  }
+}
+watch([() => workspace.value?.root, activeEnvId], loadLocalValues, { immediate: true });
+
+// What the editors use to colour {{variables}} and show their values.
+watchEffect(() => {
+  const env = environments.value.find((e) => e.id === activeEnvId.value);
+  varContext.value = { environment: env?.name ?? "", variables: env?.variables ?? [], local: localValues.value };
+});
 const showEnvironments = ref(false);
 const showCookies = ref(false);
 /** The folder being edited ("" = the collection); null = editing requests. */
@@ -477,6 +497,8 @@ async function send() {
   try {
     const report = await backend.run(workspace.value!.root, toEntry(node), activeEnvId.value || undefined);
     remember(node.id, { ...report, sending: false });
+    // Scripts may have set values ({{token}} after a login, for instance).
+    void loadLocalValues();
   } catch (e) {
     remember(node.id, { ...EMPTY, error: asSendError(e) });
   } finally {

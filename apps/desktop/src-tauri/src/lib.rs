@@ -174,6 +174,15 @@ async fn save_folder_scripts(
     collection::save_folder_scripts(Path::new(&root), &folder_id, &scripts)
 }
 
+/// Values set by scripts for an environment (`.pulpo/local.json`); they win over it.
+#[tauri::command]
+async fn local_values(
+    root: String,
+    environment_id: Option<String>,
+) -> std::collections::HashMap<String, String> {
+    pulpo_core::local::load_local(Path::new(&root), environment_id.as_deref())
+}
+
 #[tauri::command]
 async fn clear_local_values(
     root: String,
@@ -292,6 +301,7 @@ pub fn run() {
             list_certificates,
             save_certificates,
             save_folder_settings,
+            local_values,
             clear_local_values
         ])
         .run(tauri::generate_context!())

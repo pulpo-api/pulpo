@@ -3,6 +3,7 @@ import { computed, ref } from "vue";
 import { bodyMode, type BodyMode, type FormField, type HttpRequest } from "../core";
 import { backend, toWorkspacePath } from "../workspace";
 import CodeEditor, { type Language } from "./CodeEditor.vue";
+import VarInput from "./VarInput.vue";
 
 const props = defineProps<{ request: HttpRequest; root: string }>();
 const emit = defineEmits<{ send: []; save: [] }>();
@@ -156,6 +157,7 @@ async function pick(apply: (path: string) => void) {
 
     <CodeEditor
       v-else-if="mode === 'raw'"
+      variables
       v-model="raw"
       class="code-area"
       :language="language"
@@ -181,7 +183,7 @@ async function pick(apply: (path: string) => void) {
           <input v-model="field.value" placeholder="files/photo.png" spellcheck="false" />
           <button v-if="canPick" class="ghost" title="Choose a file in the workspace" @click="pick((p) => (field.value = p))">…</button>
         </div>
-        <input v-else v-model="field.value" placeholder="value" spellcheck="false" />
+        <VarInput v-else v-model="field.value" placeholder="value" :aria-label="`Value of ${field.name || 'field'}`" />
         <button class="icon" title="Remove" @click="removeField(i)">✕</button>
       </div>
       <button class="link" @click="addField">+ Add field</button>

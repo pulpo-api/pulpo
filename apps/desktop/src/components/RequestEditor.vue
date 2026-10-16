@@ -4,6 +4,7 @@ import { HTTP_METHODS, bodyMode, type HttpRequest } from "../core";
 import type { InheritedAuth, InheritedSettings, Scripts } from "../workspace";
 import type { Header } from "../core";
 import HeadersEditor from "./HeadersEditor.vue";
+import VarInput from "./VarInput.vue";
 import SettingsEditor from "./SettingsEditor.vue";
 import AuthEditor from "./AuthEditor.vue";
 import CodeEditor from "./CodeEditor.vue";
@@ -64,7 +65,15 @@ const inheritedCount = computed(
       <select v-model="request.method" class="method" :class="`m-${request.method.toLowerCase()}`">
         <option v-for="m in HTTP_METHODS" :key="m" :value="m">{{ m }}</option>
       </select>
-      <input v-model="request.url" spellcheck="false" placeholder="https://api.example.com/resource" />
+      <VarInput
+        v-model="request.url"
+        class="url"
+        placeholder="https://api.example.com/resource"
+        aria-label="URL"
+        @enter="emit('send')"
+        @run="emit('send')"
+        @save="emit('save')"
+      />
       <button class="send" :disabled="sending || !supported" @click="emit('send')">
         {{ sending ? "Sending…" : "Send" }}
       </button>
@@ -176,6 +185,16 @@ const inheritedCount = computed(
 .m-put { color: var(--m-put); }
 .m-patch { color: var(--m-patch); }
 .m-delete { color: var(--m-delete); }
+.urlbar .url {
+  flex: 1 1 220px;
+}
+.urlbar .url :deep(.cm-editor) {
+  height: 100%;
+  border-radius: 8px;
+}
+.urlbar .url :deep(.cm-content) {
+  padding: 8px 12px;
+}
 .urlbar input {
   flex: 1 1 220px;
   min-width: 0;

@@ -2,6 +2,7 @@
 import { computed } from "vue";
 import { AUTH_LABELS, type Auth } from "../core";
 import type { InheritedAuth } from "../workspace";
+import VarInput from "./VarInput.vue";
 
 /** Edits an auth. `null` = inherit (only offered when `inherited` is given). */
 const auth = defineModel<Auth | null>({ required: true });
@@ -70,18 +71,18 @@ const inheritedFrom = computed(() => {
     <template v-if="auth?.type === 'bearer'">
       <div class="row">
         <label for="auth-token">Token</label>
-        <input id="auth-token" v-model="auth.token" spellcheck="false" placeholder="{{token}}" />
+        <VarInput id="auth-token" v-model="auth.token" placeholder="{{token}}" aria-label="Token" />
       </div>
     </template>
 
     <template v-else-if="auth?.type === 'basic'">
       <div class="row">
         <label for="auth-user">Username</label>
-        <input id="auth-user" v-model="auth.username" spellcheck="false" autocomplete="off" />
+        <VarInput id="auth-user" v-model="auth.username" aria-label="Username" />
       </div>
       <div class="row">
         <label for="auth-pass">Password</label>
-        <input id="auth-pass" v-model="auth.password" spellcheck="false" autocomplete="off" placeholder="{{password}}" />
+        <VarInput id="auth-pass" v-model="auth.password" placeholder="{{password}}" aria-label="Password" />
       </div>
     </template>
 
@@ -92,7 +93,7 @@ const inheritedFrom = computed(() => {
       </div>
       <div class="row">
         <label for="auth-value">Value</label>
-        <input id="auth-value" v-model="auth.value" spellcheck="false" placeholder="{{apiKey}}" />
+        <VarInput id="auth-value" v-model="auth.value" placeholder="{{apiKey}}" aria-label="API key value" />
       </div>
       <div class="row">
         <label for="auth-in">Add to</label>

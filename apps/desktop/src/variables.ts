@@ -10,6 +10,14 @@ const DYNAMIC: Record<string, () => string> = {
   $randomInt: () => String(Math.floor(Math.random() * 1001)),
 };
 
+/** What each dynamic variable gives, for tooltips and completion. */
+export const DYNAMIC_DESCRIPTIONS: Record<string, string> = {
+  $guid: "Dynamic: a new random UUID on every send",
+  $timestamp: "Dynamic: Unix time in seconds when sending",
+  $isoTimestamp: "Dynamic: ISO 8601 date and time when sending",
+  $randomInt: "Dynamic: a random integer from 0 to 1000",
+};
+
 export function resolveText(text: string, vars: Vars, missing: Set<string>, preview = false): string {
   return text.replace(/\{\{([^{}]*)\}\}/g, (whole, raw: string) => {
     const name = raw.trim();

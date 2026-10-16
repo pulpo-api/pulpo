@@ -8,12 +8,21 @@ import { json } from "@codemirror/lang-json";
 import { javascript } from "@codemirror/lang-javascript";
 import { xml } from "@codemirror/lang-xml";
 import { tags } from "@lezer/highlight";
+import { refreshVariables, variables as variablesExt } from "../cmVariables";
+import { varContext } from "../varContext";
 
 export type Language = "json" | "javascript" | "xml" | "text";
 
 const props = withDefaults(
-  defineProps<{ modelValue: string; language?: Language; readonly?: boolean; placeholder?: string }>(),
-  { language: "text", readonly: false, placeholder: "" },
+  defineProps<{
+    modelValue: string;
+    language?: Language;
+    readonly?: boolean;
+    placeholder?: string;
+    /** Highlight and complete `{{variables}}` (request data, not scripts). */
+    variables?: boolean;
+  }>(),
+  { language: "text", readonly: false, placeholder: "", variables: false },
 );
 const emit = defineEmits<{ "update:modelValue": [value: string]; run: []; save: [] }>();
 
@@ -79,6 +88,7 @@ onMounted(() => {
         syntaxHighlighting(highlight),
         EditorView.lineWrapping,
         placeholderExt(props.placeholder),
+        props.variables ? variablesExt({ ownCompletion: false }) : [],
         languageSlot.of(languageExtension(props.language)),
         readonlySlot.of([EditorState.readOnly.of(props.readonly), EditorView.editable.of(!props.readonly)]),
         EditorView.updateListener.of((update) => {
@@ -110,6 +120,10 @@ watch(
       effects: readonlySlot.reconfigure([EditorState.readOnly.of(readonly), EditorView.editable.of(!readonly)]),
     }),
 );
+
+watch(varContext, () => {
+  if (props.variables) view?.dispatch({ effects: refreshVariables.of(null) });
+});
 
 onBeforeUnmount(() => view?.destroy());
 </script>

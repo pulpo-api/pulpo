@@ -2,6 +2,7 @@
 import { computed, ref, watch } from "vue";
 import type { HttpRequest } from "../core";
 import { joinUrl, pathParamNames, splitUrl } from "../params";
+import VarInput from "./VarInput.vue";
 
 const props = defineProps<{ request: HttpRequest }>();
 
@@ -100,7 +101,7 @@ watch(pathNames, (names) => {
         spellcheck="false"
         @input="write"
       />
-      <input v-model="row.value" placeholder="value" spellcheck="false" @input="write" />
+      <VarInput v-model="row.value" placeholder="value" :aria-label="`Value of ${row.name || 'param'}`" @update:model-value="write" />
       <button class="icon" title="Remove" @click="remove(i)">✕</button>
     </div>
     <button class="link" @click="add">+ Add param</button>
@@ -115,11 +116,11 @@ watch(pathNames, (names) => {
       </div>
       <div v-for="name in pathNames" :key="name" class="row path-row">
         <code class="name">:{{ name }}</code>
-        <input
-          :value="pathValue(name)"
+        <VarInput
+          :model-value="pathValue(name)"
           placeholder="value"
-          spellcheck="false"
-          @input="setPathValue(name, ($event.target as HTMLInputElement).value)"
+          :aria-label="`Value of :${name}`"
+          @update:model-value="setPathValue(name, $event)"
         />
       </div>
     </template>
