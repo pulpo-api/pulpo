@@ -18,6 +18,8 @@ use std::path::Path;
 pub use curl::parse_curl;
 
 /// A folder or request to create.
+// Requests are bigger than folders; plans are short-lived, so boxing adds nothing.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ImportNode {
     Folder {

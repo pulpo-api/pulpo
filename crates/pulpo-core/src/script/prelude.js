@@ -307,7 +307,7 @@ function __toRequest(req) {
     url: __replaceIn(String(url)),
     headers: headers,
     body: body,
-    timeoutMs: typeof req.timeout === "number" ? req.timeout : null,
+    settings: typeof req.timeout === "number" ? { timeoutMs: req.timeout } : {},
   };
 }
 

@@ -3,3 +3,5 @@ name: "Users"
 auth:
   type: "bearer"
   token: "{{token}}"
+settings:
+  timeoutMs: 10000

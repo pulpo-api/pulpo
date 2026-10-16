@@ -270,7 +270,7 @@ fn request_of(item: &Value, warnings: &mut Vec<String>, at: &str) -> Option<Http
         body: body.raw,
         form: body.form,
         body_file: body.file,
-        timeout_ms: None,
+        settings: Default::default(),
         // Postman's per-request "Disable cookie jar" setting.
         cookies: !item
             .pointer("/protocolProfileBehavior/disableCookies")

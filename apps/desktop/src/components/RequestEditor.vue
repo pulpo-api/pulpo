@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { HTTP_METHODS, bodyMode, type HttpRequest } from "../core";
-import type { InheritedAuth, Scripts } from "../workspace";
+import type { InheritedAuth, InheritedSettings, Scripts } from "../workspace";
+import SettingsEditor from "./SettingsEditor.vue";
 import AuthEditor from "./AuthEditor.vue";
 import CodeEditor from "./CodeEditor.vue";
 import BodyEditor from "./BodyEditor.vue";
@@ -15,11 +16,12 @@ const props = defineProps<{
   supported: boolean;
   preview: { url: string; changed: boolean; missing: string[] } | null;
   inheritedAuth: InheritedAuth;
+  inheritedSettings: InheritedSettings;
   root: string;
 }>();
 const emit = defineEmits<{ send: []; save: [] }>();
 
-const tab = ref<"params" | "auth" | "body" | "headers" | "pre" | "test">(
+const tab = ref<"params" | "auth" | "body" | "headers" | "settings" | "pre" | "test">(
   props.request.method === "GET" || splitUrl(props.request.url).params.length ? "params" : "body",
 );
 const paramCount = computed(() => splitUrl(props.request.url).params.length + pathParamNames(props.request.url).length);
@@ -28,6 +30,7 @@ const BODY_BADGES: Partial<Record<ReturnType<typeof bodyMode>, string>> = {
   multipart: "Form",
   file: "File",
 };
+const settingsCount = computed(() => Object.keys(props.request.settings ?? {}).length);
 const bodyBadge = computed(() => BODY_BADGES[bodyMode(props.request)] ?? "");
 const auth = computed({
   get: () => props.request.auth ?? null,
@@ -86,6 +89,9 @@ function removeHeader(index: number) {
       <button :class="{ on: tab === 'headers' }" @click="tab = 'headers'">
         Headers <span v-if="activeHeaders" class="count">{{ activeHeaders }}</span>
       </button>
+      <button :class="{ on: tab === 'settings' }" @click="tab = 'settings'">
+        Settings <span v-if="settingsCount" class="count" title="Settings set on this request">{{ settingsCount }}</span>
+      </button>
       <button :class="{ on: tab === 'pre' }" @click="tab = 'pre'">
         Pre-request <span v-if="scripts.pre.trim()" class="dot"></span>
       </button>
@@ -99,6 +105,14 @@ function removeHeader(index: number) {
     <ParamsEditor v-if="tab === 'params'" :request="request" />
 
     <AuthEditor v-else-if="tab === 'auth'" v-model="auth" :inherited="inheritedAuth" />
+
+    <SettingsEditor
+      v-else-if="tab === 'settings'"
+      :request="request"
+      :inherited="inheritedSettings"
+      :root="root"
+      :resolved-url="preview?.url ?? request.url"
+    />
 
     <BodyEditor v-else-if="tab === 'body'" :request="request" :root="root" @send="emit('send')" @save="emit('save')" />
 

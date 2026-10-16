@@ -74,7 +74,18 @@
     },
     "bodyFile": { "type": "string", "description": "With body: file. A workspace file sent as the whole body, e.g. files/photo.png." },
     "cookies": { "type": "boolean", "default": true, "description": "Send and store cookies with the environment's jar (.pulpo/cookies.json). A Cookie header written by hand wins." },
-    "timeoutMs": { "type": "integer", "minimum": 1, "description": "Request timeout in milliseconds (default 30000)." }
+    "settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "How the request is sent. Unset fields come from the nearest folder (_folder.yaml), then the workspace (pulpo.yaml), which take the same block.",
+      "properties": {
+        "timeoutMs": { "type": "integer", "minimum": 1, "description": "Request timeout in milliseconds (default 30000)." },
+        "verifySsl": { "type": "boolean", "default": true, "description": "False accepts invalid or self-signed server certificates." },
+        "followRedirects": { "type": "boolean", "default": true, "description": "Follow up to 10 redirects." },
+        "proxy": { "type": "string", "description": "system (HTTP_PROXY and friends, the default), none, or a proxy URL (http://, https://, socks5://). Credentials as {{variables}}." }
+      }
+    },
+    "timeoutMs": { "type": "integer", "minimum": 1, "deprecated": true, "description": "Old place of settings.timeoutMs; pulpo fmt moves it." }
   },
   "if": { "properties": { "protocol": { "const": "http" } } },
   "then": { "required": ["method"] },

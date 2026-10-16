@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 
+pub mod certificates;
 pub mod collection;
 pub mod cookies;
 pub mod environment;

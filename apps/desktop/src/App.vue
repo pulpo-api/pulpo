@@ -13,6 +13,7 @@ import {
   asCollectionError,
   backend,
   inheritedAuth,
+  inheritedSettings,
   toEntry,
   type CollectionError,
   type Environment,
@@ -111,6 +112,12 @@ const selectedInheritedAuth = computed(() =>
   workspace.value && selected.value
     ? inheritedAuth(workspace.value, selected.value.id)
     : { auth: { type: "none" as const }, sourceId: "", sourceName: "", found: false },
+);
+
+const selectedInheritedSettings = computed(() =>
+  workspace.value && selected.value
+    ? inheritedSettings(workspace.value, selected.value.id)
+    : inheritedSettings({ root: "", name: "", tree: [] }, ""),
 );
 
 const preview = computed(() => {
@@ -525,6 +532,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         :supported="selected.protocol === 'http'"
         :preview="preview"
         :inherited-auth="selectedInheritedAuth"
+        :inherited-settings="selectedInheritedSettings"
         :root="workspace?.root ?? ''"
         @send="send"
         @save="save()"

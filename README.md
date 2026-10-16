@@ -105,6 +105,8 @@ auth:
   token: "{{token}}"
 ```
 
+Settings inherit the same way, field by field: `settings:` with `timeoutMs`, `verifySsl`, `followRedirects` and `proxy` (`system`, `none` or a URL) on a request, a folder or the workspace. Client certificates (mTLS, PEM or PFX/P12) are set per host on each machine in `.pulpo/certificates.json`, never in git; a PFX password is written as a `{{secret}}` variable so it lives in the OS keychain.
+
 Cookies work like in a browser: each environment has its own jar in `.pulpo/cookies.json` (local, never committed). Cookies set by responses, including redirects and `pm.sendRequest` logins, go back to the same domain on later requests, and scripts read them with `pm.cookies.get(name)`. Turn the jar off for one request with `cookies: false`.
 
 Keep the secret parts as `{{variables}}` so the file can be committed; the app warns when a token or password is typed literally. A header written by hand with the same name wins over the auth.

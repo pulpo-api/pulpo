@@ -294,7 +294,7 @@ pub fn parse_curl(command: &str) -> Result<(HttpRequest, Vec<String>), ImportErr
                 fields: form,
             }),
             body_file,
-            timeout_ms: None,
+            settings: Default::default(),
             cookies: true,
             disabled_params: Vec::new(),
             path_params: Vec::new(),

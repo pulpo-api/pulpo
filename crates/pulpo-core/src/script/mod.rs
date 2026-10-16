@@ -32,8 +32,8 @@ fn send_blocking(request_json: String, cookies: Option<Arc<SharedJar>>) -> Strin
                 return serde_json::json!({ "ok": false, "error": format!("bad request: {e}") })
             }
         };
-        if request.timeout_ms.is_none() {
-            request.timeout_ms = Some(SUB_REQUEST_TIMEOUT_MS);
+        if request.settings.timeout_ms.is_none() {
+            request.settings.timeout_ms = Some(SUB_REQUEST_TIMEOUT_MS);
         }
         let runtime = match tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -43,8 +43,8 @@ fn send_blocking(request_json: String, cookies: Option<Arc<SharedJar>>) -> Strin
             Err(e) => return serde_json::json!({ "ok": false, "error": e.to_string() }),
         };
         let context = SendContext {
-            root: None,
             cookies,
+            ..Default::default()
         };
         match runtime.block_on(http::send_with(&request, &context)) {
             Ok(response) => serde_json::json!({ "ok": true, "response": response }),

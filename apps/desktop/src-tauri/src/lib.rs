@@ -1,7 +1,8 @@
+use pulpo_core::certificates::{self, ClientCertificate};
 use pulpo_core::collection::{self, CollectionError, RequestEntry, Scripts, Workspace};
 use pulpo_core::cookies::{self, Cookie, Jar};
 use pulpo_core::environment::{self, Environment};
-use pulpo_core::http::{self, Auth, HttpRequest, HttpResponse, SendError};
+use pulpo_core::http::{self, Auth, HttpRequest, HttpResponse, SendError, Settings};
 use pulpo_core::import::{self, ImportSummary};
 use pulpo_core::keychain::Keychain;
 use pulpo_core::run::{self, RunReport};
@@ -60,6 +61,30 @@ async fn run_request(
 #[tauri::command]
 async fn folder_scripts(root: String, folder_id: String) -> Result<Scripts, CollectionError> {
     collection::folder_scripts(Path::new(&root), &folder_id)
+}
+
+/// Client certificates (mTLS) of this machine, from `.pulpo/certificates.json`.
+#[tauri::command]
+async fn list_certificates(root: String) -> Vec<ClientCertificate> {
+    certificates::load_certificates(Path::new(&root))
+}
+
+#[tauri::command]
+async fn save_certificates(
+    root: String,
+    certificates: Vec<ClientCertificate>,
+) -> Result<(), CollectionError> {
+    certificates::save_certificates(Path::new(&root), &certificates)
+}
+
+/// Replaces the settings of a folder (`""` = the workspace).
+#[tauri::command]
+async fn save_folder_settings(
+    root: String,
+    folder_id: String,
+    settings: Settings,
+) -> Result<(), CollectionError> {
+    collection::save_folder_settings(Path::new(&root), &folder_id, &settings)
 }
 
 /// The cookie jar of an environment (None = no environment), from `.pulpo/cookies.json`.
@@ -209,6 +234,9 @@ pub fn run() {
             save_folder_auth,
             list_cookies,
             save_cookies,
+            list_certificates,
+            save_certificates,
+            save_folder_settings,
             clear_local_values
         ])
         .run(tauri::generate_context!())

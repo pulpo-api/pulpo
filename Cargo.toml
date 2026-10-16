@@ -9,7 +9,7 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/pulpo-api/pulpo"
 homepage = "https://pulpo-api.github.io"
 authors = ["Pulpo contributors"]
-rust-version = "1.80"
+rust-version = "1.85"
 
 [workspace.dependencies]
 pulpo-core = { path = "crates/pulpo-core", version = "0.0.1" }

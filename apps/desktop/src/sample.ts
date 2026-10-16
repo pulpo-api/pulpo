@@ -52,6 +52,7 @@ export function sampleWorkspace(): Workspace {
         name: "Users",
         // Shows auth inheritance; JSONPlaceholder ignores the header, so a demo value is enough.
         auth: { type: "bearer", token: "{{token}}" },
+        settings: { timeoutMs: 10000 },
         children: [
           request("02-users/01-list-users.pulpo.yaml", "List users", {
             method: "GET",

@@ -12,8 +12,9 @@ rust-version.workspace = true
 [dependencies]
 serde.workspace = true
 serde_json = { workspace = true, features = ["preserve_order"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2", "gzip", "brotli", "deflate", "multipart", "cookies"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2", "gzip", "brotli", "deflate", "multipart", "cookies", "socks"] }
 httpdate = "1"
+p12-keystore = "0.4"
 serde_norway = "0.9"
 uuid = { version = "1", features = ["v4"] }
 rquickjs = "0.14"
@@ -29,4 +30,5 @@ keychain = ["dep:keyring"]
 
 [dev-dependencies]
 tempfile = "3"
+rcgen = "0.13"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "io-util"] }

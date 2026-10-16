@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const DEFAULT_TIMEOUT_MS: u64 = 30_000;
+const MAX_REDIRECTS: usize = 10;
 const USER_AGENT: &str = concat!("Pulpo/", env!("CARGO_PKG_VERSION"));
 
 /// A header as edited in the UI. Disabled headers are kept but not sent.
@@ -31,6 +32,42 @@ impl Header {
             value: value.into(),
             enabled: true,
         }
+    }
+}
+
+/// How a request is sent. Every field is optional: unset fields come from the nearest
+/// folder that sets them, then the workspace, then the defaults.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Settings {
+    /// Default 30 000.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+    /// Default true. False accepts invalid or self-signed server certificates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verify_ssl: Option<bool>,
+    /// Default true (up to 10 redirects).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub follow_redirects: Option<bool>,
+    /// `system` (HTTP_PROXY and friends, the default), `none`, or a proxy URL
+    /// (`http://`, `https://` or `socks5://`, credentials as `{{variables}}`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<String>,
+}
+
+impl Settings {
+    /// These settings over `parent`'s: fields set here win.
+    pub fn over(&self, parent: &Settings) -> Settings {
+        Settings {
+            timeout_ms: self.timeout_ms.or(parent.timeout_ms),
+            verify_ssl: self.verify_ssl.or(parent.verify_ssl),
+            follow_redirects: self.follow_redirects.or(parent.follow_redirects),
+            proxy: self.proxy.clone().or_else(|| parent.proxy.clone()),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        *self == Settings::default()
     }
 }
 
@@ -224,8 +261,9 @@ pub struct HttpRequest {
     /// A file sent as the whole body, relative to the workspace. Wins over `body`.
     #[serde(default)]
     pub body_file: Option<String>,
+    /// Own settings; unset fields are inherited (resolved before sending).
     #[serde(default)]
-    pub timeout_ms: Option<u64>,
+    pub settings: Settings,
     #[serde(default)]
     pub disabled_params: Vec<Param>,
     #[serde(default)]
@@ -247,7 +285,7 @@ impl HttpRequest {
             body: None,
             form: None,
             body_file: None,
-            timeout_ms: None,
+            settings: Settings::default(),
             disabled_params: Vec::new(),
             path_params: Vec::new(),
             auth: None,
@@ -261,6 +299,8 @@ impl HttpRequest {
 pub struct SendContext<'a> {
     pub root: Option<&'a Path>,
     pub cookies: Option<Arc<SharedJar>>,
+    /// Client certificate (mTLS) as PEM: certificate chain and private key.
+    pub client_pem: Option<Vec<u8>>,
 }
 
 /// Finds a file a request sends. Paths are relative to the workspace and may not leave
@@ -500,7 +540,7 @@ pub async fn send_in(
         request,
         &SendContext {
             root,
-            cookies: None,
+            ..Default::default()
         },
     )
     .await
@@ -527,10 +567,33 @@ pub async fn send_with(
         )));
     }
 
-    let timeout = Duration::from_millis(request.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS));
+    let settings = &request.settings;
+    let timeout = Duration::from_millis(settings.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS));
     let mut client = reqwest::Client::builder()
         .user_agent(USER_AGENT)
-        .timeout(timeout);
+        .timeout(timeout)
+        .redirect(if settings.follow_redirects == Some(false) {
+            reqwest::redirect::Policy::none()
+        } else {
+            reqwest::redirect::Policy::limited(MAX_REDIRECTS)
+        });
+    if settings.verify_ssl == Some(false) {
+        client = client.danger_accept_invalid_certs(true);
+    }
+    match settings.proxy.as_deref().map(str::trim) {
+        None | Some("") | Some("system") => {}
+        Some("none") => client = client.no_proxy(),
+        Some(url) => {
+            let proxy = reqwest::Proxy::all(url)
+                .map_err(|e| SendError::InvalidUrl(format!("proxy {url}: {e}")))?;
+            client = client.proxy(proxy);
+        }
+    }
+    if let Some(pem) = &context.client_pem {
+        let identity = reqwest::Identity::from_pem(pem)
+            .map_err(|e| SendError::File(format!("client certificate: {e}")))?;
+        client = client.identity(identity);
+    }
     if let (true, Some(jar)) = (request.cookies, &context.cookies) {
         client = client.cookie_provider(jar.clone());
     }
@@ -866,6 +929,80 @@ mod tests {
         );
     }
 
+    /// Answers one request with a fixed raw response.
+    async fn reply_once(reply: &'static str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buffer = [0u8; 4096];
+            let _ = socket.read(&mut buffer).await.unwrap();
+            socket.write_all(reply.as_bytes()).await.unwrap();
+        });
+        format!("http://{address}")
+    }
+
+    #[tokio::test]
+    async fn can_stop_following_redirects() {
+        let url = reply_once(
+            "HTTP/1.1 302 Found
+location: http://127.0.0.1:9/never
+content-length: 0
+connection: close
+
+",
+        )
+        .await;
+        let mut request = HttpRequest::new(HttpMethod::Get, url);
+        request.settings.follow_redirects = Some(false);
+        let response = send(&request).await.unwrap();
+        assert_eq!(response.status, 302);
+        assert!(response.headers.iter().any(|h| h.name == "location"));
+    }
+
+    #[tokio::test]
+    async fn sends_through_a_proxy() {
+        let proxy = raw_echo().await;
+        let mut request = HttpRequest::new(HttpMethod::Get, "http://api.example.invalid/orders");
+        request.settings.proxy = Some(proxy);
+        let echoed = send(&request).await.unwrap().body;
+        assert!(
+            echoed.starts_with("GET http://api.example.invalid/orders HTTP/1.1"),
+            "the proxy gets the absolute URL: {echoed}"
+        );
+
+        request.settings.proxy = Some("not a url".into());
+        assert!(matches!(
+            send(&request).await.unwrap_err(),
+            SendError::InvalidUrl(_)
+        ));
+    }
+
+    #[test]
+    fn settings_inherit_field_by_field() {
+        let folder = Settings {
+            timeout_ms: Some(1000),
+            verify_ssl: Some(false),
+            proxy: Some("none".into()),
+            ..Default::default()
+        };
+        let own = Settings {
+            timeout_ms: Some(50),
+            follow_redirects: Some(false),
+            ..Default::default()
+        };
+        assert_eq!(
+            own.over(&folder),
+            Settings {
+                timeout_ms: Some(50),
+                verify_ssl: Some(false),
+                follow_redirects: Some(false),
+                proxy: Some("none".into()),
+            }
+        );
+        assert!(Settings::default().is_empty());
+    }
+
     #[tokio::test]
     async fn sends_a_file_as_the_body() {
         let ws = tempfile::tempdir().unwrap();
@@ -964,9 +1101,9 @@ mod tests {
     #[test]
     fn serializes_requests_in_camel_case() {
         let mut request = HttpRequest::new(HttpMethod::Get, "http://localhost");
-        request.timeout_ms = Some(500);
+        request.settings.timeout_ms = Some(500);
         let json = serde_json::to_string(&request).unwrap();
         assert!(json.contains(r#""method":"GET""#));
-        assert!(json.contains(r#""timeoutMs":500"#));
+        assert!(json.contains(r#""settings":{"timeoutMs":500}"#));
     }
 }

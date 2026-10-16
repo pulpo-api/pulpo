@@ -1,5 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
-import { insideTauri, sendHttp, asSendError, type Auth, type HttpRequest, type HttpResponse, type SendError } from "./core";
+import {
+  insideTauri,
+  sendHttp,
+  asSendError,
+  type Auth,
+  type HttpRequest,
+  type HttpResponse,
+  type SendError,
+  type Settings,
+} from "./core";
 import { sampleEnvironments, sampleWorkspace } from "./sample";
 
 export type Protocol = "http" | "graphql" | "grpc" | "websocket" | "soap" | "sse";
@@ -35,7 +44,7 @@ export interface RunReport {
 
 export type TreeNode =
   | ({ type: "request" } & RequestEntry)
-  | { type: "folder"; id: string; name: string; children: TreeNode[]; auth?: Auth | null };
+  | { type: "folder"; id: string; name: string; children: TreeNode[]; auth?: Auth | null; settings?: Settings };
 
 export interface Workspace {
   root: string;
@@ -43,6 +52,66 @@ export interface Workspace {
   tree: TreeNode[];
   /** Auth for every request unless a folder or the request sets its own. */
   auth?: Auth | null;
+  /** Settings for every request unless a folder or the request sets them. */
+  settings?: Settings;
+}
+
+/** A setting a request inherits, and who sets it ("" = nobody: the default applies). */
+export type InheritedSettings = { [K in keyof Settings]-?: { value: Settings[K]; from: string } };
+
+/** What each setting would be without the request's own: the nearest folder that sets it,
+ * else the workspace. Mirrors `effective_settings` in pulpo-core. */
+export function inheritedSettings(workspace: Workspace, requestId: string): InheritedSettings {
+  const levels: { name: string; settings?: Settings }[] = [{ name: workspace.name, settings: workspace.settings }];
+  const parts = requestId.split("/").slice(0, -1);
+  let nodes = workspace.tree;
+  for (let i = 0; i < parts.length; i++) {
+    const id = parts.slice(0, i + 1).join("/");
+    const folder = nodes.find((n): n is Extract<TreeNode, { type: "folder" }> => n.type === "folder" && n.id === id);
+    if (!folder) break;
+    levels.push({ name: folder.name, settings: folder.settings });
+    nodes = folder.children;
+  }
+  const pick = <K extends keyof Settings>(key: K) => {
+    const level = [...levels].reverse().find((l) => l.settings?.[key] != null);
+    return { value: level?.settings?.[key], from: level?.name ?? "" };
+  };
+  return {
+    timeoutMs: pick("timeoutMs"),
+    verifySsl: pick("verifySsl"),
+    followRedirects: pick("followRedirects"),
+    proxy: pick("proxy"),
+  };
+}
+
+/** A client certificate (mTLS) of this machine, in `.pulpo/certificates.json`. */
+export interface ClientCertificate {
+  /** api.bank.test, api.bank.test:8443 or *.bank.test */
+  host: string;
+  cert?: string;
+  key?: string;
+  pfx?: string;
+  /** Usually a {{secret variable}} of the environment. */
+  passphrase?: string;
+}
+
+/** The certificate the desktop app would use for a URL (exact host first, then *.domain).
+ * Mirrors `certificates::find` in pulpo-core. */
+export function certificateFor(all: ClientCertificate[], url: string): ClientCertificate | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  const host = parsed.hostname.toLowerCase();
+  const port = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
+  const matches = (c: ClientCertificate, wildcard: boolean) => {
+    const [name, entryPort] = c.host.trim().toLowerCase().split(/:(?=\d+$)/);
+    if (entryPort && entryPort !== port) return false;
+    return name.startsWith("*.") ? wildcard && host.endsWith(name.slice(1)) : !wildcard && host === name;
+  };
+  return all.find((c) => matches(c, false)) ?? all.find((c) => matches(c, true)) ?? null;
 }
 
 /** Where a request's auth comes from when it does not set its own. */
@@ -128,15 +197,33 @@ export function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
+/** The request with every field present and in a fixed key order, so that comparing
+ * snapshots (unsaved changes) does not depend on the order fields were added in. */
+export function canonicalRequest(r: HttpRequest): HttpRequest {
+  const s = r.settings ?? {};
+  const settings: Settings = {};
+  if (s.timeoutMs != null) settings.timeoutMs = s.timeoutMs;
+  if (s.verifySsl != null) settings.verifySsl = s.verifySsl;
+  if (s.followRedirects != null) settings.followRedirects = s.followRedirects;
+  if (s.proxy != null) settings.proxy = s.proxy;
+  return {
+    method: r.method,
+    url: r.url,
+    headers: r.headers,
+    body: r.body ?? null,
+    form: r.form ?? null,
+    bodyFile: r.bodyFile ?? null,
+    disabledParams: r.disabledParams ?? [],
+    pathParams: r.pathParams ?? [],
+    auth: r.auth ?? null,
+    cookies: r.cookies ?? true,
+    settings,
+  };
+}
+
 export function toEntry(node: Extract<TreeNode, { type: "request" }>): RequestEntry {
   const { id, name, protocol, request, scripts } = node;
-  return clone({ id, name, protocol, request: {
-      ...request,
-      auth: request.auth ?? null,
-      form: request.form ?? null,
-      bodyFile: request.bodyFile ?? null,
-      cookies: request.cookies ?? true,
-    }, scripts: scripts ?? { pre: "", test: "" } });
+  return clone({ id, name, protocol, request: canonicalRequest(request), scripts: scripts ?? { pre: "", test: "" } });
 }
 
 /** Where the workspace lives: real files in the desktop app, memory in the browser preview. */
@@ -153,6 +240,11 @@ export interface WorkspaceBackend {
   saveEnvironment(root: string, env: Environment): Promise<void>;
   createEnvironment(root: string, name: string): Promise<Environment>;
   deleteEnvironment(root: string, id: string): Promise<void>;
+  /** Client certificates (mTLS) of this machine. */
+  listCertificates(root: string): Promise<ClientCertificate[]>;
+  saveCertificates(root: string, certificates: ClientCertificate[]): Promise<void>;
+  /** Replaces the settings of a folder ("" = the workspace). */
+  saveFolderSettings(root: string, folderId: string, settings: Settings): Promise<void>;
   /** The cookie jar of an environment ("" = no environment). */
   listCookies(root: string, environmentId: string): Promise<Cookie[]>;
   /** Replaces the cookie jar of an environment. */
@@ -188,6 +280,9 @@ const tauriBackend: WorkspaceBackend = {
   createEnvironment: (root, name) => invoke<Environment>("create_environment", { root, name }),
   deleteEnvironment: (root, id) => invoke<void>("delete_environment", { root, id }),
   saveFolderAuth: (root, folderId, auth) => invoke<void>("save_folder_auth", { root, folderId, auth }),
+  listCertificates: (root) => invoke<ClientCertificate[]>("list_certificates", { root }),
+  saveCertificates: (root, certificates) => invoke<void>("save_certificates", { root, certificates }),
+  saveFolderSettings: (root, folderId, settings) => invoke<void>("save_folder_settings", { root, folderId, settings }),
   listCookies: (root, environmentId) => invoke<Cookie[]>("list_cookies", { root, environmentId: environmentId || null }),
   saveCookies: (root, environmentId, cookies) =>
     invoke<void>("save_cookies", { root, environmentId: environmentId || null, cookies }),
@@ -239,6 +334,7 @@ function memoryBackend(): WorkspaceBackend {
   const secretKey = (envId: string, name: string) => `${envId}|${name}`;
   // The browser keeps real cookies itself; this jar only lets the panel be tried out.
   const jars = new Map<string, Cookie[]>();
+  let certificates: ClientCertificate[] = [];
 
   function childrenOf(folderId: string): TreeNode[] {
     if (!folderId) return workspace.tree;
@@ -336,6 +432,28 @@ function memoryBackend(): WorkspaceBackend {
       const index = environments.findIndex((e) => e.id === id);
       if (index >= 0) environments.splice(index, 1);
     },
+    async listCertificates() {
+      return clone(certificates);
+    },
+    async saveCertificates(_root, list) {
+      certificates = clone(list);
+    },
+    async saveFolderSettings(_root, folderId, settings) {
+      if (!folderId) {
+        workspace.settings = clone(settings);
+        return;
+      }
+      const find = (nodes: TreeNode[]): boolean =>
+        nodes.some((node) => {
+          if (node.type !== "folder") return false;
+          if (node.id === folderId) {
+            node.settings = clone(settings);
+            return true;
+          }
+          return find(node.children);
+        });
+      if (!find(workspace.tree)) throw { kind: "invalidPath", message: folderId } satisfies CollectionError;
+    },
     async listCookies(_root, environmentId) {
       return clone(jars.get(environmentId) ?? []);
     },
@@ -372,7 +490,8 @@ function memoryBackend(): WorkspaceBackend {
       if (hasScripts) report.scriptErrors.push("Scripts run in the desktop app; the browser preview only sends the request.");
       try {
         const auth = entry.request.auth ?? inheritedAuth(workspace, entry.id).auth;
-        report.response = await sendHttp({ ...entry.request, auth }, {
+        const timeoutMs = entry.request.settings?.timeoutMs ?? inheritedSettings(workspace, entry.id).timeoutMs.value;
+        report.response = await sendHttp({ ...entry.request, auth, settings: { timeoutMs } }, {
           environmentId,
           browserVars: environmentId ? this.browserVariables!(environmentId) : {},
         });

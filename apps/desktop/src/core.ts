@@ -92,6 +92,17 @@ export function resolveAuth(auth: Auth, resolve: (text: string) => string): Auth
   }
 }
 
+/** How a request is sent; unset fields are inherited. Mirrors `Settings` in pulpo-core. */
+export interface Settings {
+  timeoutMs?: number;
+  verifySsl?: boolean;
+  followRedirects?: boolean;
+  /** "system" (default), "none" or a proxy URL. */
+  proxy?: string;
+}
+
+export const DEFAULT_TIMEOUT_MS = 30_000;
+
 export type FormKind = "urlencoded" | "multipart";
 
 /** A form field. When `file` is true, `value` is a path relative to the workspace. */
@@ -121,7 +132,8 @@ export interface HttpRequest {
   url: string;
   headers: Header[];
   body: string | null;
-  timeoutMs?: number;
+  /** Own settings; unset fields come from the folders and the workspace. */
+  settings?: Settings;
   /** Query params kept but not sent; the enabled ones live in `url`. */
   disabledParams: Param[];
   /** Values for `:name` path segments. */
@@ -210,6 +222,8 @@ async function sendWithFetch(request: HttpRequest): Promise<HttpResponse> {
   for (const h of request.headers) {
     if (h.enabled && h.name.trim()) headers.append(h.name.trim(), h.value);
   }
+  // The browser preview can only apply the timeout; TLS, proxy and redirects need the app.
+  const timeout = AbortSignal.timeout(request.settings?.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   let payload: BodyInit | undefined = request.body ?? undefined;
   if (request.form?.kind === "urlencoded") {
     payload = new URLSearchParams(request.form.fields.map((f) => [f.name, f.value]));
@@ -227,8 +241,15 @@ async function sendWithFetch(request: HttpRequest): Promise<HttpResponse> {
       method: request.method,
       headers,
       body: payload && !["GET", "HEAD"].includes(request.method) ? payload : undefined,
+      signal: timeout,
     });
   } catch (e) {
+    if (e instanceof DOMException && e.name === "TimeoutError") {
+      throw {
+        kind: "timeout",
+        message: `no response after ${request.settings?.timeoutMs ?? DEFAULT_TIMEOUT_MS} ms`,
+      } satisfies SendError;
+    }
     throw {
       kind: "connect",
       message: `${e}. In the browser preview, CORS can block requests; the desktop app has no such limit.`,

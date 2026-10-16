@@ -10,7 +10,9 @@
 //! ```
 //! Pulpo always writes these files in one canonical form so diffs stay small.
 
-use crate::http::{ApiKeyLocation, Auth, Form, FormField, FormKind, Header, HttpRequest, Param};
+use crate::http::{
+    ApiKeyLocation, Auth, Form, FormField, FormKind, Header, HttpRequest, Param, Settings,
+};
 use crate::{HttpMethod, Protocol};
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -175,6 +177,9 @@ pub enum TreeNode {
         /// Auth for the requests inside (`None` = inherit from the parent).
         #[serde(default)]
         auth: Option<Auth>,
+        /// Settings for the requests inside (unset fields come from the parent).
+        #[serde(default)]
+        settings: Settings,
     },
     Request(RequestEntry),
 }
@@ -189,6 +194,9 @@ pub struct Workspace {
     /// Auth for every request of the workspace, unless a folder or request says otherwise.
     #[serde(default)]
     pub auth: Option<Auth>,
+    /// Settings for every request, unless a folder or request sets them.
+    #[serde(default)]
+    pub settings: Settings,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -228,6 +236,8 @@ struct WorkspaceFileV1 {
     name: String,
     #[serde(default)]
     auth: Option<Auth>,
+    #[serde(default)]
+    settings: Settings,
 }
 
 #[derive(Debug, Deserialize)]
@@ -237,6 +247,8 @@ struct FolderFileV1 {
     name: String,
     #[serde(default)]
     auth: Option<Auth>,
+    #[serde(default)]
+    settings: Settings,
 }
 
 #[derive(Debug, Deserialize)]
@@ -256,6 +268,9 @@ struct RequestFileV1 {
     form: Vec<FormFieldV1>,
     #[serde(default)]
     body_file: Option<String>,
+    #[serde(default)]
+    settings: Settings,
+    /// Before settings existed the timeout was top-level; still read, written in settings.
     #[serde(default)]
     timeout_ms: Option<u64>,
     #[serde(default = "yes")]
@@ -343,19 +358,42 @@ fn auth_yaml(auth: Option<&Auth>) -> String {
     out
 }
 
-fn workspace_yaml(name: &str, auth: Option<&Auth>) -> String {
+/// Writes a `settings:` block (nothing when no setting is set).
+fn settings_yaml(settings: &Settings) -> String {
+    if settings.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("settings:\n");
+    if let Some(timeout) = settings.timeout_ms {
+        out.push_str(&format!("  timeoutMs: {timeout}\n"));
+    }
+    if let Some(verify) = settings.verify_ssl {
+        out.push_str(&format!("  verifySsl: {verify}\n"));
+    }
+    if let Some(follow) = settings.follow_redirects {
+        out.push_str(&format!("  followRedirects: {follow}\n"));
+    }
+    if let Some(proxy) = &settings.proxy {
+        out.push_str(&format!("  proxy: {}\n", quote(proxy)));
+    }
+    out
+}
+
+fn workspace_yaml(name: &str, auth: Option<&Auth>, settings: &Settings) -> String {
     format!(
-        "version: {FORMAT_VERSION}\nname: {}\n{}",
+        "version: {FORMAT_VERSION}\nname: {}\n{}{}",
         quote(name),
-        auth_yaml(auth)
+        auth_yaml(auth),
+        settings_yaml(settings)
     )
 }
 
-fn folder_yaml(name: &str, auth: Option<&Auth>) -> String {
+fn folder_yaml(name: &str, auth: Option<&Auth>, settings: &Settings) -> String {
     format!(
-        "version: {FORMAT_VERSION}\nname: {}\n{}",
+        "version: {FORMAT_VERSION}\nname: {}\n{}{}",
         quote(name),
-        auth_yaml(auth)
+        auth_yaml(auth),
+        settings_yaml(settings)
     )
 }
 
@@ -417,9 +455,7 @@ fn request_yaml(entry: &RequestEntry, body: Option<BodyKind>) -> String {
     } else if let Some(kind) = body {
         out.push_str(&format!("body: {}\n", quote(kind.as_str())));
     }
-    if let Some(timeout) = entry.request.timeout_ms {
-        out.push_str(&format!("timeoutMs: {timeout}\n"));
-    }
+    out.push_str(&settings_yaml(&entry.request.settings));
     if !entry.request.cookies {
         out.push_str("cookies: false\n");
     }
@@ -513,19 +549,66 @@ pub fn save_folder_scripts(
     write_scripts(&dir.join(FOLDER_FILE), FOLDER_SCRIPT_STEM, scripts)
 }
 
-/// Auth set on a folder (`""` = the workspace, from `pulpo.yaml`). `None` = not set.
-pub fn folder_auth(root: &Path, folder_id: &str) -> Result<Option<Auth>, CollectionError> {
+/// What `pulpo.yaml` or a `_folder.yaml` says besides the name.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct FolderMeta {
+    name: String,
+    auth: Option<Auth>,
+    settings: Settings,
+}
+
+/// Reads a folder's meta (`""` = the workspace). A folder without `_folder.yaml` is named
+/// after its directory.
+fn read_meta(root: &Path, folder_id: &str) -> Result<FolderMeta, CollectionError> {
     if folder_id.is_empty() {
         let file = root.join(WORKSPACE_FILE);
         let parsed: WorkspaceFileV1 = parse_yaml(&file)?;
-        return Ok(parsed.auth);
+        return Ok(FolderMeta {
+            name: parsed.name,
+            auth: parsed.auth,
+            settings: parsed.settings,
+        });
     }
-    let file = resolve(root, folder_id)?.join(FOLDER_FILE);
+    let dir = resolve(root, folder_id)?;
+    if !dir.is_dir() {
+        return Err(CollectionError::InvalidPath(folder_id.to_string()));
+    }
+    let file = dir.join(FOLDER_FILE);
     if !file.is_file() {
-        return Ok(None);
+        return Ok(FolderMeta {
+            name: dir
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            ..Default::default()
+        });
     }
     let parsed: FolderFileV1 = parse_yaml(&file)?;
-    Ok(parsed.auth)
+    Ok(FolderMeta {
+        name: parsed.name,
+        auth: parsed.auth,
+        settings: parsed.settings,
+    })
+}
+
+fn write_meta(root: &Path, folder_id: &str, meta: &FolderMeta) -> Result<(), CollectionError> {
+    let (file, text) = if folder_id.is_empty() {
+        (
+            root.join(WORKSPACE_FILE),
+            workspace_yaml(&meta.name, meta.auth.as_ref(), &meta.settings),
+        )
+    } else {
+        (
+            resolve(root, folder_id)?.join(FOLDER_FILE),
+            folder_yaml(&meta.name, meta.auth.as_ref(), &meta.settings),
+        )
+    };
+    fs::write(&file, text).map_err(|e| io_error(&file, e))
+}
+
+/// Auth set on a folder (`""` = the workspace, from `pulpo.yaml`). `None` = not set.
+pub fn folder_auth(root: &Path, folder_id: &str) -> Result<Option<Auth>, CollectionError> {
+    Ok(read_meta(root, folder_id)?.auth)
 }
 
 /// Sets (or clears, with `None`) the auth of a folder (`""` = the workspace).
@@ -534,26 +617,35 @@ pub fn save_folder_auth(
     folder_id: &str,
     auth: Option<&Auth>,
 ) -> Result<(), CollectionError> {
-    if folder_id.is_empty() {
-        let file = root.join(WORKSPACE_FILE);
-        let parsed: WorkspaceFileV1 = parse_yaml(&file)?;
-        return fs::write(&file, workspace_yaml(&parsed.name, auth))
-            .map_err(|e| io_error(&file, e));
+    let mut meta = read_meta(root, folder_id)?;
+    meta.auth = auth.cloned();
+    write_meta(root, folder_id, &meta)
+}
+
+/// Settings of a folder (`""` = the workspace); empty when it sets none.
+pub fn folder_settings(root: &Path, folder_id: &str) -> Result<Settings, CollectionError> {
+    Ok(read_meta(root, folder_id)?.settings)
+}
+
+/// Replaces the settings of a folder (`""` = the workspace).
+pub fn save_folder_settings(
+    root: &Path,
+    folder_id: &str,
+    settings: &Settings,
+) -> Result<(), CollectionError> {
+    let mut meta = read_meta(root, folder_id)?;
+    meta.settings = settings.clone();
+    write_meta(root, folder_id, &meta)
+}
+
+/// The settings a request really uses: its own, then each folder's going up, then the
+/// workspace's. Fields nobody sets stay `None` (the engine defaults apply).
+pub fn effective_settings(root: &Path, entry: &RequestEntry) -> Result<Settings, CollectionError> {
+    let mut settings = entry.request.settings.clone();
+    for folder in ancestor_folders(&entry.id).into_iter().rev() {
+        settings = settings.over(&folder_settings(root, &folder)?);
     }
-    let dir = resolve(root, folder_id)?;
-    if !dir.is_dir() {
-        return Err(CollectionError::InvalidPath(folder_id.to_string()));
-    }
-    let file = dir.join(FOLDER_FILE);
-    let name = if file.is_file() {
-        let parsed: FolderFileV1 = parse_yaml(&file)?;
-        parsed.name
-    } else {
-        dir.file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default()
-    };
-    fs::write(&file, folder_yaml(&name, auth)).map_err(|e| io_error(&file, e))
+    Ok(settings)
 }
 
 /// The auth a request really uses: its own, or the nearest folder's going up to the
@@ -642,7 +734,8 @@ pub fn init_workspace(root: &Path, name: &str) -> Result<(), CollectionError> {
         ));
     }
     fs::create_dir_all(root).map_err(|e| io_error(root, e))?;
-    fs::write(&file, workspace_yaml(name, None)).map_err(|e| io_error(&file, e))
+    fs::write(&file, workspace_yaml(name, None, &Settings::default()))
+        .map_err(|e| io_error(&file, e))
 }
 
 /// Reads the whole workspace tree.
@@ -658,6 +751,7 @@ pub fn load_workspace(root: &Path) -> Result<Workspace, CollectionError> {
         name: workspace.name,
         tree: load_dir(root, root)?,
         auth: workspace.auth,
+        settings: workspace.settings,
     })
 }
 
@@ -677,18 +771,19 @@ fn load_dir(root: &Path, dir: &Path) -> Result<Vec<TreeNode>, CollectionError> {
                 continue;
             }
             let folder_file = path.join(FOLDER_FILE);
-            let (name, auth) = if folder_file.is_file() {
+            let (name, auth, settings) = if folder_file.is_file() {
                 let folder: FolderFileV1 = parse_yaml(&folder_file)?;
                 check_version(folder.version, &folder_file)?;
-                (folder.name, folder.auth)
+                (folder.name, folder.auth, folder.settings)
             } else {
-                (file_name.clone(), None)
+                (file_name.clone(), None, Settings::default())
             };
             nodes.push(TreeNode::Folder {
                 id: relative_id(root, &path),
                 name,
                 children: load_dir(root, &path)?,
                 auth,
+                settings,
             });
         } else if file_name.ends_with(REQUEST_SUFFIX) {
             nodes.push(TreeNode::Request(load_request_file(root, &path)?));
@@ -777,7 +872,10 @@ fn load_request_file(root: &Path, path: &Path) -> Result<RequestEntry, Collectio
             body,
             form,
             body_file,
-            timeout_ms: file.timeout_ms,
+            settings: Settings {
+                timeout_ms: file.settings.timeout_ms.or(file.timeout_ms),
+                ..file.settings
+            },
             cookies: file.cookies,
             disabled_params: file.disabled_params,
             path_params: file.path_params,
@@ -860,7 +958,8 @@ pub fn create_folder(root: &Path, parent_id: &str, name: &str) -> Result<String,
     let dir = parent.join(format!("{:02}-{}", next_order(&parent)?, slugify(name)));
     fs::create_dir_all(&dir).map_err(|e| io_error(&dir, e))?;
     let file = dir.join(FOLDER_FILE);
-    fs::write(&file, folder_yaml(name, None)).map_err(|e| io_error(&file, e))?;
+    fs::write(&file, folder_yaml(name, None, &Settings::default()))
+        .map_err(|e| io_error(&file, e))?;
     Ok(relative_id(root, &dir))
 }
 
@@ -885,7 +984,11 @@ pub fn format_workspace(root: &Path, check: bool) -> Result<Vec<String>, Collect
     let ws_file = root.join(WORKSPACE_FILE);
     rewrite(
         &ws_file,
-        &workspace_yaml(&workspace.name, workspace.auth.as_ref()),
+        &workspace_yaml(
+            &workspace.name,
+            workspace.auth.as_ref(),
+            &workspace.settings,
+        ),
         check,
         root,
         &mut changed,
@@ -908,12 +1011,13 @@ fn format_nodes(
                 name,
                 children,
                 auth,
+                settings,
             } => {
                 let file = resolve(root, id)?.join(FOLDER_FILE);
                 if file.is_file() {
                     rewrite(
                         &file,
-                        &folder_yaml(name, auth.as_ref()),
+                        &folder_yaml(name, auth.as_ref(), settings),
                         check,
                         root,
                         changed,
@@ -987,7 +1091,11 @@ mod tests {
                 body: Some("{\n  \"a\": 1\n}\n".to_string()),
                 form: None,
                 body_file: None,
-                timeout_ms: Some(5000),
+                settings: Settings {
+                    timeout_ms: Some(5000),
+                    verify_ssl: Some(false),
+                    ..Default::default()
+                },
                 cookies: false,
                 disabled_params: vec![Param::new("debug", "true")],
                 path_params: vec![Param::new("tenant", "{{tenantId}}")],
@@ -1087,7 +1195,7 @@ mod tests {
                  \x20 - name: \"X-Debug\"\n    value: \"yes\\tplease\"\n    enabled: false\n\
                  auth:\n  type: \"bearer\"\n  token: \"{{{{token}}}}\"\n\
                  body: \"json\"\n\
-                 timeoutMs: 5000\n\
+                 settings:\n  timeoutMs: 5000\n  verifySsl: false\n\
                  cookies: false\n"
             )
         );
@@ -1160,6 +1268,104 @@ mod tests {
         assert_eq!(
             load_request(ws.path(), &entry.id).unwrap().request.body,
             None
+        );
+    }
+
+    #[test]
+    fn inherits_settings_and_keeps_the_rest_of_the_folder_file() {
+        let ws = workspace();
+        let api = create_folder(ws.path(), "", "API").unwrap();
+        let entry = create_request(ws.path(), &api, "Health").unwrap();
+        save_folder_auth(
+            ws.path(),
+            &api,
+            Some(&Auth::Bearer {
+                token: "{{t}}".into(),
+            }),
+        )
+        .unwrap();
+
+        save_folder_settings(
+            ws.path(),
+            "",
+            &Settings {
+                timeout_ms: Some(9000),
+                proxy: Some("http://proxy.corp:3128".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        save_folder_settings(
+            ws.path(),
+            &api,
+            &Settings {
+                verify_ssl: Some(false),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            folder_auth(ws.path(), &api).unwrap(),
+            Some(Auth::Bearer {
+                token: "{{t}}".into()
+            }),
+            "saving settings keeps the auth"
+        );
+        assert_eq!(
+            effective_settings(ws.path(), &entry).unwrap(),
+            Settings {
+                timeout_ms: Some(9000),
+                verify_ssl: Some(false),
+                follow_redirects: None,
+                proxy: Some("http://proxy.corp:3128".into()),
+            }
+        );
+        let text = fs::read_to_string(ws.path().join(&api).join(FOLDER_FILE)).unwrap();
+        assert!(
+            text.ends_with(
+                "settings:
+  verifySsl: false
+"
+            ),
+            "{text}"
+        );
+        assert!(format_workspace(ws.path(), true).unwrap().is_empty());
+        let tree = load_workspace(ws.path()).unwrap();
+        assert_eq!(tree.settings.timeout_ms, Some(9000));
+        match &tree.tree[0] {
+            TreeNode::Folder { settings, .. } => assert_eq!(settings.verify_ssl, Some(false)),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn reads_the_old_top_level_timeout() {
+        let ws = workspace();
+        fs::write(
+            ws.path().join("01-old.pulpo.yaml"),
+            "version: 1
+name: \"Old\"
+protocol: \"http\"
+method: \"GET\"
+url: \"u\"
+timeoutMs: 700
+",
+        )
+        .unwrap();
+        let entry = load_request(ws.path(), "01-old.pulpo.yaml").unwrap();
+        assert_eq!(entry.request.settings.timeout_ms, Some(700));
+        assert_eq!(
+            format_workspace(ws.path(), false).unwrap(),
+            vec!["01-old.pulpo.yaml"]
+        );
+        let text = fs::read_to_string(ws.path().join("01-old.pulpo.yaml")).unwrap();
+        assert!(
+            text.ends_with(
+                "settings:
+  timeoutMs: 700
+"
+            ),
+            "{text}"
         );
     }
 

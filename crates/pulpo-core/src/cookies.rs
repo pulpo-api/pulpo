@@ -181,7 +181,7 @@ impl Jar {
             !(c.name == cookie.name && c.domain == cookie.domain && c.path == cookie.path)
         });
         // An expiry in the past is how servers delete cookies.
-        if cookie.expires.map_or(true, |t| t > now) {
+        if cookie.expires.is_none_or(|t| t > now) {
             self.cookies.push(cookie);
         }
         true
@@ -196,7 +196,7 @@ impl Jar {
         let mut found: Vec<&Cookie> = self
             .cookies
             .iter()
-            .filter(|c| c.expires.map_or(true, |t| t > now))
+            .filter(|c| c.expires.is_none_or(|t| t > now))
             .filter(|c| {
                 if c.host_only {
                     c.domain == host
@@ -224,7 +224,7 @@ impl Jar {
     }
 
     pub fn purge_expired(&mut self, now: i64) {
-        self.cookies.retain(|c| c.expires.map_or(true, |t| t > now));
+        self.cookies.retain(|c| c.expires.is_none_or(|t| t > now));
     }
 }
 

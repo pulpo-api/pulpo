@@ -1,6 +1,7 @@
 //! Running a request the way the app and `pulpo run` do: folder and request scripts,
 //! variables (environment + local values), send, test scripts, save local values.
 
+use crate::certificates;
 use crate::collection::{self, CollectionError, RequestEntry, TreeNode};
 use crate::cookies::{self, SharedJar};
 use crate::environment::{self, SecretStore};
@@ -10,7 +11,7 @@ use crate::script::{self, Phase, Script, ScriptContext, TestResult};
 use crate::variables::{self, Variables};
 use crate::Protocol;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -124,9 +125,15 @@ pub async fn run_entry(
 
     // The request carries the auth it really uses (its own or a folder's), so scripts
     // see it and `send` applies it.
+    // Settings work the same way, field by field.
     let mut effective = entry.request.clone();
-    match collection::effective_auth(root, entry) {
-        Ok((auth, _)) => effective.auth = Some(auth),
+    match collection::effective_auth(root, entry)
+        .and_then(|(auth, _)| Ok((auth, collection::effective_settings(root, entry)?)))
+    {
+        Ok((auth, settings)) => {
+            effective.auth = Some(auth);
+            effective.settings = settings;
+        }
         Err(e) => {
             report.error = Some(SendError::Other(e.to_string()));
             return report;
@@ -152,13 +159,20 @@ pub async fn run_entry(
 
     let mut vars = env.clone();
     vars.extend(local_values.clone());
-    match variables::resolve_request(&request, &vars) {
-        Err(missing) => report.error = Some(SendError::Unresolved(missing.join(", "))),
-        Ok(resolved) => match http::send_with(
+    let prepared = variables::resolve_request(&request, &vars)
+        .map_err(|missing| SendError::Unresolved(missing.join(", ")))
+        .and_then(|resolved| {
+            let client_pem = client_certificate(root, &resolved.url, &vars)?;
+            Ok((resolved, client_pem))
+        });
+    match prepared {
+        Err(e) => report.error = Some(e),
+        Ok((resolved, client_pem)) => match http::send_with(
             &resolved,
             &SendContext {
                 root: Some(root),
                 cookies: Some(jar.clone()),
+                client_pem,
             },
         )
         .await
@@ -198,6 +212,35 @@ pub async fn run_entry(
             .push(format!("could not save local values: {e}"));
     }
     report
+}
+
+/// The client certificate (mTLS) set up on this machine for the URL's host, as PEM.
+fn client_certificate(
+    root: &Path,
+    url: &str,
+    vars: &Variables,
+) -> Result<Option<Vec<u8>>, SendError> {
+    let Ok(url) = reqwest::Url::parse(url) else {
+        return Ok(None);
+    };
+    let all = certificates::load_certificates(root);
+    let Some(certificate) = certificates::find(&all, &url) else {
+        return Ok(None);
+    };
+    let mut missing = BTreeSet::new();
+    let passphrase = variables::resolve_text(
+        certificate.passphrase.as_deref().unwrap_or(""),
+        vars,
+        &mut missing,
+    );
+    if !missing.is_empty() {
+        return Err(SendError::Unresolved(
+            missing.into_iter().collect::<Vec<_>>().join(", "),
+        ));
+    }
+    certificates::identity_pem(root, certificate, &passphrase)
+        .map(Some)
+        .map_err(SendError::File)
 }
 
 /// Requests under `id` (a request, a folder or `""` for everything), in tree order.
