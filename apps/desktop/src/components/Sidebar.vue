@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { nextTick, ref } from "vue";
+import { computed, nextTick, ref } from "vue";
 import TreeView from "./TreeView.vue";
-import type { RequestEntry, Workspace } from "../workspace";
+import type { RequestEntry, TreeNode, Workspace } from "../workspace";
 
-defineProps<{
+const props = defineProps<{
   workspace: Workspace | null;
   selectedId: string;
   folderId: string;
@@ -18,6 +18,37 @@ const emit = defineEmits<{
   newFolder: [name: string];
   import: [];
 }>();
+
+const query = ref("");
+const searchBox = ref<HTMLInputElement | null>(null);
+defineExpose({
+  focusSearch: () => {
+    searchBox.value?.focus();
+    searchBox.value?.select();
+  },
+});
+
+/** Keeps requests whose name, URL or method match every word, and the folders that lead to them. */
+function filter(nodes: TreeNode[], words: string[]): TreeNode[] {
+  const out: TreeNode[] = [];
+  for (const node of nodes) {
+    if (node.type === "folder") {
+      const nameMatches = words.every((w) => node.name.toLowerCase().includes(w));
+      const children = nameMatches ? node.children : filter(node.children, words);
+      if (children.length) out.push({ ...node, children });
+    } else {
+      const haystack = `${node.name} ${node.request.url} ${node.request.method} ${node.protocol}`.toLowerCase();
+      if (words.every((w) => haystack.includes(w))) out.push(node);
+    }
+  }
+  return out;
+}
+
+const words = computed(() => query.value.toLowerCase().split(/\s+/).filter(Boolean));
+const visibleTree = computed(() => {
+  const tree = props.workspace?.tree ?? [];
+  return words.value.length ? filter(tree, words.value) : tree;
+});
 
 const creating = ref<"request" | "folder" | null>(null);
 const draft = ref("");
@@ -56,6 +87,15 @@ function confirm() {
         <button title="Import Postman, OpenAPI or curl" @click="emit('import')">Import</button>
       </div>
       <input
+        ref="searchBox"
+        v-model="query"
+        class="search"
+        type="search"
+        placeholder="Search requests  (Ctrl+K)"
+        spellcheck="false"
+        @keydown.esc="query = ''"
+      />
+      <input
         v-if="creating"
         ref="input"
         v-model="draft"
@@ -67,14 +107,16 @@ function confirm() {
       />
       <nav>
         <TreeView
-          :nodes="workspace.tree"
+          :nodes="visibleTree"
           :selected-id="selectedId"
           :folder-id="folderId"
           :dirty="dirty"
+          :expand-all="words.length > 0"
           @select="emit('select', $event)"
           @folder="emit('folder', $event)"
         />
         <p v-if="!workspace.tree.length" class="empty">Empty workspace. Add a request to start.</p>
+        <p v-else-if="!visibleTree.length" class="empty">No request matches “{{ query }}”.</p>
       </nav>
       <footer :title="workspace.root">
         <span class="dot" :class="{ off: !persistent }"></span>
@@ -148,6 +190,16 @@ function confirm() {
 .actions button:hover {
   border-color: var(--accent);
   color: var(--accent);
+}
+.search {
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  border-radius: 8px;
+  padding: 7px 10px;
+  outline: none;
+}
+.search:focus {
+  border-color: var(--accent);
 }
 .draft {
   border: 1px solid var(--accent);

@@ -29,6 +29,12 @@ interface Result {
 }
 
 const EMPTY: Result = { response: null, error: null, sending: false, tests: [], logs: [], scriptErrors: [] };
+const HISTORY_SIZE = 10;
+
+interface HistoryEntry {
+  at: Date;
+  result: Result;
+}
 
 type RequestNode = Extract<TreeNode, { type: "request" }>;
 
@@ -38,7 +44,13 @@ const workspace = ref<Workspace | null>(null);
 const saved = reactive(new Map<string, string>());
 const selectedId = ref("");
 const folderId = ref("");
-const results = reactive<Record<string, Result>>({});
+/** Last responses per request, newest first. In memory only: responses can hold sensitive data. */
+const history = reactive<Record<string, HistoryEntry[]>>({});
+const historyPick = reactive<Record<string, number>>({});
+const sending = reactive(new Set<string>());
+const openTabs = ref<string[]>([]);
+const sidebar = ref<InstanceType<typeof Sidebar> | null>(null);
+const showShortcuts = ref(false);
 const problem = ref<CollectionError | null>(null);
 const showImport = ref(false);
 const importDialog = ref<InstanceType<typeof ImportDialog> | null>(null);
@@ -172,7 +184,51 @@ const requests = computed(() => {
 
 const selected = computed(() => requests.value.find((n) => n.id === selectedId.value) ?? null);
 const dirty = computed(() => new Set(requests.value.filter((n) => saved.get(n.id) !== snapshot(n)).map((n) => n.id)));
-const result = computed<Result>(() => results[selectedId.value] ?? EMPTY);
+const result = computed<Result>(() => {
+  const id = selectedId.value;
+  if (sending.has(id)) return { ...EMPTY, sending: true };
+  return history[id]?.[historyPick[id] ?? 0]?.result ?? EMPTY;
+});
+
+const historyItems = computed(() =>
+  (history[selectedId.value] ?? []).map((h) => ({
+    at: h.at.toISOString(),
+    label: `${h.at.toLocaleTimeString()} · ${
+      h.result.response ? `${h.result.response.status} · ${h.result.response.durationMs} ms` : (h.result.error?.kind ?? "error")
+    }`,
+  })),
+);
+
+const tabs = computed(() =>
+  openTabs.value
+    .map((id) => requests.value.find((n) => n.id === id))
+    .filter((n): n is RequestNode => !!n),
+);
+
+watch(selectedId, (id) => {
+  if (id && !openTabs.value.includes(id)) openTabs.value.push(id);
+});
+
+watch(requests, (list) => {
+  openTabs.value = openTabs.value.filter((id) => list.some((n) => n.id === id));
+});
+
+function closeTab(id: string) {
+  const index = openTabs.value.indexOf(id);
+  if (index < 0) return;
+  openTabs.value.splice(index, 1);
+  if (selectedId.value === id) {
+    const next = openTabs.value[Math.min(index, openTabs.value.length - 1)];
+    selectedId.value = next ?? "";
+  }
+}
+
+function cycleTab(step: number) {
+  if (openTabs.value.length < 2) return;
+  const index = openTabs.value.indexOf(selectedId.value);
+  const next = (index + step + openTabs.value.length) % openTabs.value.length;
+  selectedId.value = openTabs.value[next];
+}
 
 const folderName = computed(() => {
   const id = selectedId.value;
@@ -189,6 +245,7 @@ function adopt(ws: Workspace) {
   workspace.value = ws;
   saved.clear();
   walk(ws.tree, (n) => n.type === "request" && saved.set(n.id, snapshot(n)));
+  openTabs.value = [];
   selectedId.value = requests.value[0]?.id ?? "";
   folderId.value = "";
   problem.value = null;
@@ -293,26 +350,63 @@ function select(entry: RequestEntry) {
   folderId.value = entry.id.includes("/") ? entry.id.slice(0, entry.id.lastIndexOf("/")) : "";
 }
 
+function remember(id: string, result: Result) {
+  const list = history[id] ?? [];
+  list.unshift({ at: new Date(), result });
+  history[id] = list.slice(0, HISTORY_SIZE);
+  historyPick[id] = 0;
+}
+
 async function send() {
   const node = selected.value;
-  if (!node || node.protocol !== "http" || results[node.id]?.sending) return;
-  results[node.id] = { ...EMPTY, sending: true };
+  if (!node || node.protocol !== "http" || sending.has(node.id)) return;
+  sending.add(node.id);
   try {
     const report = await backend.run(workspace.value!.root, toEntry(node), activeEnvId.value || undefined);
-    results[node.id] = { ...report, sending: false };
+    remember(node.id, { ...report, sending: false });
   } catch (e) {
-    results[node.id] = { ...EMPTY, error: asSendError(e) };
+    remember(node.id, { ...EMPTY, error: asSendError(e) });
+  } finally {
+    sending.delete(node.id);
   }
 }
 
+const SHORTCUTS: [string, string][] = [
+  ["Ctrl+Enter", "Send the request"],
+  ["Ctrl+S", "Save the request"],
+  ["Ctrl+K", "Search requests"],
+  ["Ctrl+W", "Close the tab"],
+  ["Ctrl+Tab / Ctrl+Shift+Tab", "Next / previous tab"],
+  ["Ctrl+/", "Show these shortcuts"],
+  ["Esc", "Close dialogs"],
+];
+
 function onKey(event: KeyboardEvent) {
-  if (!(event.ctrlKey || event.metaKey)) return;
-  if (event.key === "Enter") {
+  if (event.key === "Escape") {
+    showShortcuts.value = false;
+    return;
+  }
+  // The code editor handles Ctrl+Enter and Ctrl+S itself and marks the event as handled.
+  if (event.defaultPrevented || !(event.ctrlKey || event.metaKey)) return;
+  const key = event.key.toLowerCase();
+  if (key === "enter") {
     event.preventDefault();
     void send();
-  } else if (event.key.toLowerCase() === "s") {
+  } else if (key === "s") {
     event.preventDefault();
     void save();
+  } else if (key === "k") {
+    event.preventDefault();
+    sidebar.value?.focusSearch();
+  } else if (key === "w") {
+    event.preventDefault();
+    closeTab(selectedId.value);
+  } else if (key === "tab") {
+    event.preventDefault();
+    cycleTab(event.shiftKey ? -1 : 1);
+  } else if (key === "/") {
+    event.preventDefault();
+    showShortcuts.value = !showShortcuts.value;
   }
 }
 
@@ -329,6 +423,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
 <template>
   <div class="layout">
     <Sidebar
+      ref="sidebar"
       :workspace="workspace"
       :selected-id="selectedId"
       :folder-id="folderId"
@@ -343,6 +438,27 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
     />
 
     <main v-if="workspace && selected">
+      <nav class="tabbar">
+        <button
+          v-for="tab in tabs"
+          :key="tab.id"
+          class="tab"
+          :class="{ on: tab.id === selectedId }"
+          :title="tab.id"
+          @click="selectedId = tab.id"
+          @auxclick.middle.prevent="closeTab(tab.id)"
+        >
+          <span class="badge" :class="`m-${tab.request.method.toLowerCase()}`">{{
+            tab.protocol === "http" ? tab.request.method : tab.protocol.toUpperCase().slice(0, 4)
+          }}</span>
+          <span class="tab-name">{{ tab.name }}</span>
+          <span v-if="dirty.has(tab.id)" class="dirty" title="Unsaved changes"></span>
+          <span class="close" title="Close (Ctrl+W)" @click.stop="closeTab(tab.id)">✕</span>
+        </button>
+        <span class="spacer"></span>
+        <button class="ghost small" title="Keyboard shortcuts (Ctrl+/)" @click="showShortcuts = true">⌨</button>
+      </nav>
+
       <header class="topbar">
         <div class="crumbs">
           <span class="muted">{{ folderName }}</span>
@@ -381,6 +497,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         :supported="selected.protocol === 'http'"
         :preview="preview"
         @send="send"
+        @save="save()"
       />
 
       <ResponseViewer
@@ -390,6 +507,9 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         :tests="result.tests"
         :logs="result.logs"
         :script-errors="result.scriptErrors"
+        :history="historyItems"
+        :history-index="historyPick[selectedId] ?? 0"
+        @pick="historyPick[selectedId] = $event"
       />
 
       <footer class="statusbar">
@@ -397,6 +517,18 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         <span class="muted">{{ selected.id }}</span>
       </footer>
     </main>
+
+    <div v-if="showShortcuts" class="backdrop" @click.self="showShortcuts = false">
+      <section class="card shortcuts" role="dialog" aria-label="Keyboard shortcuts">
+        <h2>Keyboard shortcuts</h2>
+        <dl>
+          <template v-for="[keys, action] in SHORTCUTS" :key="keys">
+            <dt><kbd>{{ keys }}</kbd></dt>
+            <dd>{{ action }}</dd>
+          </template>
+        </dl>
+      </section>
+    </div>
 
     <EnvironmentPanel
       v-if="showEnvironments && workspace"
@@ -425,7 +557,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         <img src="/pulpo.svg" width="72" height="72" alt="" />
         <h1>{{ workspace ? workspace.name : "Welcome to Pulpo" }}</h1>
         <template v-if="workspace">
-          <p class="muted">This workspace has no requests yet. Use <strong>+ Request</strong> in the sidebar.</p>
+          <p v-if="requests.length" class="muted">Pick a request in the sidebar, or press <kbd>Ctrl+K</kbd> to search.</p>
+          <p v-else class="muted">This workspace has no requests yet. Use <strong>+ Request</strong> or <strong>Import</strong> in the sidebar.</p>
         </template>
         <template v-else>
           <p class="muted">Your collections live as plain files in a folder of your repo.</p>
@@ -447,12 +580,13 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
   height: 100%;
 }
 main {
-  display: grid;
-  grid-template-rows: auto auto minmax(220px, auto) 1fr auto;
+  display: flex;
+  flex-direction: column;
   gap: 14px;
   padding: 14px 18px;
   min-width: 0;
   min-height: 0;
+  overflow-y: auto;
 }
 .topbar,
 .actions,
@@ -515,6 +649,110 @@ main {
 .statusbar {
   justify-content: space-between;
   font-size: 12px;
+}
+.tabbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow-x: auto;
+  min-width: 0;
+  margin: -4px 0 -6px;
+}
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  padding: 5px 8px;
+  cursor: pointer;
+  color: var(--muted);
+  flex: none;
+}
+.tab:hover {
+  background: var(--surface);
+}
+.tab.on {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text);
+}
+.tab .badge {
+  font: 600 10px var(--mono);
+}
+.tab-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tab .dirty {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex: none;
+}
+.tab .close {
+  opacity: 0;
+  font-size: 11px;
+  padding: 0 2px;
+}
+.tab:hover .close,
+.tab.on .close {
+  opacity: 0.7;
+}
+.m-get { color: var(--m-get); }
+.m-post { color: var(--m-post); }
+.m-put { color: var(--m-put); }
+.m-patch { color: var(--m-patch); }
+.m-delete { color: var(--m-delete); }
+.spacer {
+  flex: 1;
+}
+.small {
+  padding: 3px 8px;
+}
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 12, 20, 0.45);
+  display: grid;
+  place-items: center;
+  z-index: 10;
+}
+.shortcuts {
+  min-width: 380px;
+}
+.shortcuts h2 {
+  margin: 0 0 12px;
+  font-size: 17px;
+}
+.shortcuts dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px 18px;
+  margin: 0;
+}
+.shortcuts dd {
+  margin: 0;
+  color: var(--muted);
+}
+kbd {
+  font: 12px var(--mono);
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: var(--surface-2);
+}
+main > * {
+  flex: none;
+}
+/* The response panel takes the remaining height; below 240 px the page scrolls instead of overlapping. */
+main > :deep(.viewer) {
+  flex: 1 0 240px;
 }
 .welcome {
   display: grid;

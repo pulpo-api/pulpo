@@ -6,6 +6,8 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig({
   plugins: [vue()],
   clearScreen: false,
+  // Desktop app served from disk: one bigger chunk (CodeMirror) is fine.
+  build: { chunkSizeWarningLimit: 1500 },
   server: {
     port: 1420,
     strictPort: true,

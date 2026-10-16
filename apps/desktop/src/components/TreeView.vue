@@ -10,6 +10,7 @@ const props = defineProps<{
   folderId: string;
   dirty: Set<string>;
   depth?: number;
+  expandAll?: boolean;
 }>();
 const emit = defineEmits<{ select: [entry: RequestEntry]; folder: [id: string] }>();
 
@@ -41,16 +42,17 @@ const pad = (props.depth ?? 0) * 12;
         :style="{ paddingLeft: `${pad + 6}px` }"
         @click="toggle(node.id)"
       >
-        <span class="chev">{{ collapsed.has(node.id) ? "▸" : "▾" }}</span>
+        <span class="chev">{{ collapsed.has(node.id) && !expandAll ? "▸" : "▾" }}</span>
         <span class="name">{{ node.name }}</span>
       </button>
       <TreeView
-        v-if="!collapsed.has(node.id)"
+        v-if="expandAll || !collapsed.has(node.id)"
         :nodes="node.children"
         :selected-id="selectedId"
         :folder-id="folderId"
         :dirty="dirty"
         :depth="(depth ?? 0) + 1"
+        :expand-all="expandAll"
         @select="emit('select', $event)"
         @folder="emit('folder', $event)"
       />

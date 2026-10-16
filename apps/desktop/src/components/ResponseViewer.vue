@@ -2,6 +2,12 @@
 import { computed, ref } from "vue";
 import type { HttpResponse, SendError } from "../core";
 import type { TestResult } from "../workspace";
+import CodeEditor, { type Language } from "./CodeEditor.vue";
+
+export interface HistoryItem {
+  at: string;
+  label: string;
+}
 
 const props = defineProps<{
   response: HttpResponse | null;
@@ -10,7 +16,10 @@ const props = defineProps<{
   tests: TestResult[];
   logs: string[];
   scriptErrors: string[];
+  history: HistoryItem[];
+  historyIndex: number;
 }>();
+const emit = defineEmits<{ pick: [index: number] }>();
 
 const tab = ref<"body" | "headers" | "tests" | "console">("body");
 const failed = computed(() => props.tests.filter((t) => !t.passed).length);
@@ -22,6 +31,13 @@ const pretty = computed(() => {
   } catch {
     return body;
   }
+});
+
+const bodyLanguage = computed<Language>(() => {
+  const contentType = props.response?.headers.find((h) => h.name.toLowerCase() === "content-type")?.value ?? "";
+  if (contentType.includes("json") || pretty.value !== (props.response?.body ?? "")) return "json";
+  if (contentType.includes("xml") || contentType.includes("html")) return "xml";
+  return "text";
 });
 
 const statusClass = computed(() => {
@@ -66,6 +82,15 @@ const errorTitle: Record<SendError["kind"], string> = {
         <span class="pill" :class="statusClass">{{ response.status }} {{ response.statusText }}</span>
         <span class="muted">{{ response.durationMs }} ms · {{ size(response.sizeBytes) }} · {{ response.httpVersion }}</span>
         <span class="spacer"></span>
+        <select
+          v-if="history.length > 1"
+          class="history"
+          :value="historyIndex"
+          title="Previous responses of this request (kept in memory only)"
+          @change="emit('pick', Number(($event.target as HTMLSelectElement).value))"
+        >
+          <option v-for="(h, i) in history" :key="h.at + i" :value="i">{{ i === 0 ? "Latest · " : "" }}{{ h.label }}</option>
+        </select>
         <button :class="{ on: tab === 'body' }" @click="tab = 'body'">Body</button>
         <button :class="{ on: tab === 'headers' }" @click="tab = 'headers'">Headers {{ response.headers.length }}</button>
         <button v-if="tests.length" :class="{ on: tab === 'tests', bad: failed }" @click="tab = 'tests'">
@@ -75,7 +100,13 @@ const errorTitle: Record<SendError["kind"], string> = {
           Console
         </button>
       </div>
-      <pre v-if="tab === 'body'" class="code">{{ pretty || "(empty body)" }}</pre>
+      <CodeEditor
+        v-if="tab === 'body'"
+        :key="historyIndex"
+        :model-value="pretty || '(empty body)'"
+        :language="bodyLanguage"
+        readonly
+      />
       <ul v-else-if="tab === 'tests'" class="code list">
         <li v-for="(t, i) in tests" :key="i" :class="t.passed ? 'pass' : 'fail'">
           <span>{{ t.passed ? "✓" : "✗" }}</span> {{ t.name }}<em v-if="t.error"> — {{ t.error }}</em>
@@ -129,6 +160,14 @@ const errorTitle: Record<SendError["kind"], string> = {
 }
 .spacer {
   flex: 1;
+}
+.history {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: 6px;
+  padding: 4px 6px;
+  font-size: 12px;
+  max-width: 220px;
 }
 .status button.bad {
   color: var(--m-delete);

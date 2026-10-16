@@ -2,6 +2,7 @@
 import { computed, ref } from "vue";
 import { HTTP_METHODS, type HttpRequest } from "../core";
 import type { Scripts } from "../workspace";
+import CodeEditor, { type Language } from "./CodeEditor.vue";
 
 const props = defineProps<{
   request: HttpRequest;
@@ -10,10 +11,26 @@ const props = defineProps<{
   supported: boolean;
   preview: { url: string; changed: boolean; missing: string[] } | null;
 }>();
-const emit = defineEmits<{ send: [] }>();
+const emit = defineEmits<{ send: []; save: [] }>();
 
 const tab = ref<"body" | "headers" | "pre" | "test">("body");
 const hasBody = computed(() => !["GET", "HEAD"].includes(props.request.method));
+const bodyLanguage = computed<Language>(() => {
+  const contentType =
+    props.request.headers.find((h) => h.enabled && h.name.toLowerCase() === "content-type")?.value.toLowerCase() ?? "";
+  if (contentType.includes("json")) return "json";
+  if (contentType.includes("xml")) return "xml";
+  const start = (props.request.body ?? "").trimStart();
+  if (start.startsWith("{") || start.startsWith("[")) return "json";
+  if (start.startsWith("<")) return "xml";
+  return "text";
+});
+const body = computed({
+  get: () => props.request.body ?? "",
+  set: (value: string) => {
+    props.request.body = value || null;
+  },
+});
 const activeHeaders = computed(() => props.request.headers.filter((h) => h.enabled && h.name.trim()).length);
 
 function addHeader() {
@@ -70,28 +87,32 @@ function formatBody() {
     </div>
 
     <template v-if="tab === 'body'">
-      <textarea
+      <CodeEditor
         v-if="hasBody"
-        class="code"
-        spellcheck="false"
+        v-model="body"
+        class="code-area"
+        :language="bodyLanguage"
         placeholder='{ "hello": "pulpo" }'
-        :value="request.body ?? ''"
-        @input="request.body = ($event.target as HTMLTextAreaElement).value || null"
-      ></textarea>
+        @run="emit('send')"
+        @save="emit('save')"
+      />
       <p v-else class="empty">{{ request.method }} requests have no body.</p>
     </template>
 
     <template v-else-if="tab === 'pre' || tab === 'test'">
-      <textarea
+      <CodeEditor
+        :key="tab"
         v-model="scripts[tab]"
-        class="code"
-        spellcheck="false"
+        class="code-area"
+        language="javascript"
+        @run="emit('send')"
+        @save="emit('save')"
         :placeholder="
           tab === 'pre'
             ? 'Runs before sending. e.g. pm.request.headers.upsert({ key: \'X-Request-Id\', value: pm.variables.replaceIn(\'{{$guid}}\') });'
             : 'Runs after the response. e.g. pm.test(\'is 200\', () => pm.response.to.have.status(200));\npm.environment.set(\'orderId\', pm.response.json().id);'
         "
-      ></textarea>
+      />
       <p class="hint">
         Saved as <code>{{ tab === "pre" ? ".pre.js" : ".test.js" }}</code> next to the request. Postman's <code>pm.*</code> API:
         variables, request, response, <code>pm.test</code>, <code>pm.expect</code>. Values set here stay local (in <code>.pulpo/</code>).
@@ -244,6 +265,9 @@ textarea:focus,
   cursor: pointer;
   padding: 6px 4px;
   align-self: flex-start;
+}
+.code-area {
+  min-height: 160px;
 }
 .code {
   flex: 1;
