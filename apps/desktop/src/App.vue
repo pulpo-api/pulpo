@@ -308,9 +308,29 @@ const tabs = computed(() =>
     .filter((n): n is RequestNode => !!n),
 );
 
+/** The temporary tab, as in Postman and VS Code: one click opens a request in it and the
+ * next click replaces it. It stays open (pinned) once edited, sent or double-clicked. */
+const previewTab = ref<string | null>(null);
+
 watch(selectedId, (id) => {
-  if (id && !openTabs.value.includes(id)) openTabs.value.push(id);
+  if (!id || openTabs.value.includes(id)) return;
+  const index = previewTab.value ? openTabs.value.indexOf(previewTab.value) : -1;
+  if (index >= 0) openTabs.value.splice(index, 1, id);
+  else openTabs.value.push(id);
+  previewTab.value = id;
 });
+
+function pinTab(id: string) {
+  if (previewTab.value === id) previewTab.value = null;
+}
+
+// Editing a request keeps its tab.
+watch(
+  () => previewTab.value !== null && dirty.value.has(previewTab.value),
+  (edited) => {
+    if (edited) previewTab.value = null;
+  },
+);
 
 watch(requests, (list) => {
   openTabs.value = openTabs.value.filter((id) => list.some((n) => n.id === id));
@@ -320,6 +340,7 @@ function closeTab(id: string) {
   const index = openTabs.value.indexOf(id);
   if (index < 0) return;
   openTabs.value.splice(index, 1);
+  if (previewTab.value === id) previewTab.value = null;
   if (selectedId.value === id) {
     const next = openTabs.value[Math.min(index, openTabs.value.length - 1)];
     selectedId.value = next ?? "";
@@ -410,6 +431,7 @@ async function newRequest(name: string) {
     childrenOf(folderId.value)?.push(node);
     saved.set(entry.id, snapshot(node));
     selectedId.value = entry.id;
+    pinTab(entry.id);
   } catch (e) {
     problem.value = asCollectionError(e);
   }
@@ -468,6 +490,7 @@ async function organize(run: (root: string) => Promise<Organized | void>): Promi
     saved.clear();
     walk(fresh.tree, (n) => n.type === "request" && saved.set(n.id, snapshot(n)));
     openTabs.value = openTabs.value.map(map);
+    if (previewTab.value) previewTab.value = map(previewTab.value);
     folderId.value = map(folderId.value);
     const entries = Object.entries(history);
     const picks = Object.entries(historyPick);
@@ -493,7 +516,10 @@ const moveNode = (id: string, target: string, index: number) =>
 async function duplicateNode(id: string) {
   const result = await organize((root) => backend.duplicateNode(root, id));
   // Open the copy of a request right away.
-  if (result && result.id.endsWith(".pulpo.yaml")) selectedId.value = result.id;
+  if (result && result.id.endsWith(".pulpo.yaml")) {
+    selectedId.value = result.id;
+    pinTab(result.id);
+  }
 }
 
 function deleteNode(node: TreeNode) {
@@ -519,6 +545,8 @@ function remember(id: string, result: Result) {
 async function send() {
   const node = selected.value;
   if (!node || node.protocol !== "http" || sending.has(node.id)) return;
+  // Sending a request keeps its tab.
+  pinTab(node.id);
   sending.add(node.id);
   try {
     const report = await backend.run(workspace.value!.root, toEntry(node), activeEnvId.value || undefined);
@@ -623,9 +651,10 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
           v-for="tab in tabs"
           :key="tab.id"
           class="tab"
-          :class="{ on: tab.id === selectedId }"
-          :title="tab.id"
+          :class="{ on: tab.id === selectedId, preview: tab.id === previewTab }"
+          :title="tab.id === previewTab ? `${tab.id} · preview: double-click to keep it open` : tab.id"
           @click="selectedId = tab.id"
+          @dblclick="pinTab(tab.id)"
           @auxclick.middle.prevent="closeTab(tab.id)"
         >
           <span class="badge" :class="`m-${tab.request.method.toLowerCase()}`">{{
@@ -1002,5 +1031,8 @@ main > :deep(.viewer) {
   font-size: 12px;
   color: var(--m-get);
   white-space: nowrap;
+}
+.tab.preview .tab-name {
+  font-style: italic;
 }
 </style>
