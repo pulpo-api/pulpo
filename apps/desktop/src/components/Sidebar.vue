@@ -23,6 +23,7 @@ const emit = defineEmits<{
   delete: [node: TreeNode];
   move: [id: string, target: string, index: number];
   editFolder: [id: string];
+  copyCurl: [id: string];
 }>();
 
 const query = ref("");
@@ -132,7 +133,7 @@ function countRequests(node: TreeNode): number {
   return node.type === "request" ? 1 : node.children.reduce((sum, child) => sum + countRequests(child), 0);
 }
 
-function act(action: "rename" | "duplicate" | "delete" | "newRequest" | "newFolder" | "edit") {
+function act(action: "rename" | "duplicate" | "delete" | "newRequest" | "newFolder" | "edit" | "curl") {
   const node = menu.value?.node;
   if (!node) return;
   if (action === "delete" && !confirmDelete.value) {
@@ -142,6 +143,7 @@ function act(action: "rename" | "duplicate" | "delete" | "newRequest" | "newFold
   closeMenu();
   if (action === "rename") startRenaming(node.id, node.name);
   else if (action === "edit") emit("editFolder", node.id);
+  else if (action === "curl") emit("copyCurl", node.id);
   else if (action === "duplicate") emit("duplicate", node.id);
   else if (action === "delete") emit("delete", node);
   else {
@@ -230,6 +232,7 @@ function confirm() {
       <div class="menu card" role="menu" :style="{ left: `${menu.x}px`, top: `${menu.y}px` }" @click.stop>
         <button role="menuitem" @click="act('rename')">Rename <kbd>F2</kbd></button>
         <button role="menuitem" @click="act('duplicate')">Duplicate</button>
+        <button v-if="menu.node.type === 'request'" role="menuitem" @click="act('curl')">Copy as curl</button>
         <template v-if="menu.node.type === 'folder'">
           <button role="menuitem" @click="act('edit')">Headers, auth, settings…</button>
           <button role="menuitem" @click="act('newRequest')">New request here</button>

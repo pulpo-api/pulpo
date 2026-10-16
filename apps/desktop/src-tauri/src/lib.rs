@@ -1,4 +1,5 @@
 use pulpo_core::certificates::{self, ClientCertificate};
+use pulpo_core::codegen::{self, CodeOptions, Language};
 use pulpo_core::collection::{self, CollectionError, FolderMeta, RequestEntry, Scripts, Workspace};
 use pulpo_core::cookies::{self, Cookie, Jar};
 use pulpo_core::environment::{self, Environment};
@@ -174,6 +175,26 @@ async fn save_folder_scripts(
     collection::save_folder_scripts(Path::new(&root), &folder_id, &scripts)
 }
 
+/// The request as code in another language. `entry` may contain unsaved edits; folders
+/// give it their auth, headers and settings. Secrets only with `include_secrets`.
+#[tauri::command]
+async fn generate_code(
+    root: String,
+    entry: RequestEntry,
+    environment_id: Option<String>,
+    language: Language,
+    options: CodeOptions,
+) -> Result<String, CollectionError> {
+    codegen::for_entry(
+        Path::new(&root),
+        &entry,
+        environment_id.as_deref(),
+        &Keychain,
+        language,
+        options,
+    )
+}
+
 /// Values set by scripts for an environment (`.pulpo/local.json`); they win over it.
 #[tauri::command]
 async fn local_values(
@@ -302,6 +323,7 @@ pub fn run() {
             save_certificates,
             save_folder_settings,
             local_values,
+            generate_code,
             clear_local_values
         ])
         .run(tauri::generate_context!())

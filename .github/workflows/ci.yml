@@ -60,6 +60,28 @@ jobs:
           cargo run -p pulpo-api-cli -- ls examples/jsonplaceholder
           cargo run -p pulpo-api-cli -- fmt examples/jsonplaceholder --check
 
+  codegen:
+    name: Generated code runs (8 languages)
+    # The Ubuntu runner already has curl, Node, Python, Go, Java, .NET and PowerShell.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build the CLI
+        run: cargo build -p pulpo-api-cli
+
+      - name: Run the generated code
+        run: PULPO=target/debug/pulpo bash tests/codegen/run.sh
+
   bundle:
     name: Installers (${{ matrix.os }})
     if: github.event_name == 'push'

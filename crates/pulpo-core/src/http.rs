@@ -178,11 +178,11 @@ impl Auth {
 }
 
 /// `application/x-www-form-urlencoded` encoding: like the query, but spaces are `+`.
-fn encode_form(value: &str) -> String {
+pub(crate) fn encode_form(value: &str) -> String {
     encode_query(value).replace("%20", "+")
 }
 
-fn encode_query(value: &str) -> String {
+pub(crate) fn encode_query(value: &str) -> String {
     let mut out = String::new();
     for b in value.bytes() {
         match b {

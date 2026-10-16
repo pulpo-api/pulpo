@@ -1,3 +1,4 @@
+use pulpo_core::codegen;
 use pulpo_core::collection::{self, TreeNode};
 use pulpo_core::environment::{self, Environment, SecretStore};
 use pulpo_core::http::{self, Header, HttpRequest};
@@ -32,6 +33,11 @@ COMMANDS:
                request or folder path inside the workspace (default: all).
                Exits with 1 if a test fails or a request cannot be sent.
                --junit writes a JUnit XML report for CI.
+    code <REQUEST> [-w DIR] [-e ENV] [-l LANG] [--resolve] [--secrets]
+               Print the request as code: curl (default), fetch, axios, python,
+               java, go, csharp or powershell. Variables stay as {{name}}
+               unless --resolve; secrets and values set by scripts only
+               with --secrets.
     env [DIR]  List environments and their variables (secrets are masked)
     secret set <DIR> <ENV> <NAME>
                Store a secret in the OS keychain, reading the value from stdin
@@ -67,6 +73,7 @@ fn main() -> ExitCode {
         Some("secret") => run_secret(&args[1..]),
         Some("import") => run_import(&args[1..]),
         Some("run") => run_run(&args[1..]),
+        Some("code") => run_code(&args[1..]),
         Some(other) => usage_error(&format!("unknown command: {other}")),
     }
 }
@@ -358,6 +365,68 @@ fn run_import(args: &[String]) -> ExitCode {
             for warning in &summary.warnings {
                 println!("  ! {warning}");
             }
+            ExitCode::SUCCESS
+        }
+        Err(e) => fail(e),
+    }
+}
+
+fn run_code(args: &[String]) -> ExitCode {
+    let mut target = String::new();
+    let mut dir = PathBuf::from(".");
+    let mut env_name: Option<String> = None;
+    let mut language = codegen::Language::Curl;
+    let mut options = codegen::CodeOptions::default();
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        match arg.as_str() {
+            "-w" | "--workspace" => match rest.next() {
+                Some(d) => dir = PathBuf::from(d),
+                None => return usage_error("code: -w needs a DIR"),
+            },
+            "-e" | "--env" => match rest.next() {
+                Some(e) => env_name = Some(e.clone()),
+                None => return usage_error("code: -e needs an ENV"),
+            },
+            "-l" | "--lang" => match rest.next().and_then(|l| codegen::Language::parse(l)) {
+                Some(l) => language = l,
+                None => {
+                    let ids: Vec<_> = codegen::Language::ALL.iter().map(|l| l.id()).collect();
+                    return usage_error(&format!("code: -l needs one of {}", ids.join(", ")));
+                }
+            },
+            "--resolve" => options.resolve = true,
+            "--secrets" => options.include_secrets = true,
+            other if !other.starts_with('-') && target.is_empty() => {
+                target = other.replace('\\', "/")
+            }
+            other => return usage_error(&format!("code: unexpected {other}")),
+        }
+    }
+    if target.is_empty() {
+        return usage_error("code: expected a REQUEST (its path inside the workspace)");
+    }
+    let entry = match collection::load_request(&dir, &target) {
+        Ok(entry) => entry,
+        Err(e) => return fail(e),
+    };
+    let environment_id = match &env_name {
+        Some(name) => match find_environment(&dir, name, &Keychain) {
+            Ok(env) => Some(env.id),
+            Err(e) => return fail(e),
+        },
+        None => None,
+    };
+    match codegen::for_entry(
+        &dir,
+        &entry,
+        environment_id.as_deref(),
+        &Keychain,
+        language,
+        options,
+    ) {
+        Ok(code) => {
+            let _ = writeln!(std::io::stdout(), "{code}");
             ExitCode::SUCCESS
         }
         Err(e) => fail(e),

@@ -142,6 +142,17 @@ pulpo run 01-orders -w my-api -e local --bail
 pulpo run -w my-api -e ci --junit report.xml   # for GitHub Actions, GitLab, Jenkins
 ```
 
+## Share a request as code
+
+Any request becomes curl, JavaScript (fetch or axios), Python requests, Java HttpClient, Go, C# or PowerShell, with what it inherits from its folders. Variables stay as `{{name}}` unless you resolve them, and secrets (plus values set by scripts, usually tokens) only go in when you ask. In the app: the `</>` button, or right-click → Copy as curl.
+
+```bash
+pulpo code 01-orders/01-create-order.pulpo.yaml -w my-api -l python
+pulpo code 01-orders/01-create-order.pulpo.yaml -w my-api -e local --resolve
+```
+
+CI runs the generated code in all eight languages against a local server (`tests/codegen/run.sh`).
+
 ## Import what you already have
 
 ```bash

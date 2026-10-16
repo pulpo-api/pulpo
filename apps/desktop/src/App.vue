@@ -7,6 +7,7 @@ import ResponseViewer from "./components/ResponseViewer.vue";
 import EnvironmentPanel from "./components/EnvironmentPanel.vue";
 import CookiesPanel from "./components/CookiesPanel.vue";
 import FolderEditor from "./components/FolderEditor.vue";
+import CodePanel from "./components/CodePanel.vue";
 import ImportDialog from "./components/ImportDialog.vue";
 import { resolveText } from "./variables";
 import { applyPathParams } from "./params";
@@ -113,6 +114,31 @@ watchEffect(() => {
 });
 const showEnvironments = ref(false);
 const showCookies = ref(false);
+const showCode = ref(false);
+/** A short message in the top bar ("Copied as curl"). */
+const notice = ref("");
+function flash(message: string) {
+  notice.value = message;
+  setTimeout(() => (notice.value = notice.value === message ? "" : notice.value), 2000);
+}
+
+/** "Copy as curl" from the tree: no variables resolved, no secrets. */
+async function copyCurl(id: string) {
+  const ws = workspace.value;
+  const node = requests.value.find((n) => n.id === id);
+  if (!ws || !node) return;
+  try {
+    const code = await backend.generateCode(ws.root, toEntry(node), activeEnvId.value, "curl", {
+      resolve: false,
+      includeSecrets: false,
+    });
+    await navigator.clipboard.writeText(code);
+    problem.value = null;
+    flash(`Copied “${node.name}” as curl`);
+  } catch (e) {
+    problem.value = asCollectionError(e);
+  }
+}
 /** The folder being edited ("" = the collection); null = editing requests. */
 const editingFolder = ref<string | null>(null);
 const folderEditor = ref<InstanceType<typeof FolderEditor> | null>(null);
@@ -576,6 +602,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       @delete="deleteNode"
       @move="moveNode"
       @edit-folder="editingFolder = $event"
+      @copy-curl="copyCurl"
     />
 
     <main v-if="workspace && editingFolder !== null" class="folder-main">
@@ -625,6 +652,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
           </select>
           <button class="ghost" title="Manage environments" @click="showEnvironments = true">⚙</button>
           <button class="ghost" title="Cookies of this environment" @click="showCookies = true">🍪</button>
+          <button class="ghost" title="Show as code: curl, fetch, Python, Java, Go, C#…" @click="showCode = true">&lt;/&gt;</button>
+          <span v-if="notice" class="notice" role="status">{{ notice }}</span>
           <button class="ghost danger" :class="{ armed: confirmDelete }" @click="deleteSelected">
             {{ confirmDelete ? "Click again to delete" : "Delete" }}
           </button>
@@ -697,6 +726,15 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       @save="saveEnvironment"
       @create="createEnvironment"
       @remove="deleteEnvironment"
+    />
+
+    <CodePanel
+      v-if="showCode && workspace && selected"
+      :root="workspace.root"
+      :entry="toEntry(selected)"
+      :environment-id="activeEnvId"
+      :environment-name="environments.find((e) => e.id === activeEnvId)?.name ?? ''"
+      @close="showCode = false"
     />
 
     <CookiesPanel
@@ -955,5 +993,11 @@ main > :deep(.viewer) {
   box-shadow: var(--shadow);
   padding: 14px;
   min-width: 0;
+}
+.notice {
+  align-self: center;
+  font-size: 12px;
+  color: var(--m-get);
+  white-space: nowrap;
 }
 </style>

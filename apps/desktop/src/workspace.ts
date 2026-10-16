@@ -146,6 +146,48 @@ export function inheritedSettings(workspace: Workspace, requestId: string): Inhe
   };
 }
 
+export type CodeLanguage = "curl" | "fetch" | "axios" | "python" | "java" | "go" | "csharp" | "powershell";
+
+export const CODE_LANGUAGES: Record<CodeLanguage, string> = {
+  curl: "curl (bash)",
+  fetch: "JavaScript fetch",
+  axios: "JavaScript axios",
+  python: "Python requests",
+  java: "Java HttpClient",
+  go: "Go net/http",
+  csharp: "C# HttpClient",
+  powershell: "PowerShell",
+};
+
+export interface CodeOptions {
+  /** Replace {{variables}} with the environment's values. */
+  resolve: boolean;
+  /** Also secrets and values set by scripts (usually tokens). */
+  includeSecrets: boolean;
+}
+
+/** A curl for the browser preview (no Rust there): unresolved, auth and folder headers in. */
+function previewCurl(workspace: Workspace, entry: RequestEntry): string {
+  const r = entry.request;
+  const quote = (text: string) => `'${text.replace(/'/g, "'\\''")}'`;
+  const parts = [`curl ${quote(r.url)}`];
+  if (r.method !== "GET") parts.push(`-X ${r.method}`);
+  const headers = effectiveHeaders(workspace, entry).filter((h) => h.enabled && h.name.trim());
+  for (const h of headers) parts.push(`-H ${quote(`${h.name}: ${h.value}`)}`);
+  const auth = r.auth ?? inheritedAuth(workspace, entry.id).auth;
+  if (auth.type === "bearer") parts.push(`-H ${quote(`Authorization: Bearer ${auth.token}`)}`);
+  if (auth.type === "basic") parts.push(`-u ${quote(`${auth.username}:${auth.password}`)}`);
+  if (auth.type === "apiKey" && auth.in === "header") parts.push(`-H ${quote(`${auth.key}: ${auth.value}`)}`);
+  if (r.form) {
+    for (const f of r.form.fields.filter((f) => f.enabled && f.name)) {
+      parts.push(r.form.kind === "urlencoded" ? `--data-urlencode ${quote(`${f.name}=${f.value}`)}` : `-F ${quote(`${f.name}=${f.file ? "@" : ""}${f.value}`)}`);
+    }
+  } else if (r.bodyFile) parts.push(`--data-binary ${quote(`@${r.bodyFile}`)}`);
+  else if (r.body) parts.push(`--data-raw ${quote(r.body)}`);
+  parts.push("-L");
+  return `# Browser preview: path params and query API keys are applied by the desktop app.\n${parts.join(" \\\n  ")}`;
+}
+
 /** What an organize operation did: the node's id afterwards and every id that changed
  * (old, new). Ids inside a renamed folder change the same way. */
 export interface Organized {
@@ -318,6 +360,14 @@ export interface WorkspaceBackend {
   saveEnvironment(root: string, env: Environment): Promise<void>;
   createEnvironment(root: string, name: string): Promise<Environment>;
   deleteEnvironment(root: string, id: string): Promise<void>;
+  /** The request as code; folders give it their auth, headers and settings. */
+  generateCode(
+    root: string,
+    entry: RequestEntry,
+    environmentId: string,
+    language: CodeLanguage,
+    options: CodeOptions,
+  ): Promise<string>;
   /** Values set by scripts for an environment ("" = none), from `.pulpo/local.json`. */
   localValues(root: string, environmentId: string): Promise<Record<string, string>>;
   /** What a folder ("" = the workspace) sets for the requests inside. */
@@ -373,6 +423,8 @@ const tauriBackend: WorkspaceBackend = {
   createEnvironment: (root, name) => invoke<Environment>("create_environment", { root, name }),
   deleteEnvironment: (root, id) => invoke<void>("delete_environment", { root, id }),
   saveFolderAuth: (root, folderId, auth) => invoke<void>("save_folder_auth", { root, folderId, auth }),
+  generateCode: (root, entry, environmentId, language, options) =>
+    invoke<string>("generate_code", { root, entry, environmentId: environmentId || null, language, options }),
   localValues: (root, environmentId) =>
     invoke<Record<string, string>>("local_values", { root, environmentId: environmentId || null }),
   folderMeta: (root, folderId) => invoke<FolderMeta>("folder_meta", { root, folderId }),
@@ -585,6 +637,11 @@ function memoryBackend(): WorkspaceBackend {
     async deleteEnvironment(_root, id) {
       const index = environments.findIndex((e) => e.id === id);
       if (index >= 0) environments.splice(index, 1);
+    },
+    // pulpo-core generates code in the desktop app; the preview only has a plain curl.
+    async generateCode(_root, entry, _environmentId, language) {
+      if (language !== "curl") return `// ${CODE_LANGUAGES[language]}: code generation runs in the desktop app.`;
+      return previewCurl(workspace, entry);
     },
     // Scripts only run in the desktop app, so nothing sets local values here.
     async localValues() {
