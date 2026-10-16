@@ -4,6 +4,7 @@ import Sidebar from "./components/Sidebar.vue";
 import RequestEditor from "./components/RequestEditor.vue";
 import ResponseViewer from "./components/ResponseViewer.vue";
 import EnvironmentPanel from "./components/EnvironmentPanel.vue";
+import ImportDialog from "./components/ImportDialog.vue";
 import { resolveText } from "./variables";
 import { asSendError, coreInfo, sendHttp, type CoreInfo, type HttpResponse, type SendError } from "./core";
 import {
@@ -33,6 +34,33 @@ const selectedId = ref("");
 const folderId = ref("");
 const results = reactive<Record<string, Result>>({});
 const problem = ref<CollectionError | null>(null);
+const showImport = ref(false);
+const importDialog = ref<InstanceType<typeof ImportDialog> | null>(null);
+const importBlocked = computed(() =>
+  dirty.value.size ? `Save your ${dirty.value.size} unsaved request(s) first (Ctrl+S), so the import does not overwrite them.` : null,
+);
+
+async function runImport(source: { path?: string; text?: string }) {
+  const ws = workspace.value;
+  if (!ws || !backend.importInto) return;
+  try {
+    const summary = await backend.importInto(ws.root, folderId.value, source);
+    const keep = selectedId.value;
+    adopt(await backend.open(ws.root));
+    if (requests.value.some((n) => n.id === keep)) selectedId.value = keep;
+    folderId.value = summary.folderId;
+    importDialog.value?.show({ summary });
+  } catch (e) {
+    importDialog.value?.show({ error: String(e) });
+  }
+}
+
+async function importFile() {
+  const path = await backend.pickImportFile?.();
+  if (path) await runImport({ path });
+  else importDialog.value?.show({});
+}
+
 const confirmDelete = ref(false);
 const environments = ref<Environment[]>([]);
 const activeEnvId = ref("");
@@ -310,6 +338,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       @open="openFolder"
       @new-request="newRequest"
       @new-folder="newFolder"
+      @import="showImport = true"
     />
 
     <main v-if="workspace && selected">
@@ -369,6 +398,17 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       @save="saveEnvironment"
       @create="createEnvironment"
       @remove="deleteEnvironment"
+    />
+
+    <ImportDialog
+      v-if="showImport && workspace"
+      ref="importDialog"
+      :target="folderId"
+      :available="!!backend.importInto"
+      :blocked="importBlocked"
+      @close="showImport = false"
+      @file="importFile"
+      @text="runImport({ text: $event })"
     />
 
     <main v-if="!(workspace && selected)" class="welcome">

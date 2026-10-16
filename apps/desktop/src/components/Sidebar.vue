@@ -16,6 +16,7 @@ const emit = defineEmits<{
   open: [];
   newRequest: [name: string];
   newFolder: [name: string];
+  import: [];
 }>();
 
 const creating = ref<"request" | "folder" | null>(null);
@@ -52,6 +53,7 @@ function confirm() {
       <div class="actions">
         <button @click="start('request')">+ Request</button>
         <button @click="start('folder')">+ Folder</button>
+        <button title="Import Postman, OpenAPI or curl" @click="emit('import')">Import</button>
       </div>
       <input
         v-if="creating"

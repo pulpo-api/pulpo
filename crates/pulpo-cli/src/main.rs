@@ -1,11 +1,12 @@
 use pulpo_core::collection::{self, TreeNode};
 use pulpo_core::environment::{self, Environment, SecretStore};
 use pulpo_core::http::{self, Header, HttpRequest};
+use pulpo_core::import;
 use pulpo_core::keychain::Keychain;
 use pulpo_core::variables::{self, Variables};
 use pulpo_core::{HttpMethod, Protocol};
 use std::env;
-use std::io::BufRead;
+use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -22,6 +23,9 @@ COMMANDS:
     fmt [DIR] [--check]
                Rewrite workspace files in canonical form
                (--check only lists them and fails if any would change)
+    import <FILE|-> [DIR] [--into FOLDER]
+               Import a Postman collection or environment, an OpenAPI 3
+               document or a curl command (use - to read it from stdin)
     env [DIR]  List environments and their variables (secrets are masked)
     secret set <DIR> <ENV> <NAME>
                Store a secret in the OS keychain, reading the value from stdin
@@ -55,6 +59,7 @@ fn main() -> ExitCode {
         Some("fmt") => run_fmt(&args[1..]),
         Some("env") => run_env(&args[1..]),
         Some("secret") => run_secret(&args[1..]),
+        Some("import") => run_import(&args[1..]),
         Some(other) => usage_error(&format!("unknown command: {other}")),
     }
 }
@@ -119,23 +124,25 @@ fn run_ls(args: &[String]) -> ExitCode {
     }
     match collection::load_workspace(&dir) {
         Ok(workspace) => {
-            println!("{}", workspace.name);
-            print_tree(&workspace.tree, "");
+            let mut out = std::io::stdout().lock();
+            // A closed pipe (`pulpo ls | head`) is not an error.
+            let _ = writeln!(out, "{}", workspace.name)
+                .and_then(|_| print_tree(&mut out, &workspace.tree, ""));
             ExitCode::SUCCESS
         }
         Err(e) => fail(e),
     }
 }
 
-fn print_tree(nodes: &[TreeNode], indent: &str) {
+fn print_tree(out: &mut impl Write, nodes: &[TreeNode], indent: &str) -> std::io::Result<()> {
     for (i, node) in nodes.iter().enumerate() {
         let last = i + 1 == nodes.len();
         let branch = if last { "└── " } else { "├── " };
         match node {
             TreeNode::Folder { name, children, .. } => {
-                println!("{indent}{branch}{name}/");
+                writeln!(out, "{indent}{branch}{name}/")?;
                 let next = format!("{indent}{}", if last { "    " } else { "│   " });
-                print_tree(children, &next);
+                print_tree(out, children, &next)?;
             }
             TreeNode::Request(entry) => {
                 let label = if entry.protocol == Protocol::Http {
@@ -143,13 +150,15 @@ fn print_tree(nodes: &[TreeNode], indent: &str) {
                 } else {
                     entry.protocol.as_str().to_uppercase()
                 };
-                println!(
+                writeln!(
+                    out,
                     "{indent}{branch}{label:<7} {}  {}",
                     entry.name, entry.request.url
-                );
+                )?;
             }
         }
     }
+    Ok(())
 }
 
 fn run_fmt(args: &[String]) -> ExitCode {
@@ -220,15 +229,18 @@ fn run_env(args: &[String]) -> ExitCode {
             ExitCode::SUCCESS
         }
         Ok(envs) => {
+            let mut out = std::io::stdout().lock();
             for env in envs {
-                println!("{}  ({})", env.name, env.id);
+                if writeln!(out, "{}  ({})", env.name, env.id).is_err() {
+                    break;
+                }
                 for var in env.variables {
                     let value = match (var.secret, var.has_value) {
                         (true, true) => "•••• (in keychain)".to_string(),
                         (true, false) => "(secret not set)".to_string(),
                         (false, _) => var.value,
                     };
-                    println!("    {} = {value}", var.name);
+                    let _ = writeln!(out, "    {} = {value}", var.name);
                 }
             }
             ExitCode::SUCCESS
@@ -270,6 +282,75 @@ fn run_secret(args: &[String]) -> ExitCode {
     match environment::save_environment(dir, &env, &Keychain) {
         Ok(()) => {
             println!("Stored {name} for {} in the OS keychain.", env.name);
+            ExitCode::SUCCESS
+        }
+        Err(e) => fail(e),
+    }
+}
+
+fn run_import(args: &[String]) -> ExitCode {
+    let Some(source) = args.first() else {
+        return usage_error("import: expected <FILE|-> [DIR] [--into FOLDER]");
+    };
+    let (dir, flags) = dir_and_flags(&args[1..]);
+    let folder = match flags.as_slice() {
+        [] => String::new(),
+        ["--into", folder] => folder.trim_matches('/').to_string(),
+        _ => return usage_error("import: expected <FILE|-> [DIR] [--into FOLDER]"),
+    };
+    let text = if source == "-" {
+        let mut text = String::new();
+        if let Err(e) = std::io::stdin().read_to_string(&mut text) {
+            return fail(format!("could not read stdin: {e}"));
+        }
+        text
+    } else {
+        match std::fs::read_to_string(source) {
+            Ok(text) => text,
+            Err(e) => return fail(format!("{source}: {e}")),
+        }
+    };
+    if !dir.join(collection::WORKSPACE_FILE).is_file() {
+        let name = default_name(&dir);
+        if let Err(e) = collection::init_workspace(&dir, &name) {
+            return fail(e);
+        }
+        println!(
+            "Created {} in {}",
+            collection::WORKSPACE_FILE,
+            dir.display()
+        );
+    }
+    let parsed = if source == "-" {
+        import::parse(&text)
+    } else {
+        import::parse_file(Path::new(source))
+    };
+    let plan = match parsed {
+        Ok(plan) => plan,
+        Err(e) => return fail(e),
+    };
+    match import::apply(&dir, &folder, &plan, &Keychain) {
+        Ok(summary) => {
+            println!(
+                "Imported {}: {} requests, {} folders{}{}",
+                plan.format.label(),
+                summary.requests,
+                summary.folders,
+                if summary.environments.is_empty() {
+                    String::new()
+                } else {
+                    format!(", environments: {}", summary.environments.join(", "))
+                },
+                if summary.folder_id.is_empty() {
+                    String::new()
+                } else {
+                    format!(" (in {})", summary.folder_id)
+                },
+            );
+            for warning in &summary.warnings {
+                println!("  ! {warning}");
+            }
             ExitCode::SUCCESS
         }
         Err(e) => fail(e),

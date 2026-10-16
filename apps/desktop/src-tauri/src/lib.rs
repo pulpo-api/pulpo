@@ -1,6 +1,7 @@
 use pulpo_core::collection::{self, CollectionError, RequestEntry, Workspace};
 use pulpo_core::environment::{self, Environment};
 use pulpo_core::http::{self, HttpRequest, HttpResponse, SendError};
+use pulpo_core::import::{self, ImportSummary};
 use pulpo_core::keychain::Keychain;
 use pulpo_core::variables::{self, Variables};
 use pulpo_core::Protocol;
@@ -97,6 +98,24 @@ async fn delete_request(root: String, id: String) -> Result<(), CollectionError>
     collection::delete_request(Path::new(&root), &id)
 }
 
+/// Imports a Postman collection or environment, an OpenAPI document or a curl command.
+/// Exactly one of `path` (a file) or `text` (pasted content) must be given.
+#[tauri::command]
+async fn import_into(
+    root: String,
+    folder_id: String,
+    path: Option<String>,
+    text: Option<String>,
+) -> Result<ImportSummary, String> {
+    let plan = match (path, text) {
+        (Some(path), None) => import::parse_file(Path::new(&path)),
+        (None, Some(text)) => import::parse(&text),
+        _ => return Err("give either a file or pasted text".into()),
+    }
+    .map_err(|e| e.to_string())?;
+    import::apply(Path::new(&root), &folder_id, &plan, &Keychain).map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -113,7 +132,8 @@ pub fn run() {
             list_environments,
             save_environment,
             create_environment,
-            delete_environment
+            delete_environment,
+            import_into
         ])
         .run(tauri::generate_context!())
         .expect("error while running Pulpo");

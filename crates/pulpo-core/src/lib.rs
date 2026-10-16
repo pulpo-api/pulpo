@@ -10,6 +10,7 @@ use std::str::FromStr;
 pub mod collection;
 pub mod environment;
 pub mod http;
+pub mod import;
 #[cfg(feature = "keychain")]
 pub mod keychain;
 pub mod variables;

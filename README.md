@@ -82,6 +82,17 @@ pulpo send GET "{{base}}/health" -w my-api -e local
 PULPO_SECRET_TOKEN=... pulpo send ...         # in CI, secrets come from env vars
 ```
 
+## Import what you already have
+
+```bash
+pulpo import my-collection.postman_collection.json my-api   # folders, auth, bodies, variables
+pulpo import local.postman_environment.json my-api          # secrets go to the keychain
+pulpo import openapi.yaml my-api                            # one folder per tag, example bodies
+pbpaste | pulpo import - my-api                             # a curl command ("Copy as cURL")
+```
+
+Postman v2.1 collections and environments, OpenAPI 3 (JSON or YAML, including `$ref`s to sibling files) and curl commands (Unix and Windows `^` continuations) are recognised automatically. Anything that cannot be imported yet, like pre-request and test scripts, is listed as a warning. In the desktop app, use **Import** in the sidebar.
+
 ## Roadmap
 
 | Phase | Goal |

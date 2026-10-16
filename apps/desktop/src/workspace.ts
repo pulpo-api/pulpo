@@ -33,6 +33,15 @@ export interface Environment {
   variables: Variable[];
 }
 
+export interface ImportSummary {
+  format: "postmanCollection" | "postmanEnvironment" | "openApi" | "curl" | null;
+  folderId: string;
+  folders: number;
+  requests: number;
+  environments: string[];
+  warnings: string[];
+}
+
 export interface CollectionError {
   kind: "notAWorkspace" | "alreadyAWorkspace" | "invalidFile" | "invalidPath" | "io";
   message: string;
@@ -67,6 +76,9 @@ export interface WorkspaceBackend {
   saveEnvironment(root: string, env: Environment): Promise<void>;
   createEnvironment(root: string, name: string): Promise<Environment>;
   deleteEnvironment(root: string, id: string): Promise<void>;
+  /** Desktop only: imports a file (or pasted text) with the Rust importers. */
+  importInto?(root: string, folderId: string, source: { path?: string; text?: string }): Promise<ImportSummary>;
+  pickImportFile?(): Promise<string | null>;
   /** Only in the browser preview: the values used to resolve requests (secrets included). */
   browserVariables?(environmentId: string): Record<string, string>;
 }
@@ -88,6 +100,16 @@ const tauriBackend: WorkspaceBackend = {
   saveEnvironment: (root, env) => invoke<void>("save_environment", { root, env }),
   createEnvironment: (root, name) => invoke<Environment>("create_environment", { root, name }),
   deleteEnvironment: (root, id) => invoke<void>("delete_environment", { root, id }),
+  importInto: (root, folderId, source) => invoke<ImportSummary>("import_into", { root, folderId, ...source }),
+  async pickImportFile() {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const picked = await open({
+      multiple: false,
+      title: "Import a collection, environment, OpenAPI document or curl file",
+      filters: [{ name: "Collections and specs", extensions: ["json", "yaml", "yml", "txt", "sh"] }],
+    });
+    return typeof picked === "string" ? picked : null;
+  },
 };
 
 function slugify(name: string): string {
