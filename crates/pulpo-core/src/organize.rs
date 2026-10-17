@@ -32,6 +32,7 @@ fn request_suffixes() -> Vec<String> {
     suffixes.push(".test.js".into());
     // The examples folder moves with its request (fs::rename works on folders too).
     suffixes.push(crate::examples::EXAMPLES_SUFFIX.into());
+    suffixes.push(crate::snapshot::SNAPSHOT_SUFFIX.into());
     suffixes
 }
 
@@ -321,6 +322,13 @@ pub fn duplicate(root: &Path, id: &str) -> Result<Organized, CollectionError> {
         save_request(root, &entry)?;
         let examples =
             crate::examples::examples_dir(&dir.join(format!("{}{REQUEST_SUFFIX}", child.name)));
+        let snapshots =
+            crate::snapshot::snapshot_file(&dir.join(format!("{}{REQUEST_SUFFIX}", child.name)));
+        if snapshots.is_file() {
+            let target =
+                crate::snapshot::snapshot_file(&dir.join(format!("{temp}{REQUEST_SUFFIX}")));
+            fs::copy(&snapshots, &target).map_err(|e| io_error(&target, e))?;
+        }
         if examples.is_dir() {
             copy_dir(
                 &examples,

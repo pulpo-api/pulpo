@@ -29,6 +29,7 @@ sha1 = "0.10"
 sha2 = "0.10"
 md-5 = "0.10"
 hmac = "0.12"
+jsonschema = { version = "0.59", default-features = false }
 keyring = { version = "3.6", optional = true, features = ["apple-native", "windows-native", "linux-native-sync-persistent", "crypto-rust"] }
 
 [features]

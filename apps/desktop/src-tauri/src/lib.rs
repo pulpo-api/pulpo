@@ -2,16 +2,26 @@ use pulpo_core::certificates::{self, ClientCertificate};
 use pulpo_core::codegen::{self, CodeOptions, Language};
 use pulpo_core::collection::{self, CollectionError, FolderMeta, RequestEntry, Scripts, Workspace};
 use pulpo_core::cookies::{self, Cookie, Jar};
+use pulpo_core::data::{self, Row};
 use pulpo_core::environment::{self, Environment};
 use pulpo_core::http::{self, Auth, HttpRequest, HttpResponse, SendError, Settings};
 use pulpo_core::import::{self, ImportSummary};
 use pulpo_core::keychain::Keychain;
+use pulpo_core::load::{self, LoadOptions, LoadProgress, LoadSummary};
 use pulpo_core::organize;
-use pulpo_core::run::{self, RunReport};
+use pulpo_core::report;
+use pulpo_core::run::{self, RunOptions, RunReport};
 use pulpo_core::variables::{self, Variables};
 use pulpo_core::Protocol;
 use serde::Serialize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use tauri::Emitter;
+
+/// Set to stop the running load test.
+#[derive(Default)]
+struct LoadStop(Arc<AtomicBool>);
 
 #[derive(Serialize)]
 struct CoreInfo {
@@ -45,19 +55,79 @@ async fn send_http(
 }
 
 /// Runs a request with its folder and own scripts. `entry` may contain unsaved edits.
+/// The runner passes `options` (iteration, data row, retries, snapshots).
 #[tauri::command]
 async fn run_request(
     root: String,
     entry: RequestEntry,
     environment_id: Option<String>,
+    options: Option<RunOptions>,
 ) -> RunReport {
-    run::run_entry(
+    run::run_entry_with(
         Path::new(&root),
         &entry,
         environment_id.as_deref(),
         &Keychain,
+        &options.unwrap_or_default(),
     )
     .await
+}
+
+/// Rows of a CSV or JSON data file; a relative path is inside the workspace.
+#[tauri::command]
+async fn load_data(root: String, path: String) -> Result<Vec<Row>, String> {
+    let path = PathBuf::from(&path);
+    let path = if path.is_absolute() {
+        path
+    } else {
+        Path::new(&root).join(path)
+    };
+    data::load_data(&path).map_err(|e| e.to_string())
+}
+
+/// A run's report as HTML (default), JUnit XML or Markdown.
+#[tauri::command]
+fn run_report(name: String, reports: Vec<RunReport>, format: String) -> String {
+    match format.as_str() {
+        "junit" => report::junit_xml(&name, &reports),
+        "markdown" => report::markdown_summary(&name, &reports),
+        _ => report::html_report(&name, &reports, &report::now()),
+    }
+}
+
+/// Runs a load test, emitting `load-progress` about once a second.
+#[tauri::command]
+async fn load_test(
+    app: tauri::AppHandle,
+    stop: tauri::State<'_, LoadStop>,
+    root: String,
+    entries: Vec<RequestEntry>,
+    environment_id: Option<String>,
+    options: LoadOptions,
+) -> Result<LoadSummary, String> {
+    stop.0.store(false, Ordering::Relaxed);
+    let flag = stop.0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = PathBuf::from(root);
+        let session = run::Session::open(&root, environment_id.as_deref(), &Keychain, false)?;
+        load::run_load(
+            &root,
+            &entries,
+            &session,
+            &options,
+            flag,
+            &|p: LoadProgress| {
+                let _ = app.emit("load-progress", p);
+            },
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn stop_load_test(stop: tauri::State<'_, LoadStop>) {
+    stop.0.store(true, Ordering::Relaxed);
 }
 
 #[tauri::command]
@@ -344,6 +414,7 @@ async fn import_into(
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .manage(LoadStop::default())
         .invoke_handler(tauri::generate_handler![
             core_info,
             send_http,
@@ -367,6 +438,10 @@ pub fn run() {
             save_response,
             query_json,
             list_examples,
+            load_data,
+            run_report,
+            load_test,
+            stop_load_test,
             save_example,
             delete_example,
             folder_meta,

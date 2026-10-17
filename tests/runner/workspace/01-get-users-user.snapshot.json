@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "snapshots": {
+    "user-ana": {
+      "status": 200,
+      "body": {
+        "method": "GET",
+        "path": "/users/ana",
+        "headers": "<ignored>",
+        "body": ""
+      }
+    },
+    "user-bo": {
+      "status": 200,
+      "body": {
+        "method": "GET",
+        "path": "/users/bo",
+        "headers": "<ignored>",
+        "body": ""
+      }
+    }
+  }
+}

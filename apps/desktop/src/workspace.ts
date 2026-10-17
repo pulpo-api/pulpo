@@ -42,6 +42,61 @@ export interface RunReport {
   tests: TestResult[];
   logs: string[];
   scriptErrors: string[];
+  /** 0-based iteration in a run with several. */
+  iteration?: number;
+  /** Times it was sent (more than 1 after retries). */
+  attempts?: number;
+}
+
+/** A row of a data file: `{{name}}` and `pm.iterationData` for one iteration. */
+export type DataRow = Record<string, string>;
+
+/** How one request runs inside the runner. Mirrors pulpo-core's RunOptions. */
+export interface RunOptions {
+  iteration: number;
+  iterations: number;
+  data: DataRow;
+  retries: number;
+  updateSnapshots: boolean;
+}
+
+export interface LoadOptions {
+  users: number;
+  durationSecs: number;
+  rampUpSecs: number;
+  data: DataRow[];
+}
+
+export interface LoadStats {
+  name: string;
+  count: number;
+  failed: number;
+  minMs: number;
+  avgMs: number;
+  p50Ms: number;
+  p90Ms: number;
+  p95Ms: number;
+  p99Ms: number;
+  maxMs: number;
+  perSecond: number;
+}
+
+export interface LoadSummary {
+  users: number;
+  elapsedMs: number;
+  total: LoadStats;
+  requests: LoadStats[];
+  errors: string[];
+}
+
+export interface LoadProgress {
+  elapsedSecs: number;
+  done: number;
+  failed: number;
+}
+
+export function passed(report: RunReport): boolean {
+  return !report.error && report.scriptErrors.length === 0 && report.tests.every((t) => t.passed);
 }
 
 export type TreeNode =
@@ -453,7 +508,21 @@ export interface WorkspaceBackend {
   /** Desktop only: picks a file to upload and returns its absolute path. */
   pickUploadFile?(): Promise<string | null>;
   /** Sends the request with its scripts; `entry` may contain unsaved edits. */
-  run(root: string, entry: RequestEntry, environmentId: string | undefined): Promise<RunReport>;
+  run(root: string, entry: RequestEntry, environmentId: string | undefined, options?: RunOptions): Promise<RunReport>;
+  /** Desktop only: rows of a CSV or JSON data file (relative paths are inside the workspace). */
+  loadData?(root: string, path: string): Promise<DataRow[]>;
+  pickDataFile?(): Promise<string | null>;
+  /** Desktop only: saves a run report (HTML or JUnit) where the user picks. */
+  saveRunReport?(name: string, reports: RunReport[], format: "html" | "junit"): Promise<string | null>;
+  /** Desktop only: a load test; `onProgress` about once a second. */
+  loadTest?(
+    root: string,
+    entries: RequestEntry[],
+    environmentId: string | undefined,
+    options: LoadOptions,
+    onProgress: (progress: LoadProgress) => void,
+  ): Promise<LoadSummary>;
+  stopLoadTest?(): Promise<void>;
   /** Only in the browser preview: the values used to resolve requests (secrets included). */
   browserVariables?(environmentId: string): Record<string, string>;
 }
@@ -509,7 +578,39 @@ const tauriBackend: WorkspaceBackend = {
   listCookies: (root, environmentId) => invoke<Cookie[]>("list_cookies", { root, environmentId: environmentId || null }),
   saveCookies: (root, environmentId, cookies) =>
     invoke<void>("save_cookies", { root, environmentId: environmentId || null, cookies }),
-  run: (root, entry, environmentId) => invoke<RunReport>("run_request", { root, entry, environmentId }),
+  run: (root, entry, environmentId, options) =>
+    invoke<RunReport>("run_request", { root, entry, environmentId, options: options ?? null }),
+  loadData: (root, path) => invoke<DataRow[]>("load_data", { root, path }),
+  async pickDataFile() {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const picked = await open({
+      multiple: false,
+      title: "Choose a data file (one row per iteration)",
+      filters: [{ name: "CSV or JSON", extensions: ["csv", "json"] }],
+    });
+    return typeof picked === "string" ? picked : null;
+  },
+  async saveRunReport(name, reports, format) {
+    const { save } = await import("@tauri-apps/plugin-dialog");
+    const path = await save({
+      title: format === "html" ? "Save the HTML report" : "Save the JUnit report",
+      defaultPath: format === "html" ? "pulpo-report.html" : "pulpo-junit.xml",
+    });
+    if (!path) return null;
+    const text = await invoke<string>("run_report", { name, reports, format });
+    await invoke<void>("save_response", { path, text, base64: null });
+    return path;
+  },
+  async loadTest(root, entries, environmentId, options, onProgress) {
+    const { listen } = await import("@tauri-apps/api/event");
+    const stop = await listen<LoadProgress>("load-progress", (event) => onProgress(event.payload));
+    try {
+      return await invoke<LoadSummary>("load_test", { root, entries, environmentId: environmentId || null, options });
+    } finally {
+      stop();
+    }
+  },
+  stopLoadTest: () => invoke<void>("stop_load_test"),
   importInto: (root, folderId, source) => invoke<ImportSummary>("import_into", { root, folderId, ...source }),
   async pickImportFile() {
     const { open } = await import("@tauri-apps/plugin-dialog");
@@ -840,7 +941,7 @@ function memoryBackend(): WorkspaceBackend {
         });
       if (!find(workspace.tree)) throw { kind: "invalidPath", message: folderId } satisfies CollectionError;
     },
-    async run(_root, entry, environmentId) {
+    async run(_root, entry, environmentId, options) {
       const report: RunReport = {
         id: entry.id,
         name: entry.name,
@@ -849,6 +950,8 @@ function memoryBackend(): WorkspaceBackend {
         tests: [],
         logs: [],
         scriptErrors: [],
+        iteration: options?.iteration ?? 0,
+        attempts: 1,
       };
       const hasScripts = !!(entry.scripts.pre.trim() || entry.scripts.test.trim());
       if (hasScripts) report.scriptErrors.push("Scripts run in the desktop app; the browser preview only sends the request.");
@@ -858,7 +961,8 @@ function memoryBackend(): WorkspaceBackend {
         const headers = effectiveHeaders(workspace, entry);
         report.response = await sendHttp({ ...entry.request, auth, headers, settings: { timeoutMs } }, {
           environmentId,
-          browserVars: environmentId ? this.browserVariables!(environmentId) : {},
+          // Iteration data wins over the environment, as in pulpo-core.
+          browserVars: { ...(environmentId ? this.browserVariables!(environmentId) : {}), ...(options?.data ?? {}) },
         });
       } catch (e) {
         report.error = asSendError(e);

@@ -1,0 +1,6 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/pulpo-api/pulpo/main/schemas/request.v1.schema.json
+version: 1
+name: "GET /users/{{user}}"
+protocol: "http"
+method: "GET"
+url: "{{base}}/users/{{user}}"

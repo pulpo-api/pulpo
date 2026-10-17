@@ -1,13 +1,16 @@
 //! Running a request the way the app and `pulpo run` do: folder and request scripts,
-//! variables (environment + local values), send, test scripts, save local values.
+//! variables (environment + local values + iteration data), send (with retries), test
+//! scripts, snapshots, save local values.
 
 use crate::certificates;
 use crate::collection::{self, CollectionError, RequestEntry, TreeNode};
 use crate::cookies::{self, SharedJar};
+use crate::data::Row;
 use crate::environment::{self, SecretStore};
 use crate::http::{self, HttpResponse, SendContext, SendError};
 use crate::local;
 use crate::script::{self, Phase, Script, ScriptContext, TestResult};
+use crate::snapshot;
 use crate::variables::{self, Variables};
 use crate::Protocol;
 use serde::{Deserialize, Serialize};
@@ -26,12 +29,88 @@ pub struct RunReport {
     pub tests: Vec<TestResult>,
     pub logs: Vec<String>,
     pub script_errors: Vec<String>,
+    /// 0-based iteration of a run with several (data rows or `--iterations`).
+    #[serde(default)]
+    pub iteration: usize,
+    /// Times the request was sent (more than 1 after retries).
+    #[serde(default)]
+    pub attempts: u32,
 }
 
 impl RunReport {
     /// A request passes when it got a response, no test failed and no script broke.
     pub fn passed(&self) -> bool {
         self.error.is_none() && self.script_errors.is_empty() && self.tests.iter().all(|t| t.passed)
+    }
+}
+
+/// How one request runs inside a bigger run: its iteration and data, retries, snapshots.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunOptions {
+    #[serde(default)]
+    pub iteration: usize,
+    /// How many iterations the run has (0 counts as 1).
+    #[serde(default)]
+    pub iterations: usize,
+    /// The iteration's data row: `{{name}}` and `pm.iterationData`.
+    #[serde(default)]
+    pub data: Row,
+    /// Extra attempts after a network error or a 5xx response.
+    #[serde(default)]
+    pub retries: u32,
+    /// Rewrite snapshots instead of comparing with them.
+    #[serde(default)]
+    pub update_snapshots: bool,
+}
+
+/// The state that requests of one run share: environment, local values and cookies.
+/// A persistent session saves local values and cookies after each request (the app and
+/// `pulpo run`); a load test keeps them in memory, one session per virtual user.
+pub struct Session {
+    environment_id: Option<String>,
+    environment_name: String,
+    env: Variables,
+    local: HashMap<String, String>,
+    jar: Arc<SharedJar>,
+    persist: bool,
+}
+
+impl Session {
+    pub fn open(
+        root: &Path,
+        environment_id: Option<&str>,
+        store: &dyn SecretStore,
+        persist: bool,
+    ) -> Result<Session, String> {
+        let (env, environment_name) = match environment_id {
+            Some(id) => environment::variables_for(root, id, store)
+                .and_then(|vars| {
+                    environment::load_environment(root, id, store, false).map(|e| (vars, e.name))
+                })
+                .map_err(|e| e.to_string())?,
+            None => (Variables::new(), String::new()),
+        };
+        Ok(Session {
+            environment_id: environment_id.map(str::to_string),
+            environment_name,
+            env,
+            local: local::load_local(root, environment_id),
+            jar: Arc::new(SharedJar::new(cookies::load_jar(root, environment_id))),
+            persist,
+        })
+    }
+
+    /// An in-memory copy (same values and cookies) that saves nothing.
+    pub fn detached(&self) -> Session {
+        Session {
+            environment_id: self.environment_id.clone(),
+            environment_name: self.environment_name.clone(),
+            env: self.env.clone(),
+            local: self.local.clone(),
+            jar: Arc::new(SharedJar::new(self.jar.snapshot())),
+            persist: false,
+        }
     }
 }
 
@@ -89,9 +168,49 @@ pub async fn run_entry(
     environment_id: Option<&str>,
     store: &dyn SecretStore,
 ) -> RunReport {
+    run_entry_with(root, entry, environment_id, store, &RunOptions::default()).await
+}
+
+/// [`run_entry`] as one step of a run with iterations, data and retries.
+pub async fn run_entry_with(
+    root: &Path,
+    entry: &RequestEntry,
+    environment_id: Option<&str>,
+    store: &dyn SecretStore,
+    options: &RunOptions,
+) -> RunReport {
+    match Session::open(root, environment_id, store, true) {
+        Ok(mut session) => run_in(root, entry, &mut session, options).await,
+        Err(e) => RunReport {
+            id: entry.id.clone(),
+            name: entry.name.clone(),
+            iteration: options.iteration,
+            error: Some(SendError::Other(e)),
+            ..Default::default()
+        },
+    }
+}
+
+/// A network failure or a server error: worth sending again.
+fn retryable(outcome: &Result<HttpResponse, SendError>) -> bool {
+    match outcome {
+        Ok(response) => response.status >= 500,
+        Err(SendError::Timeout(_) | SendError::Connect(_)) => true,
+        Err(_) => false,
+    }
+}
+
+/// Runs one request inside a session, which keeps the values its scripts set.
+pub async fn run_in(
+    root: &Path,
+    entry: &RequestEntry,
+    session: &mut Session,
+    options: &RunOptions,
+) -> RunReport {
     let mut report = RunReport {
         id: entry.id.clone(),
         name: entry.name.clone(),
+        iteration: options.iteration,
         ..Default::default()
     };
     if entry.protocol != Protocol::Http {
@@ -102,19 +221,6 @@ pub async fn run_entry(
         return report;
     }
 
-    let (env, environment_name) = match environment_id {
-        Some(id) => match environment::variables_for(root, id, store).and_then(|vars| {
-            environment::load_environment(root, id, store, false).map(|e| (vars, e.name))
-        }) {
-            Ok(found) => found,
-            Err(e) => {
-                report.error = Some(SendError::Other(e.to_string()));
-                return report;
-            }
-        },
-        None => (Variables::new(), String::new()),
-    };
-    let mut local_values = local::load_local(root, environment_id);
     let (pre, test) = match scripts_for(root, entry) {
         Ok(scripts) => scripts,
         Err(e) => {
@@ -147,24 +253,36 @@ pub async fn run_entry(
     }
 
     // One jar for the whole request: pm.sendRequest logins, redirects and the request itself.
-    let jar = Arc::new(SharedJar::new(cookies::load_jar(root, environment_id)));
+    let jar = session.jar.clone();
+    let iteration_count = options.iterations.max(1);
 
     let context = ScriptContext {
         request_name: &entry.name,
-        environment_name: &environment_name,
-        env: &env,
-        local: &local_values,
+        environment_name: &session.environment_name,
+        env: &session.env,
+        local: &session.local,
         cookies: Some(jar.clone()),
+        data: Some(&options.data),
+        iteration: options.iteration,
+        iteration_count,
     };
     let (request, outcome) = script::run_phase(Phase::PreRequest, &pre, &context, &effective, None);
     let mut all_changes = outcome.changes.clone();
-    merge(&mut local_values, &outcome.changes);
+    merge(&mut session.local, &outcome.changes);
     report.logs.extend(outcome.logs);
     report.script_errors.extend(outcome.errors);
     report.tests.extend(outcome.tests);
 
-    let mut vars = env.clone();
-    vars.extend(local_values.clone());
+    // Environment < values kept from earlier requests < the iteration's data < values set
+    // by this request's pre-request scripts.
+    let mut vars = session.env.clone();
+    vars.extend(session.local.clone());
+    vars.extend(options.data.clone());
+    for (name, value) in &outcome.changes {
+        if let Some(value) = value {
+            vars.insert(name.clone(), value.clone());
+        }
+    }
     let prepared = variables::resolve_request(&request, &vars)
         .map_err(|missing| SendError::Unresolved(missing.join(", ")))
         .and_then(|resolved| {
@@ -173,49 +291,70 @@ pub async fn run_entry(
         });
     match prepared {
         Err(e) => report.error = Some(e),
-        Ok((resolved, client_pem)) => match http::send_with(
-            &resolved,
-            &SendContext {
+        Ok((resolved, client_pem)) => {
+            let send_context = SendContext {
                 root: Some(root),
                 cookies: Some(jar.clone()),
                 client_pem,
-            },
-        )
-        .await
-        {
-            Err(e) => report.error = Some(e),
-            Ok(response) => {
-                let context = ScriptContext {
-                    request_name: &entry.name,
-                    environment_name: &environment_name,
-                    env: &env,
-                    local: &local_values,
-                    cookies: Some(jar.clone()),
-                };
-                let (_, outcome) =
-                    script::run_phase(Phase::Test, &test, &context, &resolved, Some(&response));
-                for (k, v) in &outcome.changes {
-                    all_changes.insert(k.clone(), v.clone());
-                }
-                report.logs.extend(outcome.logs);
-                report.script_errors.extend(outcome.errors);
-                report.tests.extend(outcome.tests);
-                report.response = Some(response);
+            };
+            let mut sent = http::send_with(&resolved, &send_context).await;
+            report.attempts = 1;
+            while retryable(&sent) && report.attempts <= options.retries {
+                report.attempts += 1;
+                sent = http::send_with(&resolved, &send_context).await;
             }
-        },
-    }
-
-    if jar.changed() {
-        if let Err(e) = cookies::save_jar(root, environment_id, &jar.snapshot()) {
-            report
-                .script_errors
-                .push(format!("could not save cookies: {e}"));
+            match sent {
+                Err(e) => report.error = Some(e),
+                Ok(response) => {
+                    let context = ScriptContext {
+                        request_name: &entry.name,
+                        environment_name: &session.environment_name,
+                        env: &session.env,
+                        local: &session.local,
+                        cookies: Some(jar.clone()),
+                        data: Some(&options.data),
+                        iteration: options.iteration,
+                        iteration_count,
+                    };
+                    let (_, outcome) =
+                        script::run_phase(Phase::Test, &test, &context, &resolved, Some(&response));
+                    for (k, v) in &outcome.changes {
+                        all_changes.insert(k.clone(), v.clone());
+                    }
+                    merge(&mut session.local, &outcome.changes);
+                    report.logs.extend(outcome.logs);
+                    report.script_errors.extend(outcome.errors);
+                    report.tests.extend(outcome.tests);
+                    // A load test (no persistence) neither writes nor checks snapshots.
+                    if session.persist && !outcome.snapshots.is_empty() {
+                        report.tests.extend(snapshot::check(
+                            root,
+                            &entry.id,
+                            &response,
+                            &outcome.snapshots,
+                            options.update_snapshots,
+                        ));
+                    }
+                    report.response = Some(response);
+                }
+            }
         }
     }
-    if let Err(e) = local::apply_changes(root, environment_id, &all_changes) {
-        report
-            .script_errors
-            .push(format!("could not save local values: {e}"));
+
+    if session.persist {
+        let environment_id = session.environment_id.as_deref();
+        if jar.changed() {
+            if let Err(e) = cookies::save_jar(root, environment_id, &jar.snapshot()) {
+                report
+                    .script_errors
+                    .push(format!("could not save cookies: {e}"));
+            }
+        }
+        if let Err(e) = local::apply_changes(root, environment_id, &all_changes) {
+            report
+                .script_errors
+                .push(format!("could not save local values: {e}"));
+        }
     }
     report
 }
@@ -539,6 +678,155 @@ mod tests {
             Some(SendError::Unresolved("base, token".into()))
         );
         assert!(!report.passed());
+    }
+
+    /// Answers each connection with the next `(status, body)`, echoing the request line
+    /// into `{line}` in the body.
+    async fn scripted_server(replies: Vec<(u16, &'static str)>) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            for (status, body) in replies {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut buffer = vec![0u8; 8192];
+                let read = socket.read(&mut buffer).await.unwrap();
+                let text = String::from_utf8_lossy(&buffer[..read]).to_string();
+                let line = text.lines().next().unwrap_or("").to_string();
+                let body = body.replace("{line}", &line);
+                let reply = format!(
+                    "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                socket.write_all(reply.as_bytes()).await.unwrap();
+            }
+        });
+        format!("http://{address}")
+    }
+
+    #[tokio::test]
+    async fn iteration_data_fills_variables_and_scripts() {
+        let base = scripted_server(vec![(200, r#"{"line":"{line}"}"#)]).await;
+        let ws = tempfile::tempdir().unwrap();
+        init_workspace(ws.path(), "Demo").unwrap();
+        local::apply_changes(
+            ws.path(),
+            None,
+            &HashMap::from([("user".to_string(), Some("kept".to_string()))]),
+        )
+        .unwrap();
+        let mut request = entry(
+            "01-user.pulpo.yaml",
+            &format!("{base}/users/{{{{user}}}}"),
+            Scripts {
+                pre: String::new(),
+                test: "pm.test('data', () => {
+                    pm.expect(pm.iterationData.get('user')).to.equal('ana');
+                    pm.expect(pm.variables.get('user')).to.equal('ana');
+                    pm.expect(pm.info.iteration).to.equal(1);
+                    pm.expect(pm.info.iterationCount).to.equal(2);
+                });"
+                .into(),
+            },
+        );
+        request.request.headers.clear();
+        let options = RunOptions {
+            iteration: 1,
+            iterations: 2,
+            data: HashMap::from([("user".to_string(), "ana".to_string())]),
+            ..Default::default()
+        };
+        let report =
+            run_entry_with(ws.path(), &request, None, &MemoryStore::default(), &options).await;
+        assert!(report.passed(), "{report:?}");
+        assert_eq!(report.iteration, 1);
+        assert!(
+            report.response.unwrap().body.contains("GET /users/ana "),
+            "data wins over kept values"
+        );
+    }
+
+    #[tokio::test]
+    async fn retries_server_errors_only_as_asked() {
+        let base = scripted_server(vec![(503, "{}"), (502, "{}"), (200, "{}"), (500, "{}")]).await;
+        let ws = tempfile::tempdir().unwrap();
+        init_workspace(ws.path(), "Demo").unwrap();
+        let mut request = entry("01-x.pulpo.yaml", &format!("{base}/x"), Scripts::default());
+        request.request.headers.clear();
+        let store = MemoryStore::default();
+        let retried = run_entry_with(
+            ws.path(),
+            &request,
+            None,
+            &store,
+            &RunOptions {
+                retries: 2,
+                ..Default::default()
+            },
+        )
+        .await;
+        assert_eq!(retried.attempts, 3);
+        assert_eq!(retried.response.unwrap().status, 200);
+        let once = run_entry(ws.path(), &request, None, &store).await;
+        assert_eq!((once.attempts, once.response.unwrap().status), (1, 500));
+    }
+
+    #[tokio::test]
+    async fn scripts_check_schemas_and_snapshots() {
+        let body = r#"{"id":7,"at":"now"}"#;
+        let base = scripted_server(vec![(200, body), (200, r#"{"id":"7","at":"later"}"#)]).await;
+        let ws = tempfile::tempdir().unwrap();
+        init_workspace(ws.path(), "Demo").unwrap();
+        let mut request = entry(
+            "01-order.pulpo.yaml",
+            &format!("{base}/order"),
+            Scripts {
+                pre: String::new(),
+                test: r#"pm.test('schema', () => pm.response.to.have.jsonSchema({
+                        type: 'object', required: ['id'], properties: { id: { type: 'integer' } } }));
+                    pm.test('contract', () => pm.response.to.have.contract({ '2XX': { type: 'object' }, '404': null }));
+                    pm.test('undocumented', () => pm.response.to.have.contract({ '404': null }));
+                    pm.response.to.matchSnapshot({ ignore: ['$.at'] });"#
+                    .into(),
+            },
+        );
+        request.request.headers.clear();
+        save_request(ws.path(), &request).unwrap();
+        let store = MemoryStore::default();
+
+        let first = run_entry(ws.path(), &request, None, &store).await;
+        let results: Vec<(&str, bool)> = first
+            .tests
+            .iter()
+            .map(|t| (t.name.as_str(), t.passed))
+            .collect();
+        assert_eq!(
+            results,
+            [
+                ("schema", true),
+                ("contract", true),
+                ("undocumented", false),
+                ("Snapshot \"response\" saved", true)
+            ]
+        );
+        assert!(first.tests[2]
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("status 200 is not documented"));
+
+        let second = run_entry(ws.path(), &request, None, &store).await;
+        let schema = &second.tests[0];
+        assert!(!schema.passed);
+        assert!(
+            schema.error.as_deref().unwrap().contains("/id:"),
+            "{schema:?}"
+        );
+        let snapshot = &second.tests[3];
+        assert_eq!(
+            snapshot.error.as_deref(),
+            Some("changed: $.body.id: 7 → \"7\""),
+            "the ignored field does not count"
+        );
     }
 
     #[test]

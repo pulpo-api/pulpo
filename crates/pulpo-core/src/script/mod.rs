@@ -8,6 +8,7 @@ mod crypto;
 use crate::cookies::SharedJar;
 use crate::http::{self, HttpRequest, HttpResponse, SendContext};
 use crate::query::{self, QueryLanguage};
+use crate::snapshot::SnapshotCheck;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -88,6 +89,9 @@ pub struct ScriptOutcome {
     pub tests: Vec<TestResult>,
     pub logs: Vec<String>,
     pub errors: Vec<String>,
+    /// `matchSnapshot` calls, checked by the runner (it knows where the request lives).
+    #[serde(default)]
+    pub snapshots: Vec<SnapshotCheck>,
 }
 
 #[derive(Serialize)]
@@ -102,6 +106,9 @@ struct Input<'a> {
     response: Option<&'a HttpResponse>,
     /// Cookies of the jar that match the request URL, for `pm.cookies`.
     cookies: Vec<(String, String)>,
+    data: &'a HashMap<String, String>,
+    iteration: usize,
+    iteration_count: usize,
 }
 
 #[derive(Deserialize)]
@@ -111,6 +118,8 @@ struct Output {
     tests: Vec<TestResult>,
     logs: Vec<String>,
     errors: Vec<String>,
+    #[serde(default)]
+    snapshots: Vec<SnapshotCheck>,
 }
 
 /// Everything a phase needs to see.
@@ -123,6 +132,11 @@ pub struct ScriptContext<'a> {
     pub local: &'a HashMap<String, String>,
     /// The environment's cookie jar, shared with `pm.sendRequest`.
     pub cookies: Option<Arc<SharedJar>>,
+    /// The iteration's data row (`pm.iterationData`); it wins over `env` and `local`.
+    pub data: Option<&'a HashMap<String, String>>,
+    /// 0-based iteration and how many there are (`pm.info.iteration`, `iterationCount`).
+    pub iteration: usize,
+    pub iteration_count: usize,
 }
 
 /// Runs the scripts of a phase in order. Pre-request scripts may change the request,
@@ -149,6 +163,7 @@ pub fn run_phase(
                 tests: output.tests,
                 logs: output.logs,
                 errors: output.errors,
+                snapshots: output.snapshots,
             },
         ),
         Err(error) => (
@@ -168,6 +183,7 @@ fn execute(
     request: &HttpRequest,
     response: Option<&HttpResponse>,
 ) -> Result<Output, String> {
+    let no_data = HashMap::new();
     let input = Input {
         phase,
         request_name: context.request_name,
@@ -181,6 +197,9 @@ fn execute(
             .as_ref()
             .map(|jar| jar.pairs_for(&request.url))
             .unwrap_or_default(),
+        data: context.data.unwrap_or(&no_data),
+        iteration: context.iteration,
+        iteration_count: context.iteration_count.max(1),
     };
     let mut program = format!(
         "var __input = {};\n{PRELUDE}\n",
@@ -250,6 +269,16 @@ fn execute(
         })
         .map_err(|e| format!("script engine: {e}"))?;
         globals.set("__pulpo_query", query_bridge).map_err(|e| format!("script engine: {e}"))?;
+        let schema_bridge = rquickjs::Function::new(ctx.clone(), |schema: String, value: String| -> String {
+            let parsed = serde_json::from_str::<serde_json::Value>(&schema)
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(&value).map(|v| (s, v)));
+            match parsed.map_err(|e| e.to_string()).and_then(|(s, v)| crate::contract::validate(&s, &v)) {
+                Ok(errors) => serde_json::json!({ "ok": true, "errors": errors }).to_string(),
+                Err(error) => serde_json::json!({ "ok": false, "error": error }).to_string(),
+            }
+        })
+        .map_err(|e| format!("script engine: {e}"))?;
+        globals.set("__pulpo_schema", schema_bridge).map_err(|e| format!("script engine: {e}"))?;
 
         ctx.eval::<String, _>(program.as_str()).map_err(|e| {
             if over_limit() {
@@ -285,6 +314,9 @@ mod tests {
             env,
             local,
             cookies: None,
+            data: None,
+            iteration: 0,
+            iteration_count: 1,
         }
     }
 

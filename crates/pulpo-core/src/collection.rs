@@ -1088,6 +1088,10 @@ pub fn delete_request(root: &Path, id: &str) -> Result<(), CollectionError> {
     if examples.is_dir() {
         fs::remove_dir_all(&examples).map_err(|e| io_error(&examples, e))?;
     }
+    let snapshots = crate::snapshot::snapshot_file(&path);
+    if snapshots.is_file() {
+        fs::remove_file(&snapshots).map_err(|e| io_error(&snapshots, e))?;
+    }
     fs::remove_file(&path).map_err(|e| io_error(&path, e))
 }
 

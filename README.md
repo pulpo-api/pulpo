@@ -143,10 +143,32 @@ pm.test("total", () => pm.expect(pm.response.jq("[.data[].price] | add")).to.eql
 
 Also supported: `pm.sendRequest` (for logins and setup calls, with or without a callback), `CryptoJS` (`SHA256`, `SHA1`, `SHA512`, `MD5` and their `Hmac*`, with `enc.Hex`, `enc.Base64`, `enc.Utf8`; also via `require('crypto-js')`), `atob` and `btoa`.
 
+Contract and snapshot tests work the same way. Requests imported from OpenAPI get the contract test written for them (documented status and response schema):
+
+```js
+pm.test("matches the schema", () => pm.response.to.have.jsonSchema(orderSchema));
+pm.response.to.matchSnapshot({ ignore: ["$.updatedAt", "$..id"] });   // kept in <request>.snapshot.json
+```
+
+## Run collections
+
+In the app, **▶** (or right-click a folder → Run folder…) opens the runner: pick requests, iterations, a CSV or JSON data file, delay, retries; watch the progress, re-run only the failed ones, export HTML or JUnit, and accept a changed snapshot with one click. From the terminal:
+
 ```bash
 pulpo run -w my-api -e local              # run every request in order, fail on a failed test
 pulpo run 01-orders -w my-api -e local --bail
-pulpo run -w my-api -e ci --junit report.xml   # for GitHub Actions, GitLab, Jenkins
+pulpo run -w my-api -e local --data users.csv --retries 2      # one iteration per row: {{user}}
+pulpo run -w my-api -e ci --junit report.xml --html report.html --summary summary.md
+pulpo load 01-orders -w my-api -e staging -u 20 -d 1m          # light load test with percentiles
+```
+
+In GitHub Actions, [`actions/run`](actions/run) runs a collection and comments the summary on the pull request:
+
+```yaml
+- uses: pulpo-api/pulpo/actions/run@main
+  with:
+    workspace: api-tests
+    environment: Staging
 ```
 
 ## Share a request as code

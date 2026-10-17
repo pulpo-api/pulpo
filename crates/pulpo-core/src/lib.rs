@@ -10,18 +10,23 @@ use std::str::FromStr;
 pub mod certificates;
 pub mod codegen;
 pub mod collection;
+pub mod contract;
 pub mod cookies;
+pub mod data;
 pub mod environment;
 pub mod examples;
 pub mod http;
 pub mod import;
 #[cfg(feature = "keychain")]
 pub mod keychain;
+pub mod load;
 pub mod local;
 pub mod organize;
 pub mod query;
+pub mod report;
 pub mod run;
 pub mod script;
+pub mod snapshot;
 mod timing;
 pub mod variables;
 

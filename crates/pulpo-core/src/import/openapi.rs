@@ -33,6 +33,39 @@ fn deref<'a>(doc: &'a Value, value: &'a Value) -> &'a Value {
     current
 }
 
+/// A test script with the responses the operation documents: the status must be one of
+/// them and a JSON body must match its schema (contract test). Empty when none are.
+fn contract_script(doc: &Value, operation: &Value) -> String {
+    let Some(responses) = operation.get("responses").and_then(Value::as_object) else {
+        return String::new();
+    };
+    let mut documented = Map::new();
+    for (code, response) in responses {
+        let schema = deref(doc, response)
+            .get("content")
+            .and_then(Value::as_object)
+            .and_then(|content| {
+                content
+                    .iter()
+                    .find(|(media, _)| media.contains("json"))
+                    .and_then(|(_, media)| media.get("schema"))
+            });
+        documented.insert(
+            code.to_uppercase().replace("DEFAULT", "default"),
+            schema
+                .map(|s| crate::contract::openapi_schema(doc, s))
+                .unwrap_or(Value::Null),
+        );
+    }
+    if documented.is_empty() {
+        return String::new();
+    }
+    let responses = serde_json::to_string_pretty(&Value::Object(documented)).unwrap_or_default();
+    format!(
+        "// Contract from the OpenAPI document: a documented status and, for JSON, a body that\n// matches its schema. Written by the import; add your own tests below.\npm.test(\"Matches the OpenAPI contract\", () => pm.response.to.have.contract({responses}));\n"
+    )
+}
+
 /// Builds an example value from a schema: example, default, enum, then a placeholder by type.
 fn example(doc: &Value, schema: &Value, depth: usize) -> Value {
     let schema = deref(doc, schema);
@@ -528,7 +561,10 @@ pub(super) fn document(doc: &Value) -> Result<ImportPlan, ImportError> {
                         path_params: Vec::new(),
                         auth,
                     },
-                    scripts: Default::default(),
+                    scripts: crate::collection::Scripts {
+                        pre: String::new(),
+                        test: contract_script(doc, operation),
+                    },
                 },
             );
         }
@@ -645,6 +681,15 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/NewOrder'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NewOrder'
+        4XX:
+          description: Bad request
   /orders/{orderId}:
     parameters:
       - name: orderId
@@ -731,6 +776,22 @@ components:
             json!({"storeId": "{{$guid}}", "items": [{"sku": "SKU-1", "quantity": 1}], "mode": "PICKUP"})
         );
 
+        let ImportNode::Request { scripts, .. } = &children[1] else {
+            panic!()
+        };
+        assert!(scripts.test.contains(
+            "pm.test(\"Matches the OpenAPI contract\", () => pm.response.to.have.contract({"
+        ));
+        assert!(scripts.test.contains("\"4XX\": null"));
+        assert!(
+            scripts.test.contains("\"enum\": [\n"),
+            "the schema is inlined: {}",
+            scripts.test
+        );
+        let ImportNode::Request { scripts, .. } = &children[0] else {
+            panic!()
+        };
+        assert!(scripts.test.is_empty(), "nothing documented, no contract");
         let ImportNode::Request { name, request, .. } = &children[2] else {
             panic!()
         };

@@ -12,6 +12,8 @@ var __state = {
   tests: [],
   logs: [],
   errors: [],
+  data: __input.data || {},
+  snapshots: [],
 };
 
 function __str(value) {
@@ -28,6 +30,10 @@ function __str(value) {
 }
 
 function __lookup(name) {
+  var own = Object.prototype.hasOwnProperty;
+  // Set during this run > the iteration's data > values kept from earlier runs > environment.
+  if (own.call(__state.changes, name) && __state.changes[name] !== null) return __state.changes[name];
+  if (own.call(__state.data, name)) return __state.data[name];
   if (Object.prototype.hasOwnProperty.call(__state.local, name)) return __state.local[name];
   if (Object.prototype.hasOwnProperty.call(__state.env, name)) return __state.env[name];
   return undefined;
@@ -78,7 +84,7 @@ var __variables = {
     Object.keys(__state.local).forEach(function (k) { __state.changes[k] = null; });
     __state.local = {};
   },
-  toObject: function () { return Object.assign({}, __state.env, __state.local); },
+  toObject: function () { return Object.assign({}, __state.env, __state.local, __state.data); },
   replaceIn: __replaceIn,
 };
 
@@ -181,6 +187,29 @@ function __responseApi(r) {
       header: function (name) {
         if (api.headers.get(name) === undefined) throw new Error("expected response to have header " + name);
       },
+      jsonSchema: function (schema) { __checkSchema(schema, api.json()); },
+      // The responses documented for the request (status -> JSON Schema or null), as the
+      // OpenAPI importer writes them: the status must be documented and the body match.
+      contract: function (responses) {
+        var code = String(r.status);
+        var key = [code, code.charAt(0) + "XX", "default"].filter(function (k) {
+          return Object.prototype.hasOwnProperty.call(responses, k);
+        })[0];
+        if (key === undefined) {
+          throw new Error("status " + r.status + " is not documented (expected " + Object.keys(responses).join(", ") + ")");
+        }
+        if (responses[key]) __checkSchema(responses[key], api.json());
+      },
+    },
+    // Keeps the response next to the request the first time; later runs must match it.
+    // matchSnapshot(), matchSnapshot("name"), matchSnapshot({ name, ignore: ["$.updatedAt"] }).
+    matchSnapshot: function (name, options) {
+      if (typeof name === "object" && name !== null) { options = name; name = options.name; }
+      options = options || {};
+      __state.snapshots.push({
+        name: String(name || "response"),
+        ignore: (options.ignore || []).map(String),
+      });
     },
     be: {
       get ok() {
@@ -227,6 +256,15 @@ function __expect(actual) {
   Object.defineProperty(a, "deep", { get: function () { deep = true; return a; } });
   a.equal = a.equals = a.eq = function (expected) {
     return check(deep ? __deepEqual(actual, expected) : actual === expected, __str(actual) + " to equal " + __str(expected));
+  };
+  a.jsonSchema = function (schema) {
+    var value = actual && typeof actual.json === "function" && "code" in actual ? actual.json() : actual;
+    try {
+      __checkSchema(schema, value);
+    } catch (e) {
+      return check(false, e.message);
+    }
+    return check(true, "value to match the schema");
   };
   a.eql = function (expected) { return check(__deepEqual(actual, expected), __str(actual) + " to deeply equal " + __str(expected)); };
   a.oneOf = function (list) { return check(list.indexOf(actual) >= 0, __str(actual) + " to be one of " + __str(list)); };
@@ -443,8 +481,25 @@ function require(name) {
   throw new Error("require('" + name + "') is not available in Pulpo scripts");
 }
 
+function __checkSchema(schema, value) {
+  var out = JSON.parse(__pulpo_schema(JSON.stringify(schema), JSON.stringify(value === undefined ? null : value)));
+  if (!out.ok) throw new Error(out.error);
+  if (out.errors.length) throw new Error("does not match the schema: " + out.errors.join("; "));
+}
+
 var pm = {
-  info: { get requestName() { return __input.requestName; }, get eventName() { return __input.phase; } },
+  info: {
+    get requestName() { return __input.requestName; },
+    get eventName() { return __input.phase; },
+    get iteration() { return __input.iteration || 0; },
+    get iterationCount() { return __input.iterationCount || 1; },
+  },
+  iterationData: {
+    get: function (name) { return __state.data[name]; },
+    has: function (name) { return Object.prototype.hasOwnProperty.call(__state.data, name); },
+    toObject: function () { return Object.assign({}, __state.data); },
+    toJSON: function () { return Object.assign({}, __state.data); },
+  },
   environment: Object.assign({ get name() { return __input.environmentName || ""; } }, __variables),
   collectionVariables: __variables,
   globals: __variables,
@@ -538,5 +593,6 @@ function __finish() {
     tests: __state.tests,
     logs: __state.logs,
     errors: __state.errors,
+    snapshots: __state.snapshots,
   });
 }

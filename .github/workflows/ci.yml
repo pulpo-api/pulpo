@@ -61,7 +61,7 @@ jobs:
           cargo run -p pulpo-api-cli -- fmt examples/jsonplaceholder --check
 
   codegen:
-    name: Generated code runs (8 languages)
+    name: Generated code and runner
     # The Ubuntu runner already has curl, Node, Python, Go, Java, .NET and PowerShell.
     runs-on: ubuntu-22.04
     steps:
@@ -81,6 +81,29 @@ jobs:
 
       - name: Run the generated code
         run: PULPO=target/debug/pulpo bash tests/codegen/run.sh
+
+      # The runner and the GitHub Action (actions/run) against the same echo server:
+      # data iterations, snapshots and a JSON Schema check.
+      - name: Start the echo server for the runner
+        run: nohup python3 tests/codegen/echo.py 8765 > /dev/null 2>&1 &
+
+      - name: Run a collection with the Pulpo action
+        id: pulpo
+        uses: ./actions/run
+        with:
+          pulpo: target/debug/pulpo
+          workspace: tests/runner/workspace
+          environment: Local
+          data: tests/runner/users.csv
+          args: --retries 1
+          comment: "false"
+
+      - name: Check the reports
+        run: |
+          test "${{ steps.pulpo.outputs.passed }}" = "true"
+          grep -q 'tests="6" failures="0"' pulpo-reports/junit.xml
+          grep -q '<title>Runner check' pulpo-reports/report.html
+          grep -q '| 4 | 4 | 0 | 6 | 0 |' pulpo-reports/summary.md
 
   bundle:
     name: Installers (${{ matrix.os }})

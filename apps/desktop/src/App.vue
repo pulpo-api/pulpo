@@ -7,6 +7,7 @@ import ResponseViewer from "./components/ResponseViewer.vue";
 import EnvironmentPanel from "./components/EnvironmentPanel.vue";
 import CookiesPanel from "./components/CookiesPanel.vue";
 import FolderEditor from "./components/FolderEditor.vue";
+import RunnerPanel from "./components/RunnerPanel.vue";
 import CodePanel from "./components/CodePanel.vue";
 import ImportDialog from "./components/ImportDialog.vue";
 import { resolveText } from "./variables";
@@ -145,9 +146,17 @@ async function saveExample(response: HttpResponse) {
   }
 }
 
+/** "Open request" from a runner result. */
+function openFromRunner(id: string) {
+  runnerFolder.value = null;
+  selectedId.value = id;
+  pinTab(id);
+}
+
 /** "Add example" from the tree: open the request with a new example to fill in. */
 async function addExample(id: string) {
   editingFolder.value = null;
+  runnerFolder.value = null;
   selectedId.value = id;
   pinTab(id);
   await nextTick();
@@ -182,6 +191,15 @@ async function copyCurl(id: string) {
 }
 /** The folder being edited ("" = the collection); null = editing requests. */
 const editingFolder = ref<string | null>(null);
+/** The folder whose runner is open ("" = the whole collection). */
+const runnerFolder = ref<string | null>(null);
+watch(editingFolder, (id) => {
+  if (id !== null) runnerFolder.value = null;
+});
+function openRunner(id: string) {
+  editingFolder.value = null;
+  runnerFolder.value = id;
+}
 const folderEditor = ref<InstanceType<typeof FolderEditor> | null>(null);
 
 /** Keeps the tree in step with a saved folder, so requests show what they inherit. */
@@ -572,6 +590,7 @@ function deleteNode(node: TreeNode) {
 
 function select(entry: RequestEntry) {
   editingFolder.value = null;
+  runnerFolder.value = null;
   selectedId.value = entry.id;
   confirmDelete.value = false;
   folderId.value = entry.id.includes("/") ? entry.id.slice(0, entry.id.lastIndexOf("/")) : "";
@@ -622,7 +641,7 @@ function onKey(event: KeyboardEvent) {
   const key = event.key.toLowerCase();
   if (key === "enter") {
     event.preventDefault();
-    if (editingFolder.value === null) void send();
+    if (editingFolder.value === null && runnerFolder.value === null) void send();
   } else if (key === "s") {
     event.preventDefault();
     if (editingFolder.value !== null) void folderEditor.value?.save();
@@ -674,7 +693,20 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       @edit-folder="editingFolder = $event"
       @copy-curl="copyCurl"
       @add-example="addExample"
+      @run-folder="openRunner"
     />
+
+    <main v-if="workspace && runnerFolder !== null && editingFolder === null" class="folder-main">
+      <RunnerPanel
+        :key="runnerFolder"
+        :workspace="workspace"
+        :folder-id="runnerFolder"
+        :environments="environments"
+        :environment-id="activeEnvId"
+        @close="runnerFolder = null"
+        @open="openFromRunner"
+      />
+    </main>
 
     <main v-if="workspace && editingFolder !== null" class="folder-main">
       <p v-if="problem" class="problem">{{ problem.message }}</p>
@@ -688,7 +720,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       />
     </main>
 
-    <main v-if="workspace && selected && editingFolder === null">
+    <main v-if="workspace && selected && editingFolder === null && runnerFolder === null">
       <nav class="tabbar">
         <button
           v-for="tab in tabs"
@@ -835,7 +867,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       @text="runImport({ text: $event })"
     />
 
-    <main v-if="!(workspace && (selected || editingFolder !== null))" class="welcome">
+    <main v-if="!(workspace && (selected || editingFolder !== null || runnerFolder !== null))" class="welcome">
       <div class="hello card">
         <img src="/pulpo.svg" width="72" height="72" alt="" />
         <h1>{{ workspace ? workspace.name : "Welcome to Pulpo" }}</h1>

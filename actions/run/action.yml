@@ -1,0 +1,130 @@
+name: Pulpo run
+description: Run a Pulpo collection (requests, scripts and tests) and report the results on the pull request.
+author: Pulpo contributors
+branding:
+  icon: check-circle
+  color: orange
+
+inputs:
+  workspace:
+    description: Folder with pulpo.yaml.
+    default: "."
+  target:
+    description: Request or folder inside the workspace to run (default, everything).
+    default: ""
+  environment:
+    description: Environment name or file (e.g. Staging).
+    default: ""
+  data:
+    description: CSV or JSON file with one row per iteration.
+    default: ""
+  iterations:
+    description: How many times to run (default, one per data row or once).
+    default: ""
+  args:
+    description: More `pulpo run` options, e.g. "--retries 2 --bail".
+    default: ""
+  reports:
+    description: Folder for junit.xml, report.html and summary.md.
+    default: pulpo-reports
+  comment:
+    description: Comment the summary on the pull request (needs `pull-requests write`).
+    default: "true"
+  pulpo:
+    description: Path to a pulpo binary to use instead of installing it.
+    default: ""
+  version:
+    description: Git ref of pulpo-api/pulpo to install the CLI from.
+    default: main
+  github-token:
+    description: Token for the pull request comment.
+    default: ${{ github.token }}
+
+outputs:
+  passed:
+    description: '"true" when every request and test passed.'
+    value: ${{ steps.run.outputs.passed }}
+  reports:
+    description: Folder with the reports.
+    value: ${{ inputs.reports }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install the Pulpo CLI
+      if: inputs.pulpo == ''
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        if [ "$RUNNER_OS" = "Linux" ]; then
+          sudo apt-get update -qq && sudo apt-get install -y -qq libdbus-1-dev pkg-config
+        fi
+        cargo install --locked --git https://github.com/pulpo-api/pulpo --branch "$VERSION" pulpo-api-cli
+        echo "PULPO_BIN=pulpo" >> "$GITHUB_ENV"
+
+    - name: Use the given binary
+      if: inputs.pulpo != ''
+      shell: bash
+      env:
+        BIN: ${{ inputs.pulpo }}
+      run: echo "PULPO_BIN=$(cd "$(dirname "$BIN")" && pwd)/$(basename "$BIN")" >> "$GITHUB_ENV"
+
+    - name: Run the collection
+      id: run
+      shell: bash
+      env:
+        WORKSPACE: ${{ inputs.workspace }}
+        TARGET: ${{ inputs.target }}
+        ENVIRONMENT: ${{ inputs.environment }}
+        DATA: ${{ inputs.data }}
+        ITERATIONS: ${{ inputs.iterations }}
+        ARGS: ${{ inputs.args }}
+        REPORTS: ${{ inputs.reports }}
+      run: |
+        mkdir -p "$REPORTS"
+        set -- run
+        [ -n "$TARGET" ] && set -- "$@" "$TARGET"
+        set -- "$@" -w "$WORKSPACE"
+        [ -n "$ENVIRONMENT" ] && set -- "$@" -e "$ENVIRONMENT"
+        [ -n "$DATA" ] && set -- "$@" --data "$DATA"
+        [ -n "$ITERATIONS" ] && set -- "$@" --iterations "$ITERATIONS"
+        set -- "$@" --junit "$REPORTS/junit.xml" --html "$REPORTS/report.html" --summary "$REPORTS/summary.md"
+        # Extra options are split on spaces on purpose ("--retries 2 --bail").
+        # shellcheck disable=SC2086
+        set -- "$@" $ARGS
+        set +e
+        "$PULPO_BIN" "$@"
+        code=$?
+        set -e
+        [ -f "$REPORTS/summary.md" ] && cat "$REPORTS/summary.md" >> "$GITHUB_STEP_SUMMARY"
+        if [ "$code" = "0" ]; then echo "passed=true" >> "$GITHUB_OUTPUT"; else echo "passed=false" >> "$GITHUB_OUTPUT"; fi
+        echo "code=$code" >> "$GITHUB_OUTPUT"
+
+    - name: Comment on the pull request
+      if: always() && inputs.comment == 'true' && github.event.pull_request.number != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR: ${{ github.event.pull_request.number }}
+        REPO: ${{ github.repository }}
+        REPORTS: ${{ inputs.reports }}
+      run: |
+        [ -f "$REPORTS/summary.md" ] || exit 0
+        marker="<!-- pulpo-run -->"
+        { echo "$marker"; cat "$REPORTS/summary.md"; } > "$REPORTS/comment.md"
+        # One comment per pull request, updated on every run.
+        id=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+          --jq "[.[] | select(.body | startswith(\"$marker\"))][0].id // empty" | head -n1)
+        if [ -n "$id" ]; then
+          gh api -X PATCH "repos/$REPO/issues/comments/$id" -F "body=@$REPORTS/comment.md" > /dev/null
+        else
+          gh api -X POST "repos/$REPO/issues/$PR/comments" -F "body=@$REPORTS/comment.md" > /dev/null
+        fi || echo "::warning::Could not comment on the pull request (does the job have pull-requests: write?)"
+
+    - name: Fail when the run failed
+      if: steps.run.outputs.code != '0'
+      shell: bash
+      env:
+        CODE: ${{ steps.run.outputs.code }}
+      run: exit "$CODE"

@@ -1,9 +1,12 @@
 use pulpo_core::codegen;
 use pulpo_core::collection::{self, TreeNode};
+use pulpo_core::data;
 use pulpo_core::environment::{self, Environment, SecretStore};
 use pulpo_core::http::{self, Header, HttpRequest};
 use pulpo_core::import;
 use pulpo_core::keychain::Keychain;
+use pulpo_core::load;
+use pulpo_core::report;
 use pulpo_core::run::{self, RunReport};
 use pulpo_core::variables::{self, Variables};
 use pulpo_core::{HttpMethod, Protocol};
@@ -28,11 +31,25 @@ COMMANDS:
     import <FILE|-> [DIR] [--into FOLDER]
                Import a Postman collection or environment, an OpenAPI 3
                document or a curl command (use - to read it from stdin)
-    run [TARGET] [-w DIR] [-e ENV] [--bail] [--junit FILE]
+    run [TARGET] [-w DIR] [-e ENV] [options]
                Run requests with their scripts and tests, in order. TARGET is a
                request or folder path inside the workspace (default: all).
                Exits with 1 if a test fails or a request cannot be sent.
-               --junit writes a JUnit XML report for CI.
+               -d, --data FILE      CSV or JSON rows, one iteration each
+               -n, --iterations N   run N times (default: one per data row)
+               --delay MS           wait between requests
+               --retries N          resend after network errors or 5xx
+               --bail               stop at the first failure
+               --update-snapshots   rewrite snapshots instead of comparing
+               --junit FILE         JUnit XML report for CI
+               --html FILE          HTML report to open in a browser
+               --summary FILE       Markdown summary (for pull requests)
+    load [TARGET] [-w DIR] [-e ENV] [-u USERS] [-d DURATION] [--ramp-up SECS]
+         [--data FILE]
+               Light load test: USERS (default 10, up to 200) run the requests
+               in a loop for DURATION (default 30s; 45, 45s or 2m) and the
+               percentiles are printed. With --data, user N uses row N.
+               Nothing is saved to the workspace.
     code <REQUEST> [-w DIR] [-e ENV] [-l LANG] [--resolve] [--secrets]
                Print the request as code: curl (default), fetch, axios, python,
                java, go, csharp or powershell. Variables stay as {{name}}
@@ -73,6 +90,7 @@ fn main() -> ExitCode {
         Some("secret") => run_secret(&args[1..]),
         Some("import") => run_import(&args[1..]),
         Some("run") => run_run(&args[1..]),
+        Some("load") => run_load(&args[1..]),
         Some("code") => run_code(&args[1..]),
         Some(other) => usage_error(&format!("unknown command: {other}")),
     }
@@ -433,33 +451,247 @@ fn run_code(args: &[String]) -> ExitCode {
     }
 }
 
-fn run_run(args: &[String]) -> ExitCode {
-    let mut target = String::new();
-    let mut dir = PathBuf::from(".");
-    let mut env_name: Option<String> = None;
-    let mut bail = false;
-    let mut junit: Option<PathBuf> = None;
+/// Parses `"30"`, `"30s"`, `"2m"` into seconds.
+fn parse_seconds(text: &str) -> Option<u64> {
+    let text = text.trim();
+    if let Some(minutes) = text.strip_suffix('m') {
+        return minutes.parse::<u64>().ok().map(|m| m * 60);
+    }
+    text.strip_suffix('s').unwrap_or(text).parse().ok()
+}
+
+fn number<T: std::str::FromStr>(value: Option<&String>, flag: &str) -> Result<T, String> {
+    value
+        .and_then(|v| v.parse().ok())
+        .ok_or_else(|| format!("{flag} needs a number"))
+}
+
+fn next_path(rest: &mut std::slice::Iter<'_, String>, flag: &str) -> Result<PathBuf, String> {
+    rest.next()
+        .map(PathBuf::from)
+        .ok_or_else(|| format!("run: {flag} needs a FILE"))
+}
+
+struct RunArgs {
+    target: String,
+    dir: PathBuf,
+    env_name: Option<String>,
+    bail: bool,
+    junit: Option<PathBuf>,
+    html: Option<PathBuf>,
+    summary: Option<PathBuf>,
+    data: Option<PathBuf>,
+    iterations: Option<usize>,
+    delay_ms: u64,
+    retries: u32,
+    update_snapshots: bool,
+}
+
+fn parse_run(args: &[String]) -> Result<RunArgs, String> {
+    let mut out = RunArgs {
+        target: String::new(),
+        dir: PathBuf::from("."),
+        env_name: None,
+        bail: false,
+        junit: None,
+        html: None,
+        summary: None,
+        data: None,
+        iterations: None,
+        delay_ms: 0,
+        retries: 0,
+        update_snapshots: false,
+    };
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
         match arg.as_str() {
-            "-w" | "--workspace" => match rest.next() {
-                Some(d) => dir = PathBuf::from(d),
-                None => return usage_error("run: -w needs a DIR"),
-            },
-            "-e" | "--env" => match rest.next() {
-                Some(e) => env_name = Some(e.clone()),
-                None => return usage_error("run: -e needs an ENV"),
-            },
-            "--bail" => bail = true,
-            "--junit" => match rest.next() {
-                Some(f) => junit = Some(PathBuf::from(f)),
-                None => return usage_error("run: --junit needs a FILE"),
-            },
-            other if !other.starts_with('-') && target.is_empty() => {
-                target = other.replace('\\', "/")
+            "-w" | "--workspace" => out.dir = next_path(&mut rest, "-w")?,
+            "-e" | "--env" => {
+                out.env_name = Some(rest.next().ok_or("run: -e needs an ENV")?.clone())
             }
-            other => return usage_error(&format!("run: unexpected {other}")),
+            "--bail" => out.bail = true,
+            "--junit" => out.junit = Some(next_path(&mut rest, "--junit")?),
+            "--html" => out.html = Some(next_path(&mut rest, "--html")?),
+            "--summary" => out.summary = Some(next_path(&mut rest, "--summary")?),
+            "-d" | "--data" => out.data = Some(next_path(&mut rest, "--data")?),
+            "-n" | "--iterations" => {
+                out.iterations = Some(number(rest.next(), "run: --iterations")?)
+            }
+            "--delay" => out.delay_ms = number(rest.next(), "run: --delay")?,
+            "--retries" => out.retries = number(rest.next(), "run: --retries")?,
+            "--update-snapshots" => out.update_snapshots = true,
+            other if !other.starts_with('-') && out.target.is_empty() => {
+                out.target = other.replace('\\', "/")
+            }
+            other => return Err(format!("run: unexpected {other}")),
         }
+    }
+    Ok(out)
+}
+
+fn run_run(args: &[String]) -> ExitCode {
+    let options = match parse_run(args) {
+        Ok(options) => options,
+        Err(message) => return usage_error(&message),
+    };
+    let dir = &options.dir;
+    let workspace = match collection::load_workspace(dir) {
+        Ok(ws) => ws,
+        Err(e) => return fail(e),
+    };
+    let environment_id = match &options.env_name {
+        Some(name) => match find_environment(dir, name, &Keychain) {
+            Ok(env) => Some(env.id),
+            Err(e) => return fail(e),
+        },
+        None => None,
+    };
+    let requests = run::requests_under(&workspace.tree, &options.target);
+    if requests.is_empty() {
+        return fail(format!("nothing to run at '{}'", options.target));
+    }
+    let rows = match &options.data {
+        Some(path) => match data::load_data(path) {
+            Ok(rows) if rows.is_empty() => return fail(format!("{}: no rows", path.display())),
+            Ok(rows) => rows,
+            Err(e) => return fail(e),
+        },
+        None => Vec::new(),
+    };
+    // As in Postman: one iteration per data row unless told otherwise; past the last row,
+    // the last row repeats.
+    let iterations = options.iterations.unwrap_or(rows.len()).max(1);
+    let mut session = match run::Session::open(dir, environment_id.as_deref(), &Keychain, true) {
+        Ok(session) => session,
+        Err(e) => return fail(e),
+    };
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(e) => return fail(format!("could not start the runtime: {e}")),
+    };
+
+    let mut reports = Vec::new();
+    let mut first = true;
+    'run: for iteration in 0..iterations {
+        if iterations > 1 {
+            println!("\nIteration {}/{iterations}", iteration + 1);
+        }
+        let run_options = run::RunOptions {
+            iteration,
+            iterations,
+            data: rows
+                .get(iteration.min(rows.len().saturating_sub(1)))
+                .cloned()
+                .unwrap_or_default(),
+            retries: options.retries,
+            update_snapshots: options.update_snapshots,
+        };
+        for entry in &requests {
+            if !first && options.delay_ms > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(options.delay_ms));
+            }
+            first = false;
+            let report = runtime.block_on(run::run_in(dir, entry, &mut session, &run_options));
+            print_report(&report);
+            let failed = !report.passed();
+            reports.push(report);
+            if failed && options.bail {
+                break 'run;
+            }
+        }
+    }
+    let t = report::totals(&reports);
+    println!(
+        "\n{} requests: {} passed, {} failed · tests: {} passed, {} failed",
+        t.requests, t.passed, t.failed, t.tests_passed, t.tests_failed
+    );
+    let outputs = [
+        (
+            &options.junit,
+            "JUnit report",
+            report::junit_xml(&workspace.name, &reports),
+        ),
+        (
+            &options.html,
+            "HTML report",
+            report::html_report(&workspace.name, &reports, &report::now()),
+        ),
+        (
+            &options.summary,
+            "Summary",
+            report::markdown_summary(&workspace.name, &reports),
+        ),
+    ];
+    for (path, what, content) in outputs {
+        if let Some(path) = path {
+            if let Err(e) = std::fs::write(path, content) {
+                return fail(format!("{}: {e}", path.display()));
+            }
+            println!("{what} written to {}", path.display());
+        }
+    }
+    if t.failed == 0 {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
+fn run_load(args: &[String]) -> ExitCode {
+    let mut target = String::new();
+    let mut dir = PathBuf::from(".");
+    let mut env_name: Option<String> = None;
+    let mut options = load::LoadOptions {
+        users: 10,
+        duration_secs: 30,
+        ramp_up_secs: 0,
+        data: Vec::new(),
+    };
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        let parsed: Result<(), String> = match arg.as_str() {
+            "-w" | "--workspace" => rest
+                .next()
+                .map(|d| dir = PathBuf::from(d))
+                .ok_or_else(|| "load: -w needs a DIR".into()),
+            "-e" | "--env" => rest
+                .next()
+                .map(|e| env_name = Some(e.clone()))
+                .ok_or_else(|| "load: -e needs an ENV".into()),
+            "-u" | "--users" => number(rest.next(), "load: --users").map(|n| options.users = n),
+            "-d" | "--duration" => rest
+                .next()
+                .and_then(|d| parse_seconds(d))
+                .map(|s| options.duration_secs = s)
+                .ok_or_else(|| "load: --duration needs seconds (30, 30s or 2m)".into()),
+            "--data" => match rest.next().map(|p| data::load_data(Path::new(p))) {
+                Some(Ok(rows)) => {
+                    options.data = rows;
+                    Ok(())
+                }
+                Some(Err(e)) => return fail(e),
+                None => Err("load: --data needs a FILE".into()),
+            },
+            "--ramp-up" => rest
+                .next()
+                .and_then(|d| parse_seconds(d))
+                .map(|s| options.ramp_up_secs = s)
+                .ok_or_else(|| "load: --ramp-up needs seconds".into()),
+            other if !other.starts_with('-') && target.is_empty() => {
+                target = other.replace('\\', "/");
+                Ok(())
+            }
+            other => Err(format!("load: unexpected {other}")),
+        };
+        if let Err(message) = parsed {
+            return usage_error(&message);
+        }
+    }
+    if options.users == 0 || options.users > load::MAX_USERS {
+        return usage_error(&format!("load: --users goes from 1 to {}", load::MAX_USERS));
     }
     let workspace = match collection::load_workspace(&dir) {
         Ok(ws) => ws,
@@ -476,137 +708,82 @@ fn run_run(args: &[String]) -> ExitCode {
     if requests.is_empty() {
         return fail(format!("nothing to run at '{target}'"));
     }
-    let runtime = match tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-    {
-        Ok(runtime) => runtime,
-        Err(e) => return fail(format!("could not start the runtime: {e}")),
+    let session = match run::Session::open(&dir, environment_id.as_deref(), &Keychain, false) {
+        Ok(session) => session,
+        Err(e) => return fail(e),
     };
-
-    let (mut passed, mut failed, mut tests_ok, mut tests_ko) = (0, 0, 0, 0);
-    let mut reports = Vec::new();
-    for entry in &requests {
-        let report = runtime.block_on(run::run_entry(
-            &dir,
-            entry,
-            environment_id.as_deref(),
-            &Keychain,
-        ));
-        print_report(&report);
-        reports.push(report.clone());
-        tests_ok += report.tests.iter().filter(|t| t.passed).count();
-        tests_ko += report.tests.iter().filter(|t| !t.passed).count();
-        if report.passed() {
-            passed += 1;
-        } else {
-            failed += 1;
-            if bail {
-                break;
-            }
-        }
-    }
     println!(
-        "\n{} requests: {passed} passed, {failed} failed · tests: {tests_ok} passed, {tests_ko} failed",
-        passed + failed
+        "Load test: {} users, {} s, {} request(s) each loop",
+        options.users,
+        options.duration_secs,
+        requests.len()
     );
-    if let Some(path) = junit {
-        if let Err(e) = std::fs::write(&path, junit_xml(&workspace.name, &reports)) {
-            return fail(format!("{}: {e}", path.display()));
-        }
-        println!("JUnit report written to {}", path.display());
-    }
-    if failed == 0 {
+    let last = std::sync::Mutex::new(u64::MAX);
+    let summary = load::run_load(
+        &dir,
+        &requests,
+        &session,
+        &options,
+        Default::default(),
+        &|p: load::LoadProgress| {
+            let mut last = last.lock().unwrap();
+            if *last != p.elapsed_secs {
+                *last = p.elapsed_secs;
+                eprint!(
+                    "\r  {:>3} s · {} done · {} failed   ",
+                    p.elapsed_secs, p.done, p.failed
+                );
+            }
+        },
+    );
+    eprintln!();
+    let summary = match summary {
+        Ok(summary) => summary,
+        Err(e) => return fail(e),
+    };
+    print_load(&summary);
+    if summary.total.failed == 0 {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE
     }
 }
 
-fn xml_escape(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for c in text.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&apos;"),
-            c if (c as u32) < 0x20 && !matches!(c, '\n' | '\r' | '\t') => {}
-            c => out.push(c),
-        }
+fn print_load(summary: &load::LoadSummary) {
+    println!(
+        "\n{:<32} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>8}",
+        "Request", "count", "failed", "avg", "p50", "p90", "p95", "p99", "req/s"
+    );
+    for s in summary
+        .requests
+        .iter()
+        .chain(std::iter::once(&summary.total))
+    {
+        let name: String = s.name.chars().take(32).collect();
+        println!(
+            "{name:<32} {:>7} {:>7} {:>5}ms {:>5}ms {:>5}ms {:>5}ms {:>5}ms {:>8}",
+            s.count, s.failed, s.avg_ms, s.p50_ms, s.p90_ms, s.p95_ms, s.p99_ms, s.per_second
+        );
     }
-    out
-}
-
-/// JUnit XML: one testsuite per request, one testcase per `pm.test`.
-/// A request that could not be sent becomes a failed testcase named after it.
-fn junit_xml(workspace: &str, reports: &[RunReport]) -> String {
-    let mut suites = String::new();
-    let (mut total, mut failures) = (0, 0);
-    for report in reports {
-        let name = xml_escape(&report.name);
-        let time = report
-            .response
-            .as_ref()
-            .map(|r| r.duration_ms as f64 / 1000.0)
-            .unwrap_or(0.0);
-        let mut cases = String::new();
-        let (mut count, mut failed) = (0, 0);
-        if let Some(error) = &report.error {
-            count += 1;
-            failed += 1;
-            cases.push_str(&format!(
-                "    <testcase classname=\"{name}\" name=\"{name}\" time=\"0\"><failure message=\"{}\"/></testcase>\n",
-                xml_escape(&error.to_string())
-            ));
-        }
-        for test in &report.tests {
-            count += 1;
-            let test_name = xml_escape(&test.name);
-            match &test.error {
-                None => cases.push_str(&format!(
-                    "    <testcase classname=\"{name}\" name=\"{test_name}\" time=\"{time:.3}\"/>\n"
-                )),
-                Some(error) => {
-                    failed += 1;
-                    cases.push_str(&format!(
-                        "    <testcase classname=\"{name}\" name=\"{test_name}\" time=\"{time:.3}\"><failure message=\"{}\"/></testcase>\n",
-                        xml_escape(error)
-                    ));
-                }
-            }
-        }
-        if count == 0 {
-            count = 1;
-            cases.push_str(&format!(
-                "    <testcase classname=\"{name}\" name=\"{name}\" time=\"{time:.3}\"/>\n"
-            ));
-        }
-        if !report.script_errors.is_empty() {
-            cases.push_str(&format!(
-                "    <system-err>{}</system-err>\n",
-                xml_escape(&report.script_errors.join("\n"))
-            ));
-        }
-        total += count;
-        failures += failed;
-        suites.push_str(&format!(
-            "  <testsuite name=\"{name}\" tests=\"{count}\" failures=\"{failed}\" time=\"{time:.3}\">\n{cases}  </testsuite>\n"
-        ));
+    for error in &summary.errors {
+        println!("  ! {error}");
     }
-    format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<testsuites name=\"{}\" tests=\"{total}\" failures=\"{failures}\">\n{suites}</testsuites>\n",
-        xml_escape(workspace)
-    )
 }
 
 fn print_report(report: &RunReport) {
     let mark = if report.passed() { "✓" } else { "✗" };
     match (&report.response, &report.error) {
         (Some(r), _) => println!(
-            "{mark} {}  {} {} · {} ms",
-            report.name, r.status, r.status_text, r.duration_ms
+            "{mark} {}  {} {} · {} ms{}",
+            report.name,
+            r.status,
+            r.status_text,
+            r.duration_ms,
+            if report.attempts > 1 {
+                format!(" · {} attempts", report.attempts)
+            } else {
+                String::new()
+            }
         ),
         (None, Some(e)) => println!("{mark} {}  {e}", report.name),
         (None, None) => println!("{mark} {}", report.name),
@@ -763,41 +940,34 @@ mod tests {
     }
 
     #[test]
-    fn writes_junit_reports() {
-        use pulpo_core::script::TestResult;
-        let ok = RunReport {
-            id: "a".into(),
-            name: "List <orders>".into(),
-            tests: vec![
-                TestResult {
-                    name: "200".into(),
-                    passed: true,
-                    error: None,
-                },
-                TestResult {
-                    name: "has \"id\"".into(),
-                    passed: false,
-                    error: Some("expected: x & y".into()),
-                },
-            ],
-            ..Default::default()
-        };
-        let broken = RunReport {
-            id: "b".into(),
-            name: "Create".into(),
-            error: Some(pulpo_core::http::SendError::Unresolved("base".into())),
-            script_errors: vec!["boom".into()],
-            ..Default::default()
-        };
-        let xml = junit_xml("Shop", &[ok, broken]);
-        assert!(
-            xml.contains(r#"<testsuites name="Shop" tests="3" failures="2">"#),
-            "{xml}"
+    fn parses_run_options() {
+        let options = parse_run(&args(&[
+            "orders",
+            "-d",
+            "users.csv",
+            "-n",
+            "3",
+            "--delay",
+            "50",
+            "--retries",
+            "2",
+            "--html",
+            "r.html",
+            "--update-snapshots",
+        ]))
+        .unwrap();
+        assert_eq!(options.target, "orders");
+        assert_eq!(options.data, Some(PathBuf::from("users.csv")));
+        assert_eq!(
+            (options.iterations, options.delay_ms, options.retries),
+            (Some(3), 50, 2)
         );
-        assert!(xml.contains(r#"name="List &lt;orders&gt;""#));
-        assert!(xml.contains(r#"<failure message="expected: x &amp; y"/>"#));
-        assert!(xml.contains(r#"<failure message="unresolved variables: base"/>"#));
-        assert!(xml.contains("<system-err>boom</system-err>"));
+        assert!(options.update_snapshots);
+        assert!(parse_run(&args(&["--retries", "x"])).is_err());
+        assert_eq!(parse_seconds("2m"), Some(120));
+        assert_eq!(parse_seconds("45s"), Some(45));
+        assert_eq!(parse_seconds("45"), Some(45));
+        assert_eq!(parse_seconds("x"), None);
     }
 
     #[test]

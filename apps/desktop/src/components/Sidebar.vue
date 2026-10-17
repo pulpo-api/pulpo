@@ -25,6 +25,7 @@ const emit = defineEmits<{
   editFolder: [id: string];
   copyCurl: [id: string];
   addExample: [id: string];
+  runFolder: [id: string];
 }>();
 
 const query = ref("");
@@ -134,7 +135,9 @@ function countRequests(node: TreeNode): number {
   return node.type === "request" ? 1 : node.children.reduce((sum, child) => sum + countRequests(child), 0);
 }
 
-function act(action: "rename" | "duplicate" | "delete" | "newRequest" | "newFolder" | "edit" | "curl" | "example") {
+function act(
+  action: "rename" | "duplicate" | "delete" | "newRequest" | "newFolder" | "edit" | "curl" | "example" | "run",
+) {
   const node = menu.value?.node;
   if (!node) return;
   if (action === "delete" && !confirmDelete.value) {
@@ -146,6 +149,7 @@ function act(action: "rename" | "duplicate" | "delete" | "newRequest" | "newFold
   else if (action === "edit") emit("editFolder", node.id);
   else if (action === "curl") emit("copyCurl", node.id);
   else if (action === "example") emit("addExample", node.id);
+  else if (action === "run") emit("runFolder", node.id);
   else if (action === "duplicate") emit("duplicate", node.id);
   else if (action === "delete") emit("delete", node);
   else {
@@ -179,6 +183,9 @@ function confirm() {
     <template v-if="workspace">
       <div class="ws">
         <button class="ws-name" :title="workspace.root" @click="emit('folder', '')">{{ workspace.name }}</button>
+        <button class="icon" title="Run the collection: iterations, data files, reports and load tests" @click="emit('runFolder', '')">
+          ▶
+        </button>
         <button class="icon" title="Collection headers, auth, settings and scripts" @click="emit('editFolder', '')">⚙</button>
         <button v-if="persistent" class="icon" title="Open another folder" @click="emit('open')">⇄</button>
       </div>
@@ -237,6 +244,7 @@ function confirm() {
         <button v-if="menu.node.type === 'request'" role="menuitem" @click="act('curl')">Copy as curl</button>
         <button v-if="menu.node.type === 'request'" role="menuitem" @click="act('example')">Add example</button>
         <template v-if="menu.node.type === 'folder'">
+          <button role="menuitem" @click="act('run')">Run folder…</button>
           <button role="menuitem" @click="act('edit')">Headers, auth, settings…</button>
           <button role="menuitem" @click="act('newRequest')">New request here</button>
           <button role="menuitem" @click="act('newFolder')">New folder here</button>

@@ -1,0 +1,10 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/pulpo-api/pulpo/main/schemas/request.v1.schema.json
+version: 1
+name: "POST /orders"
+protocol: "http"
+method: "POST"
+url: "{{base}}/orders"
+headers:
+  - name: "Content-Type"
+    value: "application/json"
+body: "json"
