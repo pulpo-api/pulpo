@@ -251,6 +251,24 @@ Recognised automatically:
 
 Scripts written for Bruno (`bru.*`) or Hoppscotch (`pw.*`) are kept as a comment to rewrite, so nothing breaks when they run. Anything that cannot be imported is listed as a warning. In the desktop app, use **Import** in the sidebar.
 
+## Review collection changes like code
+
+```bash
+pulpo diff                       # HEAD → the files on disk
+pulpo diff main                  # what this branch changes
+pulpo diff main HEAD --markdown  # for a pull request comment
+```
+
+```
+Collection changes (main → working tree): 1 added, 0 removed, 1 changed
++ POST    Orders / Create order  {{base}}/orders
+~ GET     Users / List users
+      URL `{{base}}/users` → `{{base}}/users?page=1`
+      header X-Tenant added
+```
+
+Request by request, not line by line: moved and renamed requests are recognised, and folder auth, headers and environment variables are compared too (secret values are never in git). `--exit-code` fails a CI step when the collection changed.
+
 ## Export: nobody is tied to Pulpo
 
 ```bash

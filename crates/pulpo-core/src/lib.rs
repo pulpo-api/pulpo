@@ -13,9 +13,11 @@ pub mod collection;
 pub mod contract;
 pub mod cookies;
 pub mod data;
+pub mod diff;
 pub mod environment;
 pub mod examples;
 pub mod export;
+pub mod git;
 pub mod http;
 pub mod import;
 #[cfg(feature = "keychain")]

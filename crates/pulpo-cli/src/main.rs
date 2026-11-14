@@ -37,6 +37,11 @@ COMMANDS:
                Export the workspace (or one folder) as a Postman v2.1
                collection, an OpenAPI 3 document or a .http file. Prints it,
                or writes FILE.
+    diff [FROM] [TO] [-w DIR] [--markdown] [--exit-code]
+               What changed in the collection between two commits, branches
+               or tags, request by request (FROM defaults to HEAD, TO to the
+               files on disk). --markdown for a pull request comment;
+               --exit-code exits with 1 when something changed.
     export env <ENV> [-w DIR] [-o FILE]
                Export an environment as a Postman environment (secret values
                are left empty)
@@ -114,6 +119,7 @@ fn main() -> ExitCode {
         Some("secret") => run_secret(&args[1..]),
         Some("import") => run_import(&args[1..]),
         Some("export") => run_export(&args[1..]),
+        Some("diff") => run_diff(&args[1..]),
         Some("run") => run_run(&args[1..]),
         Some("load") => run_load(&args[1..]),
         Some("code") => run_code(&args[1..]),
@@ -343,6 +349,45 @@ fn run_secret(args: &[String]) -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(e) => fail(e),
+    }
+}
+
+fn run_diff(args: &[String]) -> ExitCode {
+    let mut refs: Vec<String> = Vec::new();
+    let mut dir = PathBuf::from(".");
+    let mut markdown = false;
+    let mut exit_code = false;
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        match arg.as_str() {
+            "-w" | "--workspace" => match rest.next() {
+                Some(d) => dir = PathBuf::from(d),
+                None => return usage_error("diff: -w needs a DIR"),
+            },
+            "--markdown" | "--md" => markdown = true,
+            "--exit-code" => exit_code = true,
+            other if !other.starts_with('-') && refs.len() < 2 => refs.push(other.to_string()),
+            _ => {
+                return usage_error(
+                    "diff: expected [FROM] [TO] [-w DIR] [--markdown] [--exit-code]",
+                )
+            }
+        }
+    }
+    let from = refs.first().map(String::as_str).unwrap_or("HEAD");
+    let diff = match pulpo_core::diff::diff_refs(&dir, from, refs.get(1).map(String::as_str)) {
+        Ok(diff) => diff,
+        Err(e) => return fail(e),
+    };
+    if markdown {
+        print!("{}", pulpo_core::diff::to_markdown(&diff));
+    } else {
+        print!("{}", pulpo_core::diff::to_text(&diff));
+    }
+    if exit_code && !diff.is_empty() {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
     }
 }
 
