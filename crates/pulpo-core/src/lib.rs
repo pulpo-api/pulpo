@@ -25,6 +25,7 @@ pub mod keychain;
 pub mod link;
 pub mod load;
 pub mod local;
+pub mod mcp;
 pub mod oauth;
 pub mod organize;
 pub mod query;

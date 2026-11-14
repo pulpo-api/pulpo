@@ -64,6 +64,12 @@ COMMANDS:
                in a loop for DURATION (default 30s; 45, 45s or 2m) and the
                percentiles are printed. With --data, user N uses row N.
                Nothing is saved to the workspace.
+    mcp [-w DIR]
+               Serve the collection to your AI over MCP (stdio): Claude Code,
+               Cursor, Copilot… can list, read, run, create and edit requests,
+               import, export and diff. Secret values never reach the AI.
+               Claude Code: claude mcp add pulpo -- pulpo mcp
+               Without -w it uses the workspace here or the only one below.
     link <REQUEST> [-w DIR]
                Print a pulpo:// link to a request, to share in a chat. It names
                the git repository, not a server: each person's Pulpo opens it
@@ -125,6 +131,7 @@ fn main() -> ExitCode {
         Some("export") => run_export(&args[1..]),
         Some("diff") => run_diff(&args[1..]),
         Some("link") => run_link(&args[1..]),
+        Some("mcp") => run_mcp(&args[1..]),
         Some("run") => run_run(&args[1..]),
         Some("load") => run_load(&args[1..]),
         Some("code") => run_code(&args[1..]),
@@ -354,6 +361,29 @@ fn run_secret(args: &[String]) -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(e) => fail(e),
+    }
+}
+
+fn run_mcp(args: &[String]) -> ExitCode {
+    let dir = match args {
+        [] => None,
+        [flag, dir] if flag == "-w" || flag == "--workspace" => Some(PathBuf::from(dir)),
+        _ => return usage_error("mcp: expected [-w DIR]"),
+    };
+    let here = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let root = dir
+        .or_else(|| pulpo_core::mcp::find_workspace(&here))
+        .unwrap_or(here);
+    // stdout carries the protocol: anything else goes to stderr.
+    eprintln!("pulpo mcp: serving {}", root.display());
+    let server = match pulpo_core::mcp::Server::new(root, &Keychain) {
+        Ok(server) => server,
+        Err(e) => return fail(e),
+    };
+    let stdin = std::io::stdin();
+    match server.serve(stdin.lock(), std::io::stdout()) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => fail(e.to_string()),
     }
 }
 

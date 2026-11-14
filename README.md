@@ -271,6 +271,28 @@ Request by request, not line by line: moved and renamed requests are recognised,
 
 In the desktop app, **⑂** next to the collection name opens the git panel: the same request-by-request changes since the last commit (click one to open it), commit, switch or create a branch, pull and push. It uses your own `git` and its credentials, and only ever commits files of the workspace.
 
+## Let your AI use the collection (MCP)
+
+`pulpo mcp` serves the collection to your AI assistant over the Model Context Protocol. It runs on your machine, on the files of the repo.
+
+```bash
+claude mcp add pulpo -- pulpo mcp          # Claude Code, from the repository folder
+```
+
+Cursor, VS Code (Copilot) and other MCP clients take the same command (`pulpo mcp`, optionally `-w <folder>`). Then you can ask things like *"run the orders folder against Local and tell me what fails"* or *"add a request for the endpoint I just wrote, with a test for 201"*.
+
+| Tool | What it does |
+|---|---|
+| `list_requests` | Requests of the collection or a folder, filtered by words |
+| `get_request` | One request as stored, with the auth it inherits |
+| `run_request`, `run_folder` | Send with scripts and tests; response, test results and logs |
+| `create_request`, `update_request` | Change the collection files (you review them in git) |
+| `list_environments` | Environments and variables |
+| `import_collection`, `export_collection` | curl, Postman, Insomnia, OpenAPI, HAR, `.http`… in and out |
+| `collection_diff` | What changed between git revisions, request by request |
+
+Secret values never reach the AI: they are replaced by `••••` in everything a tool returns, and requests keep `{{variables}}`. Environments named like production (`prod`, `prd`, `production`, `live`) are refused unless the AI passes `confirmProduction`, which it should only do after you say yes.
+
 ## Share a link to a request
 
 Right-click a request → *Copy link*, or in a terminal:
