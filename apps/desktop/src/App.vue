@@ -101,6 +101,7 @@ async function runImport(source: { path?: string; text?: string }) {
   const ws = workspace.value;
   if (!ws || !backend.importInto) return;
   try {
+    folderId.value = existingFolder(folderId.value);
     const summary = await backend.importInto(ws.root, folderId.value, source);
     const keep = selectedId.value;
     adopt(await backend.open(ws.root));
@@ -557,6 +558,15 @@ async function createWorkspace() {
   }
 }
 
+/** The folder itself if it still exists, else its nearest existing parent ("" = the root). */
+function existingFolder(id: string): string {
+  let current = id;
+  while (current && childrenOf(current) === null) {
+    current = current.includes("/") ? current.slice(0, current.lastIndexOf("/")) : "";
+  }
+  return current;
+}
+
 function childrenOf(id: string): TreeNode[] | null {
   if (!workspace.value) return null;
   if (!id) return workspace.value.tree;
@@ -581,6 +591,7 @@ async function save(node: RequestNode | null = selected.value) {
 async function newRequest(name: string) {
   if (!workspace.value) return;
   try {
+    folderId.value = existingFolder(folderId.value);
     const entry = await backend.createRequest(workspace.value.root, folderId.value, name);
     const node: RequestNode = { type: "request", ...entry };
     childrenOf(folderId.value)?.push(node);
@@ -595,6 +606,7 @@ async function newRequest(name: string) {
 async function newFolder(name: string) {
   if (!workspace.value) return;
   try {
+    folderId.value = existingFolder(folderId.value);
     const id = await backend.createFolder(workspace.value.root, folderId.value, name);
     childrenOf(folderId.value)?.push({ type: "folder", id, name, children: [] });
     folderId.value = id;
@@ -646,7 +658,8 @@ async function organize(run: (root: string) => Promise<Organized | void>): Promi
     walk(fresh.tree, (n) => n.type === "request" && saved.set(n.id, snapshot(n)));
     openTabs.value = openTabs.value.map(map);
     if (previewTab.value) previewTab.value = map(previewTab.value);
-    folderId.value = map(folderId.value);
+    // A deleted folder is no place to create or import into.
+    folderId.value = existingFolder(map(folderId.value));
     const entries = Object.entries(history);
     const picks = Object.entries(historyPick);
     for (const [id] of entries) delete history[id];
