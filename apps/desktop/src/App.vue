@@ -216,8 +216,15 @@ async function copyLink(id: string) {
 }
 
 /** Opens the request of a pulpo:// link, in this workspace or another known one. */
+/** The last link followed: Windows and Linux deliver a clicked link twice (the
+ * single-instance and deep-link plugins), and opening a workspace twice at once races. */
+let lastLink = { text: "", at: 0 };
+
 async function followLink(text: string, roots = recentRoots()) {
   if (!backend.resolveLink) return;
+  const key = text.trim().replace("pulpo://open/?", "pulpo://open?");
+  if (key === lastLink.text && Date.now() - lastLink.at < 2000) return;
+  lastLink = { text: key, at: Date.now() };
   try {
     const current = workspace.value?.root;
     const candidates = current ? [current, ...roots.filter((r) => r !== current)] : roots;

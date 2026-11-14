@@ -812,12 +812,32 @@ fn openapi(
     let environments =
         crate::environment::list_environments(root, &crate::environment::MemoryStore::default())
             .unwrap_or_default();
+    // Values may use other variables (`{{kongHost}}/bff/v1`): resolve them in the same
+    // environment, a few levels deep.
     let default_for = |var: &str| {
         environments
             .iter()
-            .flat_map(|e| &e.variables)
-            .find(|v| v.name == var && !v.secret && !v.value.is_empty() && !v.value.contains("{{"))
-            .map(|v| v.value.clone())
+            .filter(|e| e.variables.iter().any(|v| v.name == var && !v.secret))
+            .find_map(|env| {
+                let vars: crate::variables::Variables = env
+                    .variables
+                    .iter()
+                    .filter(|v| !v.secret)
+                    .map(|v| (v.name.clone(), v.value.clone()))
+                    .collect();
+                let mut value = vars.get(var)?.clone();
+                for _ in 0..5 {
+                    if !value.contains("{{") {
+                        break;
+                    }
+                    let mut missing = std::collections::BTreeSet::new();
+                    value = crate::variables::resolve_text(&value, &vars, &mut missing);
+                    if !missing.is_empty() {
+                        return None;
+                    }
+                }
+                (!value.is_empty() && !value.contains("{{")).then_some(value)
+            })
             .unwrap_or_else(|| "http://localhost".into())
     };
     let mut document = json!({
@@ -1060,6 +1080,43 @@ mod tests {
         assert_eq!(
             doc["components"]["securitySchemes"]["bearerAuth"]["scheme"],
             "bearer"
+        );
+        // A nested variable in an environment gives the server's default.
+        let env = crate::environment::create_environment(
+            dir.path(),
+            "Local",
+            &crate::environment::MemoryStore::default(),
+        )
+        .unwrap();
+        crate::environment::save_environment(
+            dir.path(),
+            &crate::environment::Environment {
+                id: env.id,
+                name: "Local".into(),
+                variables: vec![
+                    crate::environment::Variable {
+                        name: "host".into(),
+                        value: "https://api.shop".into(),
+                        secret: false,
+                        has_value: false,
+                    },
+                    crate::environment::Variable {
+                        name: "base".into(),
+                        value: "{{host}}/v1".into(),
+                        secret: false,
+                        has_value: false,
+                    },
+                ],
+            },
+            &crate::environment::MemoryStore::default(),
+        )
+        .unwrap();
+        let again: Value =
+            serde_norway::from_str(&export(dir.path(), "", ExportFormat::OpenApi).unwrap().text)
+                .unwrap();
+        assert_eq!(
+            again["servers"][0]["variables"]["base"]["default"],
+            "https://api.shop/v1"
         );
         // And Pulpo reads it back.
         assert_eq!(
