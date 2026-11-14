@@ -712,9 +712,16 @@ pub async fn authorize(
     let wait = async {
         loop {
             let (mut socket, _) = listener.accept().await.map_err(|e| e.to_string())?;
-            let mut buffer = vec![0u8; 16 * 1024];
-            let read = socket.read(&mut buffer).await.unwrap_or(0);
-            let head = String::from_utf8_lossy(&buffer[..read]).into_owned();
+            // The request line may come in several pieces: read until it is complete.
+            let mut received = Vec::new();
+            let mut buffer = [0u8; 4096];
+            while !received.windows(2).any(|w| w == b"\r\n") && received.len() < 16 * 1024 {
+                match socket.read(&mut buffer).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(read) => received.extend_from_slice(&buffer[..read]),
+                }
+            }
+            let head = String::from_utf8_lossy(&received).into_owned();
             let target_path = head
                 .lines()
                 .next()
