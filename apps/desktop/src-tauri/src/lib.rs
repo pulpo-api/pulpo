@@ -4,6 +4,7 @@ use pulpo_core::collection::{self, CollectionError, FolderMeta, RequestEntry, Sc
 use pulpo_core::cookies::{self, Cookie, Jar};
 use pulpo_core::data::{self, Row};
 use pulpo_core::environment::{self, Environment};
+use pulpo_core::flow;
 use pulpo_core::http::{self, Auth, HttpRequest, HttpResponse, SendError, Settings};
 use pulpo_core::import::{self, ImportSummary};
 use pulpo_core::keychain::Keychain;
@@ -464,6 +465,106 @@ async fn oauth_discover(issuer: String) -> Result<Discovery, String> {
     oauth::discover(&issuer, &Settings::default()).await
 }
 
+// ------------------------------------------------------------------------------ flows
+
+#[tauri::command]
+async fn list_flows(root: String) -> Result<Vec<flow::Flow>, String> {
+    flow::list_flows(Path::new(&root)).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn flow_plan(root: String, id: String) -> Result<Vec<flow::PlanNode>, String> {
+    flow::plan(Path::new(&root), &id).map_err(|e| e.to_string())
+}
+
+/// The flow's file as text, for the YAML view.
+#[tauri::command]
+async fn flow_yaml(root: String, id: String) -> Result<String, String> {
+    flow::load_flow(Path::new(&root), &id)
+        .map(|f| flow::to_yaml(&f))
+        .map_err(|e| e.to_string())
+}
+
+/// Saves the YAML view (written back in canonical form).
+#[tauri::command]
+async fn save_flow_yaml(root: String, id: String, yaml: String) -> Result<flow::Flow, String> {
+    let mut parsed: flow::Flow =
+        serde_norway::from_str(&yaml).map_err(|e| format!("invalid flow: {e}"))?;
+    parsed.id = id;
+    flow::save_flow(Path::new(&root), &parsed).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn create_flow(root: String, name: String) -> Result<flow::Flow, String> {
+    let new = flow::Flow {
+        id: String::new(),
+        version: 1,
+        name,
+        description: String::new(),
+        steps: Vec::new(),
+    };
+    flow::save_flow(Path::new(&root), &new).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn delete_flow(root: String, id: String) -> Result<(), String> {
+    flow::delete_flow(Path::new(&root), &id).map_err(|e| e.to_string())
+}
+
+/// Adds a request at the end of a flow.
+#[tauri::command]
+async fn add_flow_step(
+    root: String,
+    flow_id: String,
+    request_id: String,
+) -> Result<flow::Flow, String> {
+    let root = Path::new(&root);
+    let mut f = flow::load_flow(root, &flow_id).map_err(|e| e.to_string())?;
+    f.steps.push(flow::Step::Request {
+        request: request_id,
+        name: None,
+        save: Default::default(),
+        expect: None,
+    });
+    flow::save_flow(root, &f).map_err(|e| e.to_string())
+}
+
+/// Request id → names of the flows that use it.
+#[tauri::command]
+async fn flow_usage(
+    root: String,
+) -> Result<std::collections::HashMap<String, Vec<String>>, String> {
+    flow::usage(Path::new(&root)).map_err(|e| e.to_string())
+}
+
+/// Runs a flow; each step is also sent as a `flow-step` event while it runs.
+#[tauri::command]
+async fn run_flow(
+    app: tauri::AppHandle,
+    root: String,
+    id: String,
+    environment_id: Option<String>,
+) -> Result<flow::FlowReport, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| e.to_string())?;
+        let mut emit = |event: &flow::StepEvent| {
+            let _ = app.emit("flow-step", event);
+        };
+        runtime.block_on(flow::run_flow(
+            Path::new(&root),
+            &id,
+            environment_id.as_deref(),
+            &Keychain,
+            &mut emit,
+        ))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// The pulpo:// link to a request.
 #[tauri::command]
 async fn request_link(root: String, request_id: String) -> Result<String, String> {
@@ -743,7 +844,16 @@ pub fn run() {
             git_push,
             request_link,
             resolve_link,
-            startup_links
+            startup_links,
+            list_flows,
+            flow_plan,
+            flow_yaml,
+            save_flow_yaml,
+            create_flow,
+            delete_flow,
+            add_flow_step,
+            flow_usage,
+            run_flow
         ])
         .run(tauri::generate_context!())
         .expect("error while running Pulpo");

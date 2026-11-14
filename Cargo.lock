@@ -3781,11 +3781,13 @@ dependencies = [
  "pulpo-core",
  "serde",
  "serde_json",
+ "serde_norway",
  "tauri",
  "tauri-build",
  "tauri-plugin-deep-link",
  "tauri-plugin-dialog",
  "tauri-plugin-single-instance",
+ "tokio",
 ]
 
 [[package]]

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import TreeView from "./TreeView.vue";
-import type { RequestEntry, TreeNode, Workspace } from "../workspace";
+import type { Flow, RequestEntry, TreeNode, Workspace } from "../workspace";
 import { dragging, dropHint, parentOf, startRenaming, type DropPosition } from "../treeState";
 
 const props = defineProps<{
@@ -10,7 +10,20 @@ const props = defineProps<{
   folderId: string;
   dirty: Set<string>;
   persistent: boolean;
+  /** Flows of the workspace, and the one open in the main area. */
+  flows: Flow[];
+  openFlowId: string | null;
 }>();
+const newFlowName = ref<string | null>(null);
+function startFlow() {
+  newFlowName.value = "";
+}
+function confirmFlow() {
+  const name = newFlowName.value?.trim();
+  newFlowName.value = null;
+  if (name) emit("newFlow", name);
+}
+
 const emit = defineEmits<{
   select: [entry: RequestEntry];
   folder: [id: string];
@@ -30,6 +43,9 @@ const emit = defineEmits<{
   runFolder: [id: string];
   export: [id: string];
   git: [];
+  openFlow: [id: string];
+  newFlow: [name: string];
+  addToFlow: [requestId: string];
 }>();
 
 const query = ref("");
@@ -151,7 +167,8 @@ function act(
     | "link"
     | "example"
     | "run"
-    | "export",
+    | "export"
+    | "flow",
 ) {
   const node = menu.value?.node;
   if (!node) return;
@@ -167,6 +184,7 @@ function act(
   else if (action === "example") emit("addExample", node.id);
   else if (action === "run") emit("runFolder", node.id);
   else if (action === "export") emit("export", node.id);
+  else if (action === "flow") emit("addToFlow", node.id);
   else if (action === "duplicate") emit("duplicate", node.id);
   else if (action === "delete") emit("delete", node);
   else {
@@ -252,6 +270,35 @@ function confirm() {
         <p v-if="!workspace.tree.length" class="empty">Empty workspace. Add a request to start.</p>
         <p v-else-if="!visibleTree.length" class="empty">No request matches “{{ query }}”.</p>
       </nav>
+      <section v-if="persistent" class="flows" aria-label="Flows">
+        <h4>
+          <span>Flows</span>
+          <button class="icon" title="New flow: a feature told as a sequence of requests" @click="startFlow">+</button>
+        </h4>
+        <input
+          v-if="newFlowName !== null"
+          v-model="newFlowName"
+          class="search"
+          placeholder="Flow name, e.g. Book a telemedicine visit"
+          spellcheck="false"
+          @keydown.enter="confirmFlow"
+          @keydown.esc="newFlowName = null"
+          @blur="newFlowName = null"
+        />
+        <button
+          v-for="f in flows"
+          :key="f.id"
+          class="flow-item"
+          :class="{ on: f.id === openFlowId }"
+          :title="f.description || f.name"
+          @click="emit('openFlow', f.id)"
+        >
+          <span class="flow-icon">⇢</span>{{ f.name }}<span class="count">{{ f.steps.length }}</span>
+        </button>
+        <p v-if="!flows.length && newFlowName === null" class="empty">
+          Chain existing requests into a feature (login → search → book) without copying them.
+        </p>
+      </section>
       <p v-if="workspace.tree.length && !words.length" class="tip">Drag to move · double-click or F2 to rename · right-click for more</p>
       <footer :title="workspace.root">
         <span class="dot" :class="{ off: !persistent }"></span>
@@ -268,6 +315,7 @@ function confirm() {
           Copy link (pulpo://)
         </button>
         <button v-if="menu.node.type === 'request'" role="menuitem" @click="act('example')">Add example</button>
+        <button v-if="menu.node.type === 'request' && persistent" role="menuitem" @click="act('flow')">Add to flow…</button>
         <template v-if="menu.node.type === 'folder'">
           <button role="menuitem" @click="act('run')">Run folder…</button>
           <button role="menuitem" @click="act('edit')">Headers, auth, settings…</button>
@@ -453,5 +501,50 @@ footer {
 }
 .dot.off {
   background: var(--m-post);
+}
+.flows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 4px 4px;
+  border-top: 1px solid var(--border);
+  margin-top: 6px;
+}
+.flows h4 {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 0 0 4px;
+  padding: 0 6px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+.flow-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  padding: 5px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+}
+.flow-item:hover,
+.flow-item.on {
+  background: var(--surface-2);
+}
+.flow-icon {
+  color: var(--accent);
+}
+.flow-item .count {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--muted);
 }
 </style>

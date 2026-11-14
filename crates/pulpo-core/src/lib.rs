@@ -17,6 +17,7 @@ pub mod diff;
 pub mod environment;
 pub mod examples;
 pub mod export;
+pub mod flow;
 pub mod git;
 pub mod http;
 pub mod import;

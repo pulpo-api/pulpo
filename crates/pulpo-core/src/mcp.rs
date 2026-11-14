@@ -152,6 +152,35 @@ fn tools() -> Value {
             }, "required": ["format"] }
         },
         {
+            "name": "list_flows",
+            "description": "List the flows: features told as a sequence of existing requests (and other flows), with their steps.",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "run_flow",
+            "description": "Run a flow step by step, passing the values it saves; stops at the first failing step.",
+            "inputSchema": { "type": "object", "properties": {
+                "id": { "type": "string", "description": "Flow id (see list_flows)." },
+                "environment": env, "confirmProduction": confirm
+            }, "required": ["id"] }
+        },
+        {
+            "name": "save_flow",
+            "description": "Create or replace a flow. Steps reference requests by id (never copy them) or other flows. save keeps response values (JSONPath) as {{variables}} for later steps; expect checks the status.",
+            "inputSchema": { "type": "object", "properties": {
+                "id": { "type": "string", "description": "Existing flow id to replace; omit to create one from the name." },
+                "name": { "type": "string" },
+                "description": { "type": "string" },
+                "steps": { "type": "array", "items": { "type": "object", "properties": {
+                    "request": { "type": "string", "description": "Request id" },
+                    "flow": { "type": "string", "description": "Or a flow id, to reuse it" },
+                    "name": { "type": "string" },
+                    "save": { "type": "object", "additionalProperties": { "type": "string" }, "description": "variable: JSONPath, e.g. { \"token\": \"$.data.token\" }" },
+                    "expect": { "type": "object", "properties": { "status": { "type": "integer" } } }
+                } } }
+            }, "required": ["name", "steps"] }
+        },
+        {
             "name": "collection_diff",
             "description": "What changed in the collection between two git revisions (or a revision and the files on disk), request by request, as Markdown.",
             "inputSchema": { "type": "object", "properties": {
@@ -334,6 +363,93 @@ impl<'a> Server<'a> {
                     export::export(&self.root, arg(args, "folder").unwrap_or(""), format)
                         .map_err(|e| e.to_string())?;
                 Ok(cut(&exported.text))
+            }
+            "list_flows" => {
+                let flows = crate::flow::list_flows(&self.root).map_err(|e| e.to_string())?;
+                if flows.is_empty() {
+                    return Ok("No flows yet. Create one with save_flow.".into());
+                }
+                let mut out = String::new();
+                for f in flows {
+                    out.push_str(&format!("## {} (id: {})\n", f.name, f.id));
+                    if !f.description.is_empty() {
+                        out.push_str(&format!("{}\n", f.description));
+                    }
+                    for node in crate::flow::plan(&self.root, &f.id).map_err(|e| e.to_string())? {
+                        out.push_str(&format!(
+                            "{}{} {} {}{}\n",
+                            "  ".repeat(node.depth),
+                            node.path,
+                            if node.kind == "flow" {
+                                "flow".to_string()
+                            } else {
+                                node.method.clone()
+                            },
+                            node.name,
+                            node.problem.map(|p| format!(" ✗ {p}")).unwrap_or_default()
+                        ));
+                    }
+                }
+                Ok(out)
+            }
+            "run_flow" => {
+                let id = arg(args, "id").ok_or("id is required")?;
+                let env = self.environment(args)?;
+                let report = self.runtime.block_on(crate::flow::run_flow(
+                    &self.root,
+                    id,
+                    env.as_ref().map(|(id, _)| id.as_str()),
+                    self.store,
+                    &mut |_| {},
+                ))?;
+                let mut out = format!(
+                    "Flow {}: {}\n",
+                    report.flow,
+                    if report.passed { "passed" } else { "failed" }
+                );
+                for step in &report.steps {
+                    match &step.report {
+                        None => out.push_str(&format!("- {} skipped\n", step.path)),
+                        Some(r) => {
+                            out.push_str(&format!(
+                                "\n### {} {}\n",
+                                if r.passed() { "✓" } else { "✗" },
+                                r.name
+                            ));
+                            out.push_str(&describe_run(r));
+                            for (var, value) in &step.saved {
+                                out.push_str(&format!("saved {var} = {value}\n"));
+                            }
+                        }
+                    }
+                }
+                Ok(self.mask(&env, &out))
+            }
+            "save_flow" => {
+                let steps: Vec<crate::flow::Step> =
+                    serde_json::from_value(args.get("steps").cloned().unwrap_or(json!([])))
+                        .map_err(|e| format!("steps: {e}"))?;
+                let flow = crate::flow::Flow {
+                    id: arg(args, "id").unwrap_or("").to_string(),
+                    version: 1,
+                    name: arg(args, "name").ok_or("name is required")?.to_string(),
+                    description: arg(args, "description").unwrap_or("").to_string(),
+                    steps,
+                };
+                let saved = crate::flow::save_flow(&self.root, &flow).map_err(|e| e.to_string())?;
+                let problems: Vec<String> = crate::flow::plan(&self.root, &saved.id)
+                    .map_err(|e| e.to_string())?
+                    .into_iter()
+                    .filter_map(|n| n.problem.map(|p| format!("step {}: {p}", n.path)))
+                    .collect();
+                let mut out = format!(
+                    "Saved flow {} (id: {}, file flows/{}.flow.yaml).",
+                    saved.name, saved.id, saved.id
+                );
+                for p in problems {
+                    out.push_str(&format!("\n✗ {p}"));
+                }
+                Ok(out)
             }
             "collection_diff" => {
                 let diff = diff::diff_refs(
@@ -813,7 +929,7 @@ mod tests {
             .collect();
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0]["result"]["serverInfo"]["name"], "pulpo");
-        assert_eq!(lines[1]["result"]["tools"].as_array().unwrap().len(), 10);
+        assert_eq!(lines[1]["result"]["tools"].as_array().unwrap().len(), 13);
 
         // Create, list, read and run a request.
         let (text, error) = call(
@@ -886,6 +1002,24 @@ mod tests {
         assert!(!error && imported.contains("1 requests"), "{imported}");
         let (exported, _) = call(&server, "export_collection", json!({ "format": "http" }));
         assert!(exported.contains("### Who am I"), "{exported}");
+        // A flow made by the AI, run with the secrets still hidden.
+        let (saved, error) = call(
+            &server,
+            "save_flow",
+            json!({
+                "name": "Check me", "steps": [{ "request": id, "expect": { "status": 200 } }]
+            }),
+        );
+        assert!(!error && saved.contains("id: check-me"), "{saved}");
+        let (flows, _) = call(&server, "list_flows", json!({}));
+        assert!(flows.contains("## Check me (id: check-me)"), "{flows}");
+        let (ran, error) = call(
+            &server,
+            "run_flow",
+            json!({ "id": "check-me", "environment": "Local" }),
+        );
+        assert!(!error && ran.starts_with("Flow Check me: passed"), "{ran}");
+        assert!(!ran.contains("s3cr3t-token"), "{ran}");
         let (unknown, error) = call(&server, "nope", json!({}));
         assert!(error && unknown.contains("unknown tool"));
     }

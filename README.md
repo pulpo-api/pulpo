@@ -271,6 +271,28 @@ Request by request, not line by line: moved and renamed requests are recognised,
 
 In the desktop app, **⑂** next to the collection name opens the git panel: the same request-by-request changes since the last commit (click one to open it), commit, switch or create a branch, pull and push. It uses your own `git` and its credentials, and only ever commits files of the workspace.
 
+## Flows: features made of requests you already have
+
+A folder groups endpoints; a **flow** tells a feature: log in, pick a doctor, see the free hours, book. Flows reference the requests of the collection (they never copy them), so changing a request changes every flow that uses it, and a flow can reuse another one.
+
+```yaml
+# flows/book-a-visit.flow.yaml
+version: 1
+name: "Book a visit"
+steps:
+  - flow: "log-in"                                   # another flow, reused
+  - request: "02-visits/01-doctors.pulpo.yaml"
+    save:
+      doctorId: "$.data[0].id"                       # JSONPath into the response
+  - request: "02-visits/02-free-hours.pulpo.yaml"    # uses {{doctorId}}
+    expect:
+      status: 200
+```
+
+- In the app, **Flows** in the sidebar shows each flow as a tree; ▶ Run lights each step green or red with its status and time, and a click shows its response and the values it saved. Right-click a request → *Add to flow…*; a request used by flows shows *In N flows*.
+- Values a flow saves live only while it runs; the environment is not touched. Request scripts keep working as usual. The flow stops at the first failing step.
+- `pulpo flow ls`, `pulpo flow show <flow>` and `pulpo flow run <flow> -e Local --junit report.xml` for CI. Through `pulpo mcp` your AI can list, create and run flows too.
+
 ## Let your AI use the collection (MCP)
 
 `pulpo mcp` serves the collection to your AI assistant over the Model Context Protocol. It runs on your machine, on the files of the repo.

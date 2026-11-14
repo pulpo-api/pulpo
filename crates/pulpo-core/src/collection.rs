@@ -26,8 +26,14 @@ pub const FORMAT_VERSION: u32 = 1;
 pub const REQUEST_SCHEMA_URL: &str =
     "https://raw.githubusercontent.com/pulpo-api/pulpo/main/schemas/request.v1.schema.json";
 
-pub(crate) const SKIPPED_DIRS: [&str; 5] =
-    [".git", ".pulpo", "node_modules", "environments", "target"];
+pub(crate) const SKIPPED_DIRS: [&str; 6] = [
+    ".git",
+    ".pulpo",
+    "node_modules",
+    "environments",
+    "target",
+    crate::flow::FLOWS_DIR,
+];
 
 /// How a request body is stored next to the request file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

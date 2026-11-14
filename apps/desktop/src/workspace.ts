@@ -395,6 +395,40 @@ export interface Cookie {
 
 export type ExportFormat = "postman" | "openApi" | "http";
 
+export interface Flow {
+  id: string;
+  version: number;
+  name: string;
+  description: string;
+  steps: unknown[];
+}
+
+export interface FlowPlanNode {
+  path: string;
+  depth: number;
+  kind: "request" | "flow" | "missing";
+  target: string;
+  name: string;
+  method: string;
+  url: string;
+  save: string[];
+  expect: number | null;
+  problem?: string;
+}
+
+export interface FlowStepEvent {
+  path: string;
+  state: "running" | "passed" | "failed" | "skipped";
+  report?: RunReport;
+  saved?: Record<string, string>;
+}
+
+export interface FlowReport {
+  flow: string;
+  passed: boolean;
+  steps: FlowStepEvent[];
+}
+
 export interface LinkTarget {
   link: { repo: string; workspace: string; name: string; request: string };
   root: string | null;
@@ -564,6 +598,17 @@ export interface WorkspaceBackend {
   exportCollection?(root: string, folderId: string, format: ExportFormat): Promise<Exported>;
   /** Desktop only: an environment as a Postman environment. */
   exportEnvironment?(root: string, environmentId: string): Promise<Exported>;
+  /** Desktop only: flows (features told as a sequence of requests). */
+  listFlows?(root: string): Promise<Flow[]>;
+  flowPlan?(root: string, id: string): Promise<FlowPlanNode[]>;
+  flowYaml?(root: string, id: string): Promise<string>;
+  saveFlowYaml?(root: string, id: string, yaml: string): Promise<Flow>;
+  createFlow?(root: string, name: string): Promise<Flow>;
+  deleteFlow?(root: string, id: string): Promise<void>;
+  addFlowStep?(root: string, flowId: string, requestId: string): Promise<Flow>;
+  flowUsage?(root: string): Promise<Record<string, string[]>>;
+  runFlow?(root: string, id: string, environmentId: string): Promise<FlowReport>;
+  onFlowStep?(handler: (event: FlowStepEvent) => void): Promise<() => void>;
   /** Desktop only: the pulpo:// link to a request. */
   requestLink?(root: string, requestId: string): Promise<string>;
   /** Desktop only: reads a pulpo:// link and finds its workspace among `roots`. */
@@ -685,6 +730,20 @@ const tauriBackend: WorkspaceBackend = {
   },
   stopLoadTest: () => invoke<void>("stop_load_test"),
   importInto: (root, folderId, source) => invoke<ImportSummary>("import_into", { root, folderId, ...source }),
+  listFlows: (root) => invoke<Flow[]>("list_flows", { root }),
+  flowPlan: (root, id) => invoke<FlowPlanNode[]>("flow_plan", { root, id }),
+  flowYaml: (root, id) => invoke<string>("flow_yaml", { root, id }),
+  saveFlowYaml: (root, id, yaml) => invoke<Flow>("save_flow_yaml", { root, id, yaml }),
+  createFlow: (root, name) => invoke<Flow>("create_flow", { root, name }),
+  deleteFlow: (root, id) => invoke<void>("delete_flow", { root, id }),
+  addFlowStep: (root, flowId, requestId) => invoke<Flow>("add_flow_step", { root, flowId, requestId }),
+  flowUsage: (root) => invoke<Record<string, string[]>>("flow_usage", { root }),
+  runFlow: (root, id, environmentId) =>
+    invoke<FlowReport>("run_flow", { root, id, environmentId: environmentId || null }),
+  async onFlowStep(handler) {
+    const { listen } = await import("@tauri-apps/api/event");
+    return listen<FlowStepEvent>("flow-step", (event) => handler(event.payload));
+  },
   requestLink: (root, requestId) => invoke<string>("request_link", { root, requestId }),
   resolveLink: (link, roots) => invoke<LinkTarget>("resolve_link", { link, roots }),
   async onLinks(handler) {

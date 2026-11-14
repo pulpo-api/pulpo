@@ -23,6 +23,8 @@ tauri-plugin-dialog = "2"
 tauri-plugin-deep-link = "2"
 serde.workspace = true
 serde_json.workspace = true
+serde_norway = "0.9"
+tokio = { workspace = true, features = ["rt"] }
 pulpo-core = { workspace = true, features = ["keychain"] }
 
 # Desktop only: a second launch (a pulpo:// link clicked in a chat) goes to the open window.

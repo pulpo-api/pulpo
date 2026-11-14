@@ -13,6 +13,7 @@ import CodePanel from "./components/CodePanel.vue";
 import ImportDialog from "./components/ImportDialog.vue";
 import ExportDialog from "./components/ExportDialog.vue";
 import GitPanel from "./components/GitPanel.vue";
+import FlowView from "./components/FlowView.vue";
 import { resolveText } from "./variables";
 import { applyPathParams } from "./params";
 import { applyAuth, asSendError, coreInfo, resolveAuth, type CoreInfo, type HttpResponse, type SendError } from "./core";
@@ -32,6 +33,7 @@ import {
   type TestResult,
   type TreeNode,
   type Workspace,
+  type Flow,
 } from "./workspace";
 
 interface Result {
@@ -92,6 +94,77 @@ const showImport = ref(false);
 /** Folder being exported ("" = the whole collection); null = dialog closed. */
 const exporting = ref<string | null>(null);
 const showGit = ref(false);
+
+// ---- flows
+const flows = ref<Flow[]>([]);
+/** The flow open in the main area; null = none. */
+const flowView = ref<string | null>(null);
+/** Request id → names of the flows that use it. */
+const flowUsage = ref<Record<string, string[]>>({});
+/** A request waiting for the user to pick the flow it goes into. */
+const addingToFlow = ref<string | null>(null);
+
+async function loadFlows() {
+  const ws = workspace.value;
+  if (!ws || !backend.listFlows) return;
+  try {
+    flows.value = await backend.listFlows(ws.root);
+    flowUsage.value = (await backend.flowUsage?.(ws.root)) ?? {};
+  } catch {
+    flows.value = [];
+  }
+}
+watch(() => workspace.value?.root, () => void loadFlows(), { immediate: true });
+
+function openFlow(id: string) {
+  editingFolder.value = null;
+  runnerFolder.value = null;
+  flowView.value = id;
+}
+
+async function newFlow(name: string) {
+  const ws = workspace.value;
+  if (!ws || !backend.createFlow) return;
+  try {
+    const created = await backend.createFlow(ws.root, name);
+    await loadFlows();
+    openFlow(created.id);
+  } catch (e) {
+    problem.value = { kind: "io", message: String(e) };
+  }
+}
+
+async function addToFlow(flowId: string, name?: string) {
+  const ws = workspace.value;
+  const requestId = addingToFlow.value;
+  if (!ws || !requestId || !backend.addFlowStep) return;
+  try {
+    const target = flowId || (await backend.createFlow!(ws.root, name || "New flow")).id;
+    await backend.addFlowStep(ws.root, target, requestId);
+    addingToFlow.value = null;
+    await loadFlows();
+    openFlow(target);
+    flowKey.value++;
+  } catch (e) {
+    problem.value = { kind: "io", message: String(e) };
+  }
+}
+const newFlowForStep = ref("");
+/** Bumped to reload the open flow after it changes elsewhere. */
+const flowKey = ref(0);
+
+/** The first flow that uses a request. */
+function openFlowOf(requestId: string) {
+  const name = flowUsage.value[requestId]?.[0];
+  const found = flows.value.find((f) => f.name === name);
+  if (found) openFlow(found.id);
+}
+
+function openRequestFromFlow(id: string) {
+  flowView.value = null;
+  const node = requests.value.find((n) => n.id === id);
+  if (node) select(toEntry(node));
+}
 const importDialog = ref<InstanceType<typeof ImportDialog> | null>(null);
 const importBlocked = computed(() =>
   dirty.value.size ? `Save your ${dirty.value.size} unsaved request(s) first (Ctrl+S), so the import does not overwrite them.` : null,
@@ -288,10 +361,14 @@ const editingFolder = ref<string | null>(null);
 /** The folder whose runner is open ("" = the whole collection). */
 const runnerFolder = ref<string | null>(null);
 watch(editingFolder, (id) => {
-  if (id !== null) runnerFolder.value = null;
+  if (id !== null) {
+    runnerFolder.value = null;
+    flowView.value = null;
+  }
 });
 function openRunner(id: string) {
   editingFolder.value = null;
+  flowView.value = null;
   runnerFolder.value = id;
 }
 const folderEditor = ref<InstanceType<typeof FolderEditor> | null>(null);
@@ -705,6 +782,7 @@ function deleteNode(node: TreeNode) {
 
 function select(entry: RequestEntry) {
   editingFolder.value = null;
+  flowView.value = null;
   runnerFolder.value = null;
   selectedId.value = entry.id;
   confirmDelete.value = false;
@@ -807,6 +885,11 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       @import="showImport = true"
       @export="exporting = $event"
       @git="showGit = true"
+      :flows="flows"
+      :open-flow-id="flowView"
+      @open-flow="openFlow"
+      @new-flow="newFlow"
+      @add-to-flow="(id) => { addingToFlow = id; newFlowForStep = ''; }"
       @rename="renameNode"
       @duplicate="duplicateNode"
       @delete="deleteNode"
@@ -819,7 +902,21 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       @run-folder="openRunner"
     />
 
-    <main v-if="workspace && runnerFolder !== null && editingFolder === null" class="folder-main">
+    <main v-if="workspace && flowView !== null" class="folder-main">
+      <FlowView
+        :key="`${flowView}-${flowKey}`"
+        :root="workspace.root"
+        :flow-id="flowView"
+        :environment-id="activeEnvId"
+        :environment-name="environments.find((e) => e.id === activeEnvId)?.name ?? ''"
+        @close="flowView = null"
+        @open="openRequestFromFlow"
+        @changed="loadFlows"
+        @deleted="flowView = null; loadFlows()"
+      />
+    </main>
+
+    <main v-if="workspace && runnerFolder !== null && editingFolder === null && flowView === null" class="folder-main">
       <RunnerPanel
         :key="runnerFolder"
         :workspace="workspace"
@@ -831,7 +928,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       />
     </main>
 
-    <main v-if="workspace && editingFolder !== null" class="folder-main">
+    <main v-if="workspace && editingFolder !== null && flowView === null" class="folder-main">
       <p v-if="problem" class="problem">{{ problem.message }}</p>
       <FolderEditor
         ref="folderEditor"
@@ -844,7 +941,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       />
     </main>
 
-    <main v-if="workspace && selected && editingFolder === null && runnerFolder === null">
+    <main v-if="workspace && selected && editingFolder === null && runnerFolder === null && flowView === null">
       <nav class="tabbar">
         <button
           v-for="tab in tabs"
@@ -872,6 +969,14 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
           <span class="muted">{{ folderName }}</span>
           <span class="muted">/</span>
           <input v-model="selected.name" class="title" spellcheck="false" />
+          <button
+            v-if="flowUsage[selected.id]?.length"
+            class="ghost small flows-chip"
+            :title="`Used in: ${flowUsage[selected.id].join(', ')}`"
+            @click="openFlowOf(selected.id)"
+          >
+            ⇢ In {{ flowUsage[selected.id].length }} flow{{ flowUsage[selected.id].length > 1 ? "s" : "" }}
+          </button>
         </div>
         <div class="actions">
           <select v-model="activeEnvId" class="env" title="Environment used to resolve variables">
@@ -1006,6 +1111,22 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       </div>
     </div>
 
+    <div v-if="addingToFlow" class="link-ask card" role="dialog" aria-label="Add to flow">
+      <p>
+        Add <b>{{ requests.find((n) => n.id === addingToFlow)?.name ?? addingToFlow }}</b> as the last step of a flow:
+      </p>
+      <div class="flow-pick">
+        <button v-for="f in flows" :key="f.id" class="ghost" @click="addToFlow(f.id)">{{ f.name }}</button>
+      </div>
+      <form class="flow-pick" @submit.prevent="newFlowForStep.trim() && addToFlow('', newFlowForStep.trim())">
+        <input v-model="newFlowForStep" placeholder="Or a new flow: Book a visit" spellcheck="false" />
+        <button class="ghost" :disabled="!newFlowForStep.trim()">Create</button>
+      </form>
+      <div class="link-actions">
+        <button class="ghost" @click="addingToFlow = null">Cancel</button>
+      </div>
+    </div>
+
     <GitPanel
       v-if="showGit && workspace"
       :root="workspace.root"
@@ -1035,7 +1156,10 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       @text="runImport({ text: $event })"
     />
 
-    <main v-if="!(workspace && (selected || editingFolder !== null || runnerFolder !== null))" class="welcome">
+    <main
+      v-if="!(workspace && (selected || editingFolder !== null || runnerFolder !== null || flowView !== null))"
+      class="welcome"
+    >
       <div class="hello card">
         <img src="/pulpo.svg" width="72" height="72" alt="" />
         <h1>{{ workspace ? workspace.name : "Welcome to Pulpo" }}</h1>
@@ -1300,5 +1424,18 @@ main > :deep(.viewer) {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+.flow-pick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.flow-pick input {
+  flex: 1;
+  min-width: 0;
+}
+.flows-chip {
+  white-space: nowrap;
+  color: var(--accent);
 }
 </style>

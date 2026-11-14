@@ -64,6 +64,13 @@ COMMANDS:
                in a loop for DURATION (default 30s; 45, 45s or 2m) and the
                percentiles are printed. With --data, user N uses row N.
                Nothing is saved to the workspace.
+    flow ls [-w DIR]
+               List the flows of the workspace (flows/*.flow.yaml)
+    flow show <FLOW> [-w DIR]
+               Print a flow as a tree, subflows expanded
+    flow run <FLOW> [-w DIR] [-e ENV] [--junit F] [--html F] [--summary F]
+               Run a flow: its requests in order, passing the values it saves.
+               Stops at the first failing step; exits with 1 if it fails.
     mcp [-w DIR]
                Serve the collection to your AI over MCP (stdio): Claude Code,
                Cursor, Copilot… can list, read, run, create and edit requests,
@@ -132,6 +139,7 @@ fn main() -> ExitCode {
         Some("diff") => run_diff(&args[1..]),
         Some("link") => run_link(&args[1..]),
         Some("mcp") => run_mcp(&args[1..]),
+        Some("flow") => run_flow_command(&args[1..]),
         Some("run") => run_run(&args[1..]),
         Some("load") => run_load(&args[1..]),
         Some("code") => run_code(&args[1..]),
@@ -361,6 +369,153 @@ fn run_secret(args: &[String]) -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(e) => fail(e),
+    }
+}
+
+fn run_flow_command(args: &[String]) -> ExitCode {
+    use pulpo_core::flow;
+    const USAGE: &str = "flow: expected ls, show <FLOW> or run <FLOW> [-w DIR] [-e ENV] [--junit F] [--html F] [--summary F]";
+    let Some(action) = args.first() else {
+        return usage_error(USAGE);
+    };
+    let mut target = String::new();
+    let mut dir = PathBuf::from(".");
+    let mut env_name: Option<String> = None;
+    let mut outputs: Vec<(String, PathBuf)> = Vec::new();
+    let mut rest = args.iter().skip(1);
+    while let Some(arg) = rest.next() {
+        match arg.as_str() {
+            "-w" | "--workspace" => match rest.next() {
+                Some(d) => dir = PathBuf::from(d),
+                None => return usage_error("flow: -w needs a DIR"),
+            },
+            "-e" | "--env" => match rest.next() {
+                Some(e) => env_name = Some(e.clone()),
+                None => return usage_error("flow: -e needs an ENV"),
+            },
+            flag @ ("--junit" | "--html" | "--summary") => match rest.next() {
+                Some(f) => outputs.push((flag.to_string(), PathBuf::from(f))),
+                None => return usage_error(&format!("flow: {flag} needs a FILE")),
+            },
+            other if !other.starts_with('-') && target.is_empty() => {
+                // Accept `agendar`, `agendar.flow.yaml` or `flows/agendar.flow.yaml`.
+                let name = other.replace('\\', "/");
+                let name = name.rsplit('/').next().unwrap_or(&name).to_string();
+                target = name.trim_end_matches(flow::FLOW_SUFFIX).to_string();
+            }
+            _ => return usage_error(USAGE),
+        }
+    }
+    match action.as_str() {
+        "ls" => match flow::list_flows(&dir) {
+            Ok(flows) => {
+                if flows.is_empty() {
+                    println!("No flows yet. Add one in flows/<name>.flow.yaml or from the app.");
+                }
+                for f in flows {
+                    println!("{:<28} {} ({} steps)", f.id, f.name, f.steps.len());
+                }
+                ExitCode::SUCCESS
+            }
+            Err(e) => fail(e),
+        },
+        "show" => match flow::plan(&dir, &target) {
+            Ok(nodes) => {
+                for node in nodes {
+                    let indent = "    ".repeat(node.depth);
+                    let line = match node.kind.as_str() {
+                        "flow" => format!("{indent}{} ↳ flow {}", node.path, node.name),
+                        _ => format!(
+                            "{indent}{} {:<7} {}  {}{}{}",
+                            node.path,
+                            node.method,
+                            node.name,
+                            node.url,
+                            if node.save.is_empty() {
+                                String::new()
+                            } else {
+                                format!("  → saves {}", node.save.join(", "))
+                            },
+                            node.expect
+                                .map(|s| format!("  (expects {s})"))
+                                .unwrap_or_default()
+                        ),
+                    };
+                    println!("{line}");
+                    if let Some(problem) = node.problem {
+                        println!("{indent}    ✗ {problem}");
+                    }
+                }
+                ExitCode::SUCCESS
+            }
+            Err(e) => fail(e),
+        },
+        "run" => {
+            if target.is_empty() {
+                return usage_error("flow run: expected a FLOW (see pulpo flow ls)");
+            }
+            let environment_id = match &env_name {
+                Some(name) => match find_environment(&dir, name, &Keychain) {
+                    Ok(env) => Some(env.id),
+                    Err(e) => return fail(e),
+                },
+                None => None,
+            };
+            let runtime = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(runtime) => runtime,
+                Err(e) => return fail(format!("could not start the runtime: {e}")),
+            };
+            let mut print = |event: &flow::StepEvent| match event.state.as_str() {
+                "skipped" => println!("- {}  skipped", event.path),
+                "running" => {}
+                _ => {
+                    if let Some(report) = &event.report {
+                        print_report(report);
+                    }
+                    for (var, value) in &event.saved {
+                        let shown: String = value.chars().take(40).collect();
+                        println!("    → {var} = {shown}");
+                    }
+                }
+            };
+            let result = runtime.block_on(flow::run_flow(
+                &dir,
+                &target,
+                environment_id.as_deref(),
+                &Keychain,
+                &mut print,
+            ));
+            let report = match result {
+                Ok(report) => report,
+                Err(e) => return fail(e),
+            };
+            let reports = report.run_reports();
+            println!(
+                "\nFlow {}: {}",
+                report.flow,
+                if report.passed { "passed" } else { "failed" }
+            );
+            for (flag, path) in outputs {
+                let text = match flag.as_str() {
+                    "--junit" => report::junit_xml(&report.flow, &reports),
+                    "--html" => report::html_report(&report.flow, &reports, &report::now()),
+                    _ => report::markdown_summary(&report.flow, &reports),
+                };
+                if let Err(e) = std::fs::write(&path, text) {
+                    return fail(format!("{}: {e}", path.display()));
+                }
+                println!("Wrote {}", path.display());
+            }
+            if report.passed {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(1)
+            }
+        }
+        _ => usage_error(USAGE),
     }
 }
 
