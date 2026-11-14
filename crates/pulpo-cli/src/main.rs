@@ -64,6 +64,10 @@ COMMANDS:
                in a loop for DURATION (default 30s; 45, 45s or 2m) and the
                percentiles are printed. With --data, user N uses row N.
                Nothing is saved to the workspace.
+    link <REQUEST> [-w DIR]
+               Print a pulpo:// link to a request, to share in a chat. It names
+               the git repository, not a server: each person's Pulpo opens it
+               in their own clone. `pulpo run <LINK>` runs it.
     code <REQUEST> [-w DIR] [-e ENV] [-l LANG] [--resolve] [--secrets]
                Print the request as code: curl (default), fetch, axios, python,
                java, go, csharp or powershell. Variables stay as {{name}}
@@ -120,6 +124,7 @@ fn main() -> ExitCode {
         Some("import") => run_import(&args[1..]),
         Some("export") => run_export(&args[1..]),
         Some("diff") => run_diff(&args[1..]),
+        Some("link") => run_link(&args[1..]),
         Some("run") => run_run(&args[1..]),
         Some("load") => run_load(&args[1..]),
         Some("code") => run_code(&args[1..]),
@@ -346,6 +351,34 @@ fn run_secret(args: &[String]) -> ExitCode {
     match environment::save_environment(dir, &env, &Keychain) {
         Ok(()) => {
             println!("Stored {name} for {} in the OS keychain.", env.name);
+            ExitCode::SUCCESS
+        }
+        Err(e) => fail(e),
+    }
+}
+
+fn run_link(args: &[String]) -> ExitCode {
+    let mut target = String::new();
+    let mut dir = PathBuf::from(".");
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        match arg.as_str() {
+            "-w" | "--workspace" => match rest.next() {
+                Some(d) => dir = PathBuf::from(d),
+                None => return usage_error("link: -w needs a DIR"),
+            },
+            other if !other.starts_with('-') && target.is_empty() => {
+                target = other.replace('\\', "/")
+            }
+            _ => return usage_error("link: expected <REQUEST> [-w DIR]"),
+        }
+    }
+    if target.is_empty() {
+        return usage_error("link: expected <REQUEST> [-w DIR]");
+    }
+    match pulpo_core::link::make(&dir, &target) {
+        Ok(link) => {
+            println!("{link}");
             ExitCode::SUCCESS
         }
         Err(e) => fail(e),
@@ -873,7 +906,31 @@ fn run_run(args: &[String]) -> ExitCode {
         },
         None => None,
     };
-    let requests = run::requests_under(&workspace.tree, &options.target);
+    // A pulpo:// link runs its request, when it points to this workspace.
+    let target = if options.target.starts_with(pulpo_core::link::SCHEME) {
+        match pulpo_core::link::parse(&options.target) {
+            Ok(link) if pulpo_core::link::matches(dir, &link) => link.request,
+            Ok(link) => {
+                return fail(format!(
+                    "the link points to {} ({}), not to this workspace; use -w with its folder",
+                    if link.name.is_empty() {
+                        "another workspace"
+                    } else {
+                        &link.name
+                    },
+                    if link.repo.is_empty() {
+                        "no repository"
+                    } else {
+                        &link.repo
+                    },
+                ))
+            }
+            Err(e) => return fail(e),
+        }
+    } else {
+        options.target.clone()
+    };
+    let requests = run::requests_under(&workspace.tree, &target);
     if requests.is_empty() {
         return fail(format!("nothing to run at '{}'", options.target));
     }

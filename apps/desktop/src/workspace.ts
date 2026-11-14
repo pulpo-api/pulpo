@@ -395,6 +395,11 @@ export interface Cookie {
 
 export type ExportFormat = "postman" | "openApi" | "http";
 
+export interface LinkTarget {
+  link: { repo: string; workspace: string; name: string; request: string };
+  root: string | null;
+}
+
 export interface DiffItem {
   id: string;
   name: string;
@@ -559,6 +564,12 @@ export interface WorkspaceBackend {
   exportCollection?(root: string, folderId: string, format: ExportFormat): Promise<Exported>;
   /** Desktop only: an environment as a Postman environment. */
   exportEnvironment?(root: string, environmentId: string): Promise<Exported>;
+  /** Desktop only: the pulpo:// link to a request. */
+  requestLink?(root: string, requestId: string): Promise<string>;
+  /** Desktop only: reads a pulpo:// link and finds its workspace among `roots`. */
+  resolveLink?(link: string, roots: string[]): Promise<LinkTarget>;
+  /** Desktop only: links the app was started with, then links clicked while it runs. */
+  onLinks?(handler: (links: string[]) => void): Promise<void>;
   /** Desktop only: git status, branches and the collection's changes since HEAD. */
   gitPanel?(root: string): Promise<GitPanel>;
   gitCommit?(root: string, message: string): Promise<string>;
@@ -674,6 +685,14 @@ const tauriBackend: WorkspaceBackend = {
   },
   stopLoadTest: () => invoke<void>("stop_load_test"),
   importInto: (root, folderId, source) => invoke<ImportSummary>("import_into", { root, folderId, ...source }),
+  requestLink: (root, requestId) => invoke<string>("request_link", { root, requestId }),
+  resolveLink: (link, roots) => invoke<LinkTarget>("resolve_link", { link, roots }),
+  async onLinks(handler) {
+    const { listen } = await import("@tauri-apps/api/event");
+    await listen<string[]>("pulpo-link", (event) => handler(event.payload));
+    const startup = await invoke<string[]>("startup_links");
+    if (startup.length) handler(startup);
+  },
   gitPanel: (root) => invoke<GitPanel>("git_panel", { root }),
   gitCommit: (root, message) => invoke<string>("git_commit", { root, message }),
   gitSwitch: (root, branch, create) => invoke<void>("git_switch", { root, branch, create }),

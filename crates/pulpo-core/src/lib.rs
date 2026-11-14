@@ -22,6 +22,7 @@ pub mod http;
 pub mod import;
 #[cfg(feature = "keychain")]
 pub mod keychain;
+pub mod link;
 pub mod load;
 pub mod local;
 pub mod oauth;

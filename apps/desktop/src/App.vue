@@ -54,6 +54,27 @@ interface HistoryEntry {
 type RequestNode = Extract<TreeNode, { type: "request" }>;
 
 const LAST_ROOT = "pulpo.lastWorkspace";
+const RECENT_ROOTS = "pulpo.recentWorkspaces";
+
+/** Workspaces opened on this machine, newest first: where pulpo:// links are looked for. */
+function recentRoots(): string[] {
+  try {
+    const list = JSON.parse(localStorage.getItem(RECENT_ROOTS) ?? "[]");
+    return Array.isArray(list) ? list.filter((r): r is string => typeof r === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function rememberRoot(root: string) {
+  try {
+    localStorage.setItem(LAST_ROOT, root);
+    const list = [root, ...recentRoots().filter((r) => r !== root)].slice(0, 20);
+    localStorage.setItem(RECENT_ROOTS, JSON.stringify(list));
+  } catch {
+    /* storage unavailable: links then ask for the folder */
+  }
+}
 
 const workspace = ref<Workspace | null>(null);
 const saved = reactive(new Map<string, string>());
@@ -177,6 +198,64 @@ function addTest(code: string) {
   const current = node.scripts.test.trimEnd();
   node.scripts.test = current ? `${current}\n\n${code}` : code;
   flash("Test added: see the Tests tab, then save");
+}
+
+/** A pulpo:// link waiting for its workspace folder to be picked. */
+const pendingLink = ref<{ text: string; name: string; repo: string; workspace: string } | null>(null);
+
+async function copyLink(id: string) {
+  const ws = workspace.value;
+  if (!ws || !backend.requestLink) return;
+  try {
+    await navigator.clipboard.writeText(await backend.requestLink(ws.root, id));
+    flash("Link copied: whoever has this repository can open it in Pulpo");
+  } catch (e) {
+    problem.value = { kind: "io", message: String(e) };
+  }
+}
+
+/** Opens the request of a pulpo:// link, in this workspace or another known one. */
+async function followLink(text: string, roots = recentRoots()) {
+  if (!backend.resolveLink) return;
+  try {
+    const current = workspace.value?.root;
+    const candidates = current ? [current, ...roots.filter((r) => r !== current)] : roots;
+    const target = await backend.resolveLink(text, candidates);
+    if (!target.root) {
+      pendingLink.value = { text, ...target.link };
+      return;
+    }
+    pendingLink.value = null;
+    if (target.root !== current) {
+      if (dirty.value.size) {
+        problem.value = {
+          kind: "io",
+          message: `Save your ${dirty.value.size} unsaved request(s) first (Ctrl+S): the link opens another workspace.`,
+        };
+        return;
+      }
+      await openRoot(target.root);
+    }
+    const node = requests.value.find((n) => n.id === target.link.request);
+    if (node) select(toEntry(node));
+    else problem.value = { kind: "io", message: `The link's request is not in this workspace any more (${target.link.request}).` };
+  } catch (e) {
+    problem.value = { kind: "io", message: String(e) };
+  }
+}
+
+/** The link's workspace is not known here yet: the user points at their clone. */
+async function pickLinkFolder() {
+  const pending = pendingLink.value;
+  const root = await backend.pickFolder();
+  if (!pending || !root) return;
+  const target = await backend.resolveLink!(pending.text, [root]);
+  if (target.root) await followLink(pending.text, [root]);
+  else
+    problem.value = {
+      kind: "io",
+      message: `That folder is not ${pending.name || "the link's workspace"}${pending.repo ? ` (${pending.repo}${pending.workspace ? `, folder ${pending.workspace}` : ""})` : ""}.`,
+    };
 }
 
 /** "Copy as curl" from the tree: no variables resolved, no secrets. */
@@ -455,7 +534,7 @@ function adopt(ws: Workspace) {
 async function openRoot(root: string) {
   try {
     adopt(await backend.open(root));
-    localStorage.setItem(LAST_ROOT, root);
+    rememberRoot(root);
   } catch (e) {
     problem.value = asCollectionError(e);
   }
@@ -472,7 +551,7 @@ async function createWorkspace() {
   const name = root.split(/[\\/]/).filter(Boolean).pop() ?? "My API";
   try {
     adopt(await backend.init(root, name));
-    localStorage.setItem(LAST_ROOT, root);
+    rememberRoot(root);
   } catch (e) {
     problem.value = asCollectionError(e);
   }
@@ -682,6 +761,10 @@ onMounted(async () => {
   info.value = await coreInfo();
   const last = backend.persistent ? localStorage.getItem(LAST_ROOT) : "memory";
   if (last) await openRoot(last);
+  void backend.onLinks?.((links) => {
+    const last = links[links.length - 1];
+    if (last) void followLink(last);
+  });
 });
 
 onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
@@ -710,6 +793,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       @move="moveNode"
       @edit-folder="editingFolder = $event"
       @copy-curl="copyCurl"
+      @copy-link="copyLink"
+      @link="followLink"
       @add-example="addExample"
       @run-folder="openRunner"
     />
@@ -886,6 +971,20 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       @open="openFromTokens"
       @close="showTokens = false"
     />
+
+    <div v-if="pendingLink" class="link-ask card" role="alertdialog" aria-label="Open link">
+      <p>
+        This link opens <b>{{ pendingLink.name || pendingLink.text }}</b>
+        <template v-if="pendingLink.repo">
+          from <code>{{ pendingLink.repo }}</code><template v-if="pendingLink.workspace">, folder <code>{{ pendingLink.workspace }}</code></template>
+        </template>.
+        Pick that folder in your clone once; Pulpo remembers it.
+      </p>
+      <div class="link-actions">
+        <button class="ghost" @click="pendingLink = null">Cancel</button>
+        <button class="primary" @click="pickLinkFolder">Choose folder…</button>
+      </div>
+    </div>
 
     <GitPanel
       v-if="showGit && workspace"
@@ -1162,5 +1261,24 @@ main > :deep(.viewer) {
 }
 .tab.preview .tab-name {
   font-style: italic;
+}
+.link-ask {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 11;
+  max-width: min(440px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 13px;
+}
+.link-ask p {
+  margin: 0;
+}
+.link-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 </style>

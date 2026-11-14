@@ -18,7 +18,7 @@ use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
 /// Set to stop the running load test.
 #[derive(Default)]
@@ -464,6 +464,51 @@ async fn oauth_discover(issuer: String) -> Result<Discovery, String> {
     oauth::discover(&issuer, &Settings::default()).await
 }
 
+/// The pulpo:// link to a request.
+#[tauri::command]
+async fn request_link(root: String, request_id: String) -> Result<String, String> {
+    pulpo_core::link::make(Path::new(&root), &request_id)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LinkTarget {
+    link: pulpo_core::link::Link,
+    /// The first of the given workspaces the link points to.
+    root: Option<String>,
+}
+
+/// Reads a pulpo:// link and finds its workspace among `roots` (the recent ones).
+#[tauri::command]
+async fn resolve_link(link: String, roots: Vec<String>) -> Result<LinkTarget, String> {
+    blocking(move || {
+        let link = pulpo_core::link::parse(&link)?;
+        let root = pulpo_core::link::find(&roots, &link).map(str::to_string);
+        Ok(LinkTarget { link, root })
+    })
+    .await
+}
+
+/// pulpo:// links the app was started with (clicked while it was closed).
+#[derive(Default)]
+struct StartupLinks(std::sync::Mutex<Vec<String>>);
+
+#[tauri::command]
+fn startup_links(state: tauri::State<'_, StartupLinks>) -> Vec<String> {
+    state
+        .0
+        .lock()
+        .map(|mut links| std::mem::take(&mut *links))
+        .unwrap_or_default()
+}
+
+fn links_in<I: IntoIterator<Item = String>>(items: I) -> Vec<String> {
+    items
+        .into_iter()
+        .filter(|a| a.starts_with(pulpo_core::link::SCHEME))
+        .collect()
+}
+
 /// What the git panel shows: status, branches and the collection's changes since HEAD.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -595,9 +640,50 @@ async fn oauth_forget_key(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // Must be the first plugin: a second launch hands its pulpo:// link to this window.
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+        let links = links_in(argv);
+        if !links.is_empty() {
+            let _ = app.emit("pulpo-link", links);
+        }
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+        }
+    }));
+    builder
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(LoadStop::default())
+        .manage(StartupLinks(std::sync::Mutex::new(links_in(
+            std::env::args().skip(1),
+        ))))
+        .setup(|app| {
+            use tauri_plugin_deep_link::DeepLinkExt;
+            // Installers register the scheme; this covers portable builds and `tauri dev`.
+            #[cfg(any(windows, target_os = "linux"))]
+            let _ = app.deep_link().register_all();
+            if let Ok(Some(urls)) = app.deep_link().get_current() {
+                if let Ok(mut links) = app.state::<StartupLinks>().0.lock() {
+                    for url in links_in(urls.iter().map(|u| u.to_string())) {
+                        if !links.contains(&url) {
+                            links.push(url);
+                        }
+                    }
+                }
+            }
+            let handle = app.handle().clone();
+            // macOS sends links to the running app this way.
+            app.deep_link().on_open_url(move |event| {
+                let links = links_in(event.urls().iter().map(|u| u.to_string()));
+                if !links.is_empty() {
+                    let _ = handle.emit("pulpo-link", links);
+                }
+            });
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             core_info,
             send_http,
@@ -654,7 +740,10 @@ pub fn run() {
             git_commit,
             git_switch,
             git_pull,
-            git_push
+            git_push,
+            request_link,
+            resolve_link,
+            startup_links
         ])
         .run(tauri::generate_context!())
         .expect("error while running Pulpo");

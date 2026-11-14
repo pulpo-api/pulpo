@@ -271,6 +271,17 @@ Request by request, not line by line: moved and renamed requests are recognised,
 
 In the desktop app, **⑂** next to the collection name opens the git panel: the same request-by-request changes since the last commit (click one to open it), commit, switch or create a branch, pull and push. It uses your own `git` and its credentials, and only ever commits files of the workspace.
 
+## Share a link to a request
+
+Right-click a request → *Copy link*, or in a terminal:
+
+```bash
+pulpo link orders/01-create-order.pulpo.yaml
+# pulpo://open?repo=github.com/acme/shop&ws=api&request=orders/01-create-order.pulpo.yaml&name=Shop
+```
+
+Paste it in a chat. Clicking it opens Pulpo on that request, in your teammate's own clone: the link names the git repository (its `origin` remote, so SSH host aliases still match) and the folder inside it, not a server. The first time, Pulpo asks for the folder of that clone and then remembers it. You can also paste a link in the search box (Ctrl+K), or run it with `pulpo run <link>`.
+
 ## Export: nobody is tied to Pulpo
 
 ```bash

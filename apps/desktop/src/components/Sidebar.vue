@@ -24,6 +24,8 @@ const emit = defineEmits<{
   move: [id: string, target: string, index: number];
   editFolder: [id: string];
   copyCurl: [id: string];
+  copyLink: [id: string];
+  link: [text: string];
   addExample: [id: string];
   runFolder: [id: string];
   export: [id: string];
@@ -146,6 +148,7 @@ function act(
     | "newFolder"
     | "edit"
     | "curl"
+    | "link"
     | "example"
     | "run"
     | "export",
@@ -160,6 +163,7 @@ function act(
   if (action === "rename") startRenaming(node.id, node.name);
   else if (action === "edit") emit("editFolder", node.id);
   else if (action === "curl") emit("copyCurl", node.id);
+  else if (action === "link") emit("copyLink", node.id);
   else if (action === "example") emit("addExample", node.id);
   else if (action === "run") emit("runFolder", node.id);
   else if (action === "export") emit("export", node.id);
@@ -216,9 +220,10 @@ function confirm() {
         v-model="query"
         class="search"
         type="search"
-        placeholder="Search requests  (Ctrl+K)"
+        placeholder="Search requests, or paste a pulpo:// link  (Ctrl+K)"
         spellcheck="false"
         @keydown.esc="query = ''"
+        @keydown.enter="query.trim().startsWith('pulpo://') && (emit('link', query.trim()), (query = ''))"
       />
       <input
         v-if="creating"
@@ -259,6 +264,9 @@ function confirm() {
         <button role="menuitem" @click="act('rename')">Rename <kbd>F2</kbd></button>
         <button role="menuitem" @click="act('duplicate')">Duplicate</button>
         <button v-if="menu.node.type === 'request'" role="menuitem" @click="act('curl')">Copy as curl</button>
+        <button v-if="menu.node.type === 'request' && persistent" role="menuitem" @click="act('link')">
+          Copy link (pulpo://)
+        </button>
         <button v-if="menu.node.type === 'request'" role="menuitem" @click="act('example')">Add example</button>
         <template v-if="menu.node.type === 'folder'">
           <button role="menuitem" @click="act('run')">Run folder…</button>

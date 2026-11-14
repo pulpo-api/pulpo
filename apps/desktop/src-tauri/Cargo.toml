@@ -20,6 +20,11 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
+tauri-plugin-deep-link = "2"
 serde.workspace = true
 serde_json.workspace = true
 pulpo-core = { workspace = true, features = ["keychain"] }
+
+# Desktop only: a second launch (a pulpo:// link clicked in a chat) goes to the open window.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
