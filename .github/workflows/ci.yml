@@ -85,7 +85,14 @@ jobs:
       # The runner and the GitHub Action (actions/run) against the same echo server:
       # data iterations, snapshots and a JSON Schema check.
       - name: Start the echo server for the runner
-        run: nohup python3 tests/codegen/echo.py 8765 > /dev/null 2>&1 &
+        run: |
+          nohup python3 tests/codegen/echo.py 8765 > /dev/null 2>&1 &
+          for _ in $(seq 50); do
+            curl -s -o /dev/null http://127.0.0.1:8765/ && exit 0
+            sleep 0.2
+          done
+          echo "the echo server did not start" >&2
+          exit 1
 
       - name: Run a collection with the Pulpo action
         id: pulpo
