@@ -251,6 +251,17 @@ Recognised automatically:
 
 Scripts written for Bruno (`bru.*`) or Hoppscotch (`pw.*`) are kept as a comment to rewrite, so nothing breaks when they run. Anything that cannot be imported is listed as a warning. In the desktop app, use **Import** in the sidebar.
 
+## Export: nobody is tied to Pulpo
+
+```bash
+pulpo export postman -o shop.postman_collection.json   # folders, auth, scripts, examples
+pulpo export openapi orders -o orders.openapi.yaml      # one folder, as OpenAPI 3
+pulpo export http > requests.http                       # VS Code REST Client / JetBrains
+pulpo export env Local -o local.postman_environment.json
+```
+
+In the app: **⇪** next to the collection name, or right-click a folder → *Export folder…*. Postman exports also open in Insomnia and Bruno. Folder headers go on each request (Postman has none), variables stay as `{{name}}` and secret values are never written.
+
 ## Roadmap
 
 | Phase | Goal |

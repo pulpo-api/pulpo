@@ -29,8 +29,17 @@ COMMANDS:
                Rewrite workspace files in canonical form
                (--check only lists them and fails if any would change)
     import <FILE|-> [DIR] [--into FOLDER]
-               Import a Postman collection or environment, an OpenAPI 3
-               document or a curl command (use - to read it from stdin)
+               Import a Postman, Insomnia, Bruno or Hoppscotch collection, a
+               Postman environment, an OpenAPI 3 document, a HAR or .http file
+               or a curl command (use - to read it from stdin). For Bruno, give
+               its bruno.json.
+    export <postman|openapi|http> [FOLDER] [-w DIR] [-o FILE]
+               Export the workspace (or one folder) as a Postman v2.1
+               collection, an OpenAPI 3 document or a .http file. Prints it,
+               or writes FILE.
+    export env <ENV> [-w DIR] [-o FILE]
+               Export an environment as a Postman environment (secret values
+               are left empty)
     run [TARGET] [-w DIR] [-e ENV] [options]
                Run requests with their scripts and tests, in order. TARGET is a
                request or folder path inside the workspace (default: all).
@@ -104,6 +113,7 @@ fn main() -> ExitCode {
         Some("env") => run_env(&args[1..]),
         Some("secret") => run_secret(&args[1..]),
         Some("import") => run_import(&args[1..]),
+        Some("export") => run_export(&args[1..]),
         Some("run") => run_run(&args[1..]),
         Some("load") => run_load(&args[1..]),
         Some("code") => run_code(&args[1..]),
@@ -336,6 +346,69 @@ fn run_secret(args: &[String]) -> ExitCode {
     }
 }
 
+fn run_export(args: &[String]) -> ExitCode {
+    const USAGE: &str =
+        "export: expected <postman|openapi|http> [FOLDER] [-w DIR] [-o FILE] or env <ENV> [-w DIR] [-o FILE]";
+    let Some(kind) = args.first() else {
+        return usage_error(USAGE);
+    };
+    let mut target = String::new();
+    let mut dir = PathBuf::from(".");
+    let mut output: Option<PathBuf> = None;
+    let mut rest = args.iter().skip(1);
+    while let Some(arg) = rest.next() {
+        match arg.as_str() {
+            "-w" | "--workspace" => match rest.next() {
+                Some(d) => dir = PathBuf::from(d),
+                None => return usage_error("export: -w needs a DIR"),
+            },
+            "-o" | "--output" => match rest.next() {
+                Some(f) => output = Some(PathBuf::from(f)),
+                None => return usage_error("export: -o needs a FILE"),
+            },
+            other if !other.starts_with('-') && target.is_empty() => {
+                target = other.replace('\\', "/").trim_matches('/').to_string()
+            }
+            _ => return usage_error(USAGE),
+        }
+    }
+    let exported = if kind == "env" {
+        if target.is_empty() {
+            return usage_error("export env: expected an ENV name");
+        }
+        match find_environment(&dir, &target, &Keychain) {
+            Ok(env) => pulpo_core::export::export_environment(&dir, &env.id, &Keychain)
+                .map_err(|e| e.to_string()),
+            Err(e) => Err(e.to_string()),
+        }
+    } else {
+        let Some(format) = pulpo_core::export::ExportFormat::parse(kind) else {
+            return usage_error(USAGE);
+        };
+        pulpo_core::export::export(&dir, &target, format).map_err(|e| e.to_string())
+    };
+    let exported = match exported {
+        Ok(exported) => exported,
+        Err(e) => return fail(e),
+    };
+    for warning in &exported.warnings {
+        eprintln!("warning: {warning}");
+    }
+    match output {
+        Some(path) => match std::fs::write(&path, &exported.text) {
+            Ok(()) => {
+                eprintln!("Wrote {} ({} requests)", path.display(), exported.requests);
+                ExitCode::SUCCESS
+            }
+            Err(e) => fail(format!("{}: {e}", path.display())),
+        },
+        None => {
+            print!("{}", exported.text);
+            ExitCode::SUCCESS
+        }
+    }
+}
+
 fn run_import(args: &[String]) -> ExitCode {
     let Some(source) = args.first() else {
         return usage_error("import: expected <FILE|-> [DIR] [--into FOLDER]");
@@ -353,11 +426,12 @@ fn run_import(args: &[String]) -> ExitCode {
         }
         text
     } else {
-        match std::fs::read_to_string(source) {
-            Ok(text) => text,
-            Err(e) => return fail(format!("{source}: {e}")),
-        }
+        // parse_file reads it (a Bruno collection is a folder).
+        String::new()
     };
+    if source != "-" && !Path::new(source).exists() {
+        return fail(format!("{source}: no such file or folder"));
+    }
     if !dir.join(collection::WORKSPACE_FILE).is_file() {
         let name = default_name(&dir);
         if let Err(e) = collection::init_workspace(&dir, &name) {

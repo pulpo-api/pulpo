@@ -464,6 +464,32 @@ async fn oauth_discover(issuer: String) -> Result<Discovery, String> {
     oauth::discover(&issuer, &Settings::default()).await
 }
 
+/// Exports a folder ("" = the workspace) as Postman, OpenAPI or a .http file.
+#[tauri::command]
+async fn export_collection(
+    root: String,
+    folder_id: String,
+    format: pulpo_core::export::ExportFormat,
+) -> Result<pulpo_core::export::Exported, String> {
+    pulpo_core::export::export(Path::new(&root), &folder_id, format).map_err(|e| e.to_string())
+}
+
+/// Exports an environment as a Postman environment (secret values left empty).
+#[tauri::command]
+async fn export_environment(
+    root: String,
+    environment_id: String,
+) -> Result<pulpo_core::export::Exported, String> {
+    pulpo_core::export::export_environment(Path::new(&root), &environment_id, &Keychain)
+        .map_err(|e| e.to_string())
+}
+
+/// Writes an export where the user chose in the save dialog.
+#[tauri::command]
+async fn write_text_file(path: String, text: String) -> Result<(), String> {
+    std::fs::write(&path, text).map_err(|e| format!("{path}: {e}"))
+}
+
 /// Every cached OAuth 2.0 token of an environment and the requests that use it.
 #[tauri::command]
 async fn oauth_tokens(
@@ -561,7 +587,10 @@ pub fn run() {
             oauth_tokens,
             oauth_renew,
             oauth_revoke,
-            oauth_forget_key
+            oauth_forget_key,
+            export_collection,
+            export_environment,
+            write_text_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running Pulpo");

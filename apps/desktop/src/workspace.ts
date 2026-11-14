@@ -393,6 +393,15 @@ export interface Cookie {
   sameSite: string | null;
 }
 
+export type ExportFormat = "postman" | "openApi" | "http";
+
+export interface Exported {
+  text: string;
+  fileName: string;
+  requests: number;
+  warnings: string[];
+}
+
 export interface ImportSummary {
   format:
     | "postmanCollection"
@@ -515,6 +524,12 @@ export interface WorkspaceBackend {
   /** Desktop only: imports a file (or pasted text) with the Rust importers. */
   importInto?(root: string, folderId: string, source: { path?: string; text?: string }): Promise<ImportSummary>;
   pickImportFile?(): Promise<string | null>;
+  /** Desktop only: a folder ("" = everything) as Postman, OpenAPI or a .http file. */
+  exportCollection?(root: string, folderId: string, format: ExportFormat): Promise<Exported>;
+  /** Desktop only: an environment as a Postman environment. */
+  exportEnvironment?(root: string, environmentId: string): Promise<Exported>;
+  /** Desktop only: asks where to save and writes the text; false when cancelled. */
+  saveTextFile?(defaultName: string, text: string): Promise<boolean>;
   /** Desktop only: picks a file to upload and returns its absolute path. */
   pickUploadFile?(): Promise<string | null>;
   /** Sends the request with its scripts; `entry` may contain unsaved edits. */
@@ -622,11 +637,20 @@ const tauriBackend: WorkspaceBackend = {
   },
   stopLoadTest: () => invoke<void>("stop_load_test"),
   importInto: (root, folderId, source) => invoke<ImportSummary>("import_into", { root, folderId, ...source }),
+  exportCollection: (root, folderId, format) => invoke<Exported>("export_collection", { root, folderId, format }),
+  exportEnvironment: (root, environmentId) => invoke<Exported>("export_environment", { root, environmentId }),
+  async saveTextFile(defaultName, text) {
+    const { save } = await import("@tauri-apps/plugin-dialog");
+    const path = await save({ defaultPath: defaultName, title: "Export" });
+    if (!path) return false;
+    await invoke("write_text_file", { path, text });
+    return true;
+  },
   async pickImportFile() {
     const { open } = await import("@tauri-apps/plugin-dialog");
     const picked = await open({
       multiple: false,
-      title: "Import a collection, environment, OpenAPI document, HAR, .http or curl file",
+      title: "Import a collection, environment, OpenAPI document, HAR, .http or curl file (for Bruno, its bruno.json)",
       filters: [
         {
           name: "Collections and specs",

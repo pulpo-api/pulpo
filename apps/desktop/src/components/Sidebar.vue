@@ -26,6 +26,7 @@ const emit = defineEmits<{
   copyCurl: [id: string];
   addExample: [id: string];
   runFolder: [id: string];
+  export: [id: string];
 }>();
 
 const query = ref("");
@@ -136,7 +137,17 @@ function countRequests(node: TreeNode): number {
 }
 
 function act(
-  action: "rename" | "duplicate" | "delete" | "newRequest" | "newFolder" | "edit" | "curl" | "example" | "run",
+  action:
+    | "rename"
+    | "duplicate"
+    | "delete"
+    | "newRequest"
+    | "newFolder"
+    | "edit"
+    | "curl"
+    | "example"
+    | "run"
+    | "export",
 ) {
   const node = menu.value?.node;
   if (!node) return;
@@ -150,6 +161,7 @@ function act(
   else if (action === "curl") emit("copyCurl", node.id);
   else if (action === "example") emit("addExample", node.id);
   else if (action === "run") emit("runFolder", node.id);
+  else if (action === "export") emit("export", node.id);
   else if (action === "duplicate") emit("duplicate", node.id);
   else if (action === "delete") emit("delete", node);
   else {
@@ -187,12 +199,15 @@ function confirm() {
           ▶
         </button>
         <button class="icon" title="Collection headers, auth, settings and scripts" @click="emit('editFolder', '')">⚙</button>
+        <button class="icon" title="Export as Postman, OpenAPI or a .http file" @click="emit('export', '')">⇪</button>
         <button v-if="persistent" class="icon" title="Open another folder" @click="emit('open')">⇄</button>
       </div>
       <div class="actions">
         <button @click="start('request')">+ Request</button>
         <button @click="start('folder')">+ Folder</button>
-        <button title="Import Postman, OpenAPI or curl" @click="emit('import')">Import</button>
+        <button title="Import Postman, Insomnia, Bruno, Hoppscotch, OpenAPI, HAR, .http or curl" @click="emit('import')">
+          Import
+        </button>
       </div>
       <input
         ref="searchBox"
@@ -246,6 +261,7 @@ function confirm() {
         <template v-if="menu.node.type === 'folder'">
           <button role="menuitem" @click="act('run')">Run folder…</button>
           <button role="menuitem" @click="act('edit')">Headers, auth, settings…</button>
+          <button role="menuitem" @click="act('export')">Export folder…</button>
           <button role="menuitem" @click="act('newRequest')">New request here</button>
           <button role="menuitem" @click="act('newFolder')">New folder here</button>
         </template>

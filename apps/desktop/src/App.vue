@@ -11,6 +11,7 @@ import FolderEditor from "./components/FolderEditor.vue";
 import RunnerPanel from "./components/RunnerPanel.vue";
 import CodePanel from "./components/CodePanel.vue";
 import ImportDialog from "./components/ImportDialog.vue";
+import ExportDialog from "./components/ExportDialog.vue";
 import { resolveText } from "./variables";
 import { applyPathParams } from "./params";
 import { applyAuth, asSendError, coreInfo, resolveAuth, type CoreInfo, type HttpResponse, type SendError } from "./core";
@@ -66,6 +67,8 @@ const sidebar = ref<InstanceType<typeof Sidebar> | null>(null);
 const showShortcuts = ref(false);
 const problem = ref<CollectionError | null>(null);
 const showImport = ref(false);
+/** Folder being exported ("" = the whole collection); null = dialog closed. */
+const exporting = ref<string | null>(null);
 const importDialog = ref<InstanceType<typeof ImportDialog> | null>(null);
 const importBlocked = computed(() =>
   dirty.value.size ? `Save your ${dirty.value.size} unsaved request(s) first (Ctrl+S), so the import does not overwrite them.` : null,
@@ -697,6 +700,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       @new-request="newRequest"
       @new-folder="newFolder"
       @import="showImport = true"
+      @export="exporting = $event"
       @rename="renameNode"
       @duplicate="duplicateNode"
       @delete="deleteNode"
@@ -878,6 +882,14 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       :names="requestNames"
       @open="openFromTokens"
       @close="showTokens = false"
+    />
+
+    <ExportDialog
+      v-if="exporting !== null && workspace"
+      :root="workspace.root"
+      :folder-id="exporting"
+      :environments="environments"
+      @close="exporting = null"
     />
 
     <ImportDialog
