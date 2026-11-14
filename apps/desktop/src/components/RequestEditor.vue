@@ -64,7 +64,7 @@ const auth = computed({
     props.request.auth = value;
   },
 });
-const SHORT: Record<string, string> = { bearer: "Bearer", basic: "Basic", apiKey: "Key", oauth2: "OAuth" };
+const SHORT: Record<string, string> = { bearer: "Bearer", basic: "Basic", apiKey: "Key", oauth2: "OAuth", digest: "Digest", awsV4: "AWS", hawk: "Hawk", ntlm: "NTLM" };
 const authBadge = computed(() => {
   const own = props.request.auth;
   if (own) return SHORT[own.type] ?? "";

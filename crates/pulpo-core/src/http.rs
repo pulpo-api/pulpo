@@ -167,6 +167,14 @@ pub enum Auth {
     /// The token is obtained (and cached) when the request runs; see [`crate::oauth`].
     #[serde(rename = "oauth2")]
     OAuth2(crate::oauth::OAuth2),
+    /// Answers the server's challenge (a second request).
+    Digest(crate::signing::DigestAuth),
+    /// AWS Signature v4, computed over the request when it is sent.
+    #[serde(rename = "awsV4")]
+    AwsV4(crate::signing::AwsV4),
+    Hawk(crate::signing::Hawk),
+    /// NTLMv2 handshake on one connection (HTTP/1.1).
+    Ntlm(crate::signing::Ntlm),
 }
 
 impl Auth {
@@ -177,6 +185,10 @@ impl Auth {
             Auth::Basic { .. } => "Basic",
             Auth::ApiKey { .. } => "API key",
             Auth::OAuth2(_) => "OAuth 2.0",
+            Auth::Digest(_) => "Digest",
+            Auth::AwsV4(_) => "AWS Signature",
+            Auth::Hawk(_) => "Hawk",
+            Auth::Ntlm(_) => "NTLM",
         }
     }
 }
@@ -207,8 +219,14 @@ pub fn apply_auth(url: &mut String, headers: &mut Vec<Header>, auth: &Auth) {
             .any(|h| h.enabled && h.name.eq_ignore_ascii_case(name))
     };
     match auth {
-        // The runner swaps it for the token before sending.
-        Auth::None | Auth::OAuth2(_) => {}
+        // The runner swaps it for the token before sending; the others are computed by
+        // `send_with` over the built request.
+        Auth::None
+        | Auth::OAuth2(_)
+        | Auth::Digest(_)
+        | Auth::AwsV4(_)
+        | Auth::Hawk(_)
+        | Auth::Ntlm(_) => {}
         Auth::Bearer { token } => {
             if !has(headers, "authorization") {
                 headers.push(Header::new("Authorization", format!("Bearer {token}")));
@@ -769,6 +787,10 @@ pub async fn send_with(
     if let Some(jar) = &jar {
         client = client.cookie_provider(jar.clone());
     }
+    // NTLM authenticates the connection, which HTTP/2 does not allow.
+    if matches!(request.auth, Some(Auth::Ntlm(_))) {
+        client = client.http1_only();
+    }
     let client = client.build()?;
     let mut sent_body: Option<String> = None;
 
@@ -869,11 +891,94 @@ pub async fn send_with(
         builder = builder.body(body.clone());
     }
 
-    let built = builder.build()?;
-    let sent = describe_sent(&built, sent_body, &stopped, jar.as_deref());
+    let mut built = builder.build()?;
+    // A header written by hand wins over the auth.
+    let signed = request
+        .auth
+        .as_ref()
+        .filter(|_| !has_header("authorization"));
+    let now = crate::oauth::now();
+    let challenged = match signed {
+        Some(Auth::AwsV4(config)) => {
+            crate::signing::sign_aws(&mut built, config, now).map_err(SendError::Other)?;
+            None
+        }
+        Some(Auth::Hawk(config)) => {
+            crate::signing::sign_hawk(&mut built, config, now).map_err(SendError::Other)?;
+            None
+        }
+        Some(auth @ (Auth::Digest(_) | Auth::Ntlm(_))) => {
+            let retry = built.try_clone().ok_or_else(|| {
+                SendError::Other(format!(
+                    "{} cannot send a multipart body twice; use a raw body or a file",
+                    auth.label()
+                ))
+            })?;
+            if matches!(auth, Auth::Ntlm(_)) {
+                built.headers_mut().insert(
+                    reqwest::header::AUTHORIZATION,
+                    reqwest::header::HeaderValue::from_str(&format!(
+                        "NTLM {}",
+                        crate::signing::ntlm_negotiate()
+                    ))
+                    .map_err(|e| SendError::Other(e.to_string()))?,
+                );
+            }
+            Some((auth, retry))
+        }
+        _ => None,
+    };
+    let mut sent = describe_sent(&built, sent_body.clone(), &stopped, jar.as_deref());
 
     let started = Instant::now();
-    let response = client.execute(built).await?;
+    let mut response = client.execute(built).await?;
+    if let Some((auth, mut retry)) = challenged {
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            let offered: Vec<String> = response
+                .headers()
+                .get_all(reqwest::header::WWW_AUTHENTICATE)
+                .iter()
+                .map(|v| String::from_utf8_lossy(v.as_bytes()).into_owned())
+                .collect();
+            let answer = match auth {
+                Auth::Digest(config) => {
+                    crate::signing::find_challenge(&offered, "Digest").map(|challenge| {
+                        let uri = match retry.url().query() {
+                            Some(q) => format!("{}?{q}", retry.url().path()),
+                            None => retry.url().path().to_string(),
+                        };
+                        let body = retry.body().and_then(|b| b.as_bytes()).map(<[u8]>::to_vec);
+                        let cnonce = uuid::Uuid::new_v4().simple().to_string();
+                        crate::signing::digest_header(
+                            config,
+                            challenge,
+                            retry.method().as_str(),
+                            &uri,
+                            body.as_deref(),
+                            &cnonce[..16],
+                            1,
+                        )
+                    })
+                }
+                Auth::Ntlm(config) => crate::signing::find_challenge(&offered, "NTLM")
+                    .filter(|challenge| !challenge.is_empty())
+                    .map(|challenge| crate::signing::ntlm_authenticate(config, challenge, now)),
+                _ => None,
+            };
+            if let Some(answer) = answer {
+                let answer = answer.map_err(SendError::Other)?;
+                // Read the first answer so that the connection can be used again.
+                response.bytes().await?;
+                retry.headers_mut().insert(
+                    reqwest::header::AUTHORIZATION,
+                    reqwest::header::HeaderValue::from_str(&answer)
+                        .map_err(|e| SendError::Other(e.to_string()))?,
+                );
+                sent = describe_sent(&retry, sent_body, &stopped, jar.as_deref());
+                response = client.execute(retry).await?;
+            }
+        }
+    }
     let first_byte_ms = started.elapsed().as_millis() as u64;
     let final_url = response.url().to_string();
     let status = response.status();
@@ -1377,6 +1482,110 @@ connection: close
             }
         });
         format!("http://{address}")
+    }
+
+    /// Answers the first request with a 401 challenge and the next one, on the same
+    /// connection, with 200 and the `Authorization` it got.
+    async fn challenge_server(challenge: &'static str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buffer = [0u8; 8192];
+            for round in 0..2 {
+                let read = socket.read(&mut buffer).await.unwrap();
+                let text = String::from_utf8_lossy(&buffer[..read]).to_string();
+                let auth = text
+                    .lines()
+                    .find_map(|l| {
+                        l.to_ascii_lowercase()
+                            .starts_with("authorization:")
+                            .then(|| l[14..].trim().to_string())
+                    })
+                    .unwrap_or_default();
+                let reply = if round == 0 {
+                    format!(
+                        "HTTP/1.1 401 Unauthorized\r\nwww-authenticate: {challenge}\r\n\
+                         content-length: 4\r\n\r\nnope"
+                    )
+                } else {
+                    format!(
+                        "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{auth}",
+                        auth.len()
+                    )
+                };
+                socket.write_all(reply.as_bytes()).await.unwrap();
+            }
+        });
+        format!("http://{address}")
+    }
+
+    #[tokio::test]
+    async fn answers_a_digest_challenge() {
+        let base =
+            challenge_server(r#"Digest realm="r", nonce="n1", qop="auth", opaque="o""#).await;
+        let mut request = HttpRequest::new(HttpMethod::Get, format!("{base}/x?a=1"));
+        request.auth = Some(Auth::Digest(crate::signing::DigestAuth {
+            username: "ana".into(),
+            password: "pw".into(),
+        }));
+        let response = send(&request).await.unwrap();
+        assert_eq!(response.status, 200);
+        assert!(
+            response
+                .body
+                .starts_with(r#"Digest username="ana", realm="r", nonce="n1", uri="/x?a=1""#),
+            "{}",
+            response.body
+        );
+        assert!(response.body.contains(r#"opaque="o""#));
+        let sent = response.sent.unwrap();
+        assert!(sent.headers.iter().any(|h| h.value.starts_with("Digest ")));
+    }
+
+    #[tokio::test]
+    async fn completes_the_ntlm_handshake_on_one_connection() {
+        // A minimal challenge: no target name, no target info.
+        let base =
+            challenge_server("NTLM TlRMTVNTUAACAAAAAAAAAAAAAAAFgoIACQkJCQkJCQkAAAAAAAAAAA==").await;
+        let mut request = HttpRequest::new(HttpMethod::Post, format!("{base}/x"));
+        request.body = Some("hi".into());
+        request.auth = Some(Auth::Ntlm(crate::signing::Ntlm {
+            username: "ana".into(),
+            password: "pw".into(),
+            domain: "CORP".into(),
+            workstation: String::new(),
+        }));
+        let response = send(&request).await.unwrap();
+        assert_eq!(response.status, 200);
+        let message = decode_base64(response.body.trim_start_matches("NTLM ")).unwrap();
+        assert_eq!(&message[..9], b"NTLMSSP\0\x03");
+    }
+
+    #[tokio::test]
+    async fn a_hand_written_authorization_header_wins_over_signing() {
+        let base = challenge_server("Basic").await;
+        let mut request = HttpRequest::new(HttpMethod::Get, format!("{base}/x"));
+        request
+            .headers
+            .push(Header::new("Authorization", "Bearer mine"));
+        request.auth = Some(Auth::AwsV4(crate::signing::AwsV4 {
+            access_key: "AK".into(),
+            secret_key: "SK".into(),
+            region: "eu-west-1".into(),
+            service: "execute-api".into(),
+            ..Default::default()
+        }));
+        let response = send(&request).await.unwrap();
+        assert_eq!(response.status, 401);
+        let sent = response.sent.unwrap();
+        let auth: Vec<_> = sent
+            .headers
+            .iter()
+            .filter(|h| h.name.eq_ignore_ascii_case("authorization"))
+            .collect();
+        assert_eq!(auth.len(), 1);
+        assert_eq!(auth[0].value, "Bearer mine");
     }
 
     #[tokio::test]

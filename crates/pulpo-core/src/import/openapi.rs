@@ -364,6 +364,11 @@ fn auth_schemes(doc: &Value) -> Vec<(String, Auth)> {
                     username: "{{username}}".into(),
                     password: "{{password}}".into(),
                 }
+            } else if kind == "http" && scheme == "digest" {
+                Auth::Digest(crate::signing::DigestAuth {
+                    username: "{{username}}".into(),
+                    password: "{{password}}".into(),
+                })
             } else if kind == "apiKey" {
                 let location = match def.get("in").and_then(|i| i.as_str()) {
                     Some("header") => ApiKeyLocation::Header,
@@ -654,13 +659,13 @@ pub(super) fn document(doc: &Value) -> Result<ImportPlan, ImportError> {
         .iter()
         .flat_map(|auth| match auth {
             Auth::Bearer { .. } => vec!["token"],
-            Auth::Basic { .. } => vec!["username", "password"],
+            Auth::Basic { .. } | Auth::Digest(_) => vec!["username", "password"],
             Auth::ApiKey { .. } => vec!["apiKey"],
             Auth::OAuth2(config) if config.grant == Grant::Password => {
                 vec!["clientId", "clientSecret", "username", "password"]
             }
             Auth::OAuth2(_) => vec!["clientId", "clientSecret"],
-            Auth::None => vec![],
+            Auth::None | Auth::AwsV4(_) | Auth::Hawk(_) | Auth::Ntlm(_) => vec![],
         })
         .collect();
     for name in [

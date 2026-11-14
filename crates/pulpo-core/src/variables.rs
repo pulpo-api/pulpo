@@ -186,6 +186,41 @@ pub fn resolve_request(
                     ..config.clone()
                 })
             }
+            Auth::Digest(config) => {
+                let mut text = |t: &String| resolve_text(t, vars, &mut missing);
+                Auth::Digest(crate::signing::DigestAuth {
+                    username: text(&config.username),
+                    password: text(&config.password),
+                })
+            }
+            Auth::AwsV4(config) => {
+                let mut text = |t: &String| resolve_text(t, vars, &mut missing);
+                Auth::AwsV4(crate::signing::AwsV4 {
+                    access_key: text(&config.access_key),
+                    secret_key: text(&config.secret_key),
+                    session_token: text(&config.session_token),
+                    region: text(&config.region),
+                    service: text(&config.service),
+                })
+            }
+            Auth::Hawk(config) => {
+                let mut text = |t: &String| resolve_text(t, vars, &mut missing);
+                Auth::Hawk(crate::signing::Hawk {
+                    id: text(&config.id),
+                    key: text(&config.key),
+                    ext: text(&config.ext),
+                    ..config.clone()
+                })
+            }
+            Auth::Ntlm(config) => {
+                let mut text = |t: &String| resolve_text(t, vars, &mut missing);
+                Auth::Ntlm(crate::signing::Ntlm {
+                    username: text(&config.username),
+                    password: text(&config.password),
+                    domain: text(&config.domain),
+                    workstation: text(&config.workstation),
+                })
+            }
         }),
         path_params: request
             .path_params

@@ -104,6 +104,22 @@ export function automaticHeaders(
     });
   } else if (auth.type === "apiKey" && auth.in === "header") {
     out.push({ name: auth.key, value: auth.value, from: "the Auth tab", stop: null, override: true });
+  } else if (auth.type === "digest" || auth.type === "ntlm") {
+    out.push({
+      name: "Authorization",
+      value: `${auth.type === "digest" ? "Digest" : "NTLM"} (answers the server's challenge)`,
+      from: "the Auth tab",
+      stop: null,
+      override: true,
+    });
+  } else if (auth.type === "awsV4" || auth.type === "hawk") {
+    out.push({
+      name: "Authorization",
+      value: `${auth.type === "awsV4" ? "AWS4-HMAC-SHA256" : "Hawk"} (signed when sent)`,
+      from: "the Auth tab",
+      stop: null,
+      override: true,
+    });
   } else if (auth.type === "oauth2") {
     out.push({
       name: "Authorization",

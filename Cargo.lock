@@ -2753,6 +2753,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "md4"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7da5ac363534dce5fabf69949225e174fbf111a498bf0ff794c8ea1fba9f3dda"
+dependencies = [
+ "digest 0.10.7",
+]
+
+[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3682,6 +3691,7 @@ dependencies = [
  "jsonschema",
  "keyring",
  "md-5",
+ "md4",
  "p12-keystore",
  "rcgen",
  "reqwest 0.12.28",

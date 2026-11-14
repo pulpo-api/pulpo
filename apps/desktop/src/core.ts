@@ -26,7 +26,14 @@ export type Auth =
   | { type: "bearer"; token: string }
   | { type: "basic"; username: string; password: string }
   | { type: "apiKey"; key: string; value: string; in: ApiKeyLocation }
-  | ({ type: "oauth2" } & OAuth2);
+  | ({ type: "oauth2" } & OAuth2)
+  | { type: "digest"; username: string; password: string }
+  | { type: "awsV4"; accessKey: string; secretKey: string; sessionToken: string; region: string; service: string }
+  | { type: "hawk"; id: string; key: string; algorithm: "sha256" | "sha1"; ext: string; payload: boolean }
+  | { type: "ntlm"; username: string; password: string; domain: string; workstation: string };
+
+/** Auth computed from the request or a server challenge: only the desktop app sends it. */
+export const SIGNED_AUTH = ["digest", "awsV4", "hawk", "ntlm"] as const;
 
 export type OAuthGrant = "authorizationCode" | "clientCredentials" | "password";
 
@@ -147,6 +154,10 @@ export const AUTH_LABELS: Record<Auth["type"], string> = {
   basic: "Basic",
   apiKey: "API key",
   oauth2: "OAuth 2.0",
+  digest: "Digest",
+  awsV4: "AWS Signature",
+  hawk: "Hawk",
+  ntlm: "NTLM",
 };
 
 function base64Utf8(text: string): string {
@@ -203,6 +214,27 @@ export function resolveAuth(auth: Auth, resolve: (text: string) => string): Auth
       return { ...auth, username: resolve(auth.username), password: resolve(auth.password) };
     case "apiKey":
       return { ...auth, key: resolve(auth.key), value: resolve(auth.value) };
+    case "digest":
+      return { ...auth, username: resolve(auth.username), password: resolve(auth.password) };
+    case "awsV4":
+      return {
+        ...auth,
+        accessKey: resolve(auth.accessKey),
+        secretKey: resolve(auth.secretKey),
+        sessionToken: resolve(auth.sessionToken),
+        region: resolve(auth.region),
+        service: resolve(auth.service),
+      };
+    case "hawk":
+      return { ...auth, id: resolve(auth.id), key: resolve(auth.key), ext: resolve(auth.ext) };
+    case "ntlm":
+      return {
+        ...auth,
+        username: resolve(auth.username),
+        password: resolve(auth.password),
+        domain: resolve(auth.domain),
+        workstation: resolve(auth.workstation),
+      };
     case "oauth2":
       return {
         ...auth,
@@ -342,6 +374,12 @@ export async function sendHttp(
   };
   if (request.auth?.type === "oauth2") {
     throw { kind: "other", message: OAUTH_DESKTOP_ONLY } satisfies SendError;
+  }
+  if (request.auth && (SIGNED_AUTH as readonly string[]).includes(request.auth.type)) {
+    throw {
+      kind: "other",
+      message: `${AUTH_LABELS[request.auth.type]} auth is computed by the desktop app; the browser preview cannot send it.`,
+    } satisfies SendError;
   }
   const auth = request.auth ? resolveAuth(request.auth, (text) => resolveText(text, vars, missing)) : null;
   resolved.url = applyAuth(resolved.url, resolved.headers, auth);

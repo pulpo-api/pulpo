@@ -107,6 +107,52 @@ fn parse_auth(auth: Option<&Value>, warnings: &mut Vec<String>, at: &str) -> Opt
                 },
             }))
         }
+        "digest" => {
+            let get = |key: &str| kv(auth.get("digest"), key);
+            Some(Auth::Digest(crate::signing::DigestAuth {
+                username: get("username"),
+                password: get("password"),
+            }))
+        }
+        "awsv4" => {
+            let get = |key: &str| kv(auth.get("awsv4"), key);
+            let service = get("service");
+            Some(Auth::AwsV4(crate::signing::AwsV4 {
+                access_key: get("accessKey"),
+                secret_key: get("secretKey"),
+                session_token: get("sessionToken"),
+                region: get("region"),
+                service: if service.is_empty() {
+                    "execute-api".into()
+                } else {
+                    service
+                },
+            }))
+        }
+        "hawk" => {
+            use crate::signing::{Hawk, HawkAlgorithm};
+            let get = |key: &str| kv(auth.get("hawk"), key);
+            Some(Auth::Hawk(Hawk {
+                id: get("authId"),
+                key: get("authKey"),
+                algorithm: if get("algorithm").eq_ignore_ascii_case("sha1") {
+                    HawkAlgorithm::Sha1
+                } else {
+                    HawkAlgorithm::Sha256
+                },
+                ext: get("extraData"),
+                payload: get("includePayloadHash") == "true",
+            }))
+        }
+        "ntlm" => {
+            let get = |key: &str| kv(auth.get("ntlm"), key);
+            Some(Auth::Ntlm(crate::signing::Ntlm {
+                username: get("username"),
+                password: get("password"),
+                domain: get("domain"),
+                workstation: get("workstation"),
+            }))
+        }
         other => {
             warnings.push(format!(
                 "{at}: '{other}' auth is not supported yet; it inherits from its folder"
@@ -735,5 +781,64 @@ mod tests {
         );
         assert_eq!(config.client_auth, crate::oauth::ClientAuth::Body);
         assert_eq!(config.header_prefix, "Bearer");
+    }
+
+    #[test]
+    fn imports_digest_aws_hawk_and_ntlm_auth() {
+        use crate::signing::{AwsV4, DigestAuth, Hawk, HawkAlgorithm, Ntlm};
+        let parse = |json: &str| {
+            let mut warnings = Vec::new();
+            let auth = parse_auth(
+                Some(&serde_json::from_str(json).unwrap()),
+                &mut warnings,
+                "x",
+            );
+            assert!(warnings.is_empty(), "{warnings:?}");
+            auth.unwrap()
+        };
+        assert_eq!(
+            parse(
+                r#"{"type": "digest", "digest": [{"key": "username", "value": "ana"}, {"key": "password", "value": "{{pw}}"}]}"#
+            ),
+            Auth::Digest(DigestAuth {
+                username: "ana".into(),
+                password: "{{pw}}".into()
+            })
+        );
+        assert_eq!(
+            parse(
+                r#"{"type": "awsv4", "awsv4": [{"key": "accessKey", "value": "AK"}, {"key": "secretKey", "value": "SK"}, {"key": "region", "value": "eu-west-1"}]}"#
+            ),
+            Auth::AwsV4(AwsV4 {
+                access_key: "AK".into(),
+                secret_key: "SK".into(),
+                session_token: String::new(),
+                region: "eu-west-1".into(),
+                service: "execute-api".into(),
+            })
+        );
+        assert_eq!(
+            parse(
+                r#"{"type": "hawk", "hawk": [{"key": "authId", "value": "id"}, {"key": "authKey", "value": "k"}, {"key": "algorithm", "value": "sha1"}, {"key": "includePayloadHash", "value": true}]}"#
+            ),
+            Auth::Hawk(Hawk {
+                id: "id".into(),
+                key: "k".into(),
+                algorithm: HawkAlgorithm::Sha1,
+                ext: String::new(),
+                payload: true,
+            })
+        );
+        assert_eq!(
+            parse(
+                r#"{"type": "ntlm", "ntlm": [{"key": "username", "value": "ana"}, {"key": "domain", "value": "CORP"}]}"#
+            ),
+            Auth::Ntlm(Ntlm {
+                username: "ana".into(),
+                password: String::new(),
+                domain: "CORP".into(),
+                workstation: String::new(),
+            })
+        );
     }
 }

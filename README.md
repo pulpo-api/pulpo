@@ -97,7 +97,7 @@ PULPO_SECRET_TOKEN=... pulpo send ...         # in CI, secrets come from env var
 
 ## Auth
 
-Set auth once on a folder (`_folder.yaml`) or the whole workspace (`pulpo.yaml`) and every request inside inherits it. A request or subfolder can set its own, or `type: "none"` to send nothing. Supported: `bearer`, `basic`, `apiKey` (in a header or the query string) and `oauth2`.
+Set auth once on a folder (`_folder.yaml`) or the whole workspace (`pulpo.yaml`) and every request inside inherits it. A request or subfolder can set its own, or `type: "none"` to send nothing. Supported: `bearer`, `basic`, `apiKey` (in a header or the query string), `oauth2`, `digest`, `awsV4` (AWS Signature v4), `hawk` and `ntlm`.
 
 ```yaml
 version: 1
@@ -127,6 +127,25 @@ auth:
 - Tokens are kept per environment in the OS keychain, split into parts because Windows caps a credential at 2.5 KB and tokens from Azure AD and others are longer. Only their expiry, scope and grant go to `.pulpo/tokens.json` (local, never committed). `pulpo auth ls` lists them and `pulpo auth clear` forgets them.
 - *Discover* fills the URLs from an issuer (OpenID Connect discovery).
 - Imported from Postman collections and from OpenAPI `oauth2` security schemes.
+
+### Digest, AWS Signature v4, Hawk and NTLM
+
+These are computed when the request is sent, so they only work from the desktop app and the CLI (not the browser preview).
+
+```yaml
+auth:
+  type: "awsV4"
+  accessKey: "{{awsAccessKey}}"
+  secretKey: "{{awsSecretKey}}"
+  region: "eu-west-1"
+  service: "execute-api"
+```
+
+- **Digest** (`username`, `password`): Pulpo reads the server's `WWW-Authenticate: Digest` challenge and sends the request again with the answer. MD5, SHA-256 and their `-sess` variants.
+- **AWS Signature v4** (`accessKey`, `secretKey`, `region`, `service`, optional `sessionToken`): signs method, URL, headers and body. For `s3` it also sends `x-amz-content-sha256`.
+- **Hawk** (`id`, `key`, `algorithm` `sha256` or `sha1`, optional `ext`, `payload: true` to sign the body).
+- **NTLM** (`username`, `password`, optional `domain` and `workstation`): NTLMv2 handshake on one HTTP/1.1 connection.
+- Imported from Postman collections (and Digest from OpenAPI `http` schemes).
 
 Folders and the workspace can also set **common headers** (`headers:`), which Postman lacks: every request inside sends them, a deeper folder replaces one with the same name, a request can override it, or stop it with a disabled header of the same name. In the app, right-click a folder (or ⚙ next to the collection name) to edit its headers, auth, settings and scripts.
 

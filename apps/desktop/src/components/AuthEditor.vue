@@ -56,6 +56,25 @@ const choice = computed<Choice>({
       case "oauth2":
         auth.value = newOAuth2();
         break;
+      case "digest":
+        auth.value = { type: "digest", username: "{{username}}", password: "{{password}}" };
+        break;
+      case "awsV4":
+        auth.value = {
+          type: "awsV4",
+          accessKey: "{{awsAccessKey}}",
+          secretKey: "{{awsSecretKey}}",
+          sessionToken: "",
+          region: "us-east-1",
+          service: "execute-api",
+        };
+        break;
+      case "hawk":
+        auth.value = { type: "hawk", id: "{{hawkId}}", key: "{{hawkKey}}", algorithm: "sha256", ext: "", payload: false };
+        break;
+      case "ntlm":
+        auth.value = { type: "ntlm", username: "{{username}}", password: "{{password}}", domain: "", workstation: "" };
+        break;
     }
   },
 });
@@ -74,6 +93,13 @@ const literalSecret = computed(() => {
       return isLiteral(a.value);
     case "oauth2":
       return isLiteral(a.clientSecret) || isLiteral(a.password);
+    case "digest":
+    case "ntlm":
+      return isLiteral(a.password);
+    case "awsV4":
+      return isLiteral(a.secretKey) || isLiteral(a.sessionToken);
+    case "hawk":
+      return isLiteral(a.key);
     default:
       return false;
   }
@@ -228,6 +254,81 @@ const getLabel = computed(() =>
       </div>
     </template>
 
+    <template v-else-if="auth?.type === 'digest' || auth?.type === 'ntlm'">
+      <div class="row">
+        <label for="auth-user">Username</label>
+        <VarInput id="auth-user" v-model="auth.username" placeholder="{{username}}" aria-label="Username" />
+      </div>
+      <div class="row">
+        <label for="auth-pass">Password</label>
+        <VarInput id="auth-pass" v-model="auth.password" placeholder="{{password}}" aria-label="Password" />
+      </div>
+      <template v-if="auth.type === 'ntlm'">
+        <div class="row">
+          <label for="auth-domain">Domain</label>
+          <VarInput id="auth-domain" v-model="auth.domain" placeholder="optional" aria-label="Domain" />
+        </div>
+        <div class="row">
+          <label for="auth-workstation">Workstation</label>
+          <VarInput id="auth-workstation" v-model="auth.workstation" placeholder="optional" aria-label="Workstation" />
+        </div>
+      </template>
+    </template>
+
+    <template v-else-if="auth?.type === 'awsV4'">
+      <div class="row">
+        <label for="aws-access">Access key</label>
+        <VarInput id="aws-access" v-model="auth.accessKey" placeholder="{{awsAccessKey}}" aria-label="Access key" />
+      </div>
+      <div class="row">
+        <label for="aws-secret">Secret key</label>
+        <VarInput id="aws-secret" v-model="auth.secretKey" placeholder="{{awsSecretKey}}" aria-label="Secret key" />
+      </div>
+      <div class="row">
+        <label for="aws-region">Region</label>
+        <VarInput id="aws-region" v-model="auth.region" placeholder="us-east-1" aria-label="Region" />
+      </div>
+      <div class="row">
+        <label for="aws-service">Service</label>
+        <VarInput id="aws-service" v-model="auth.service" placeholder="execute-api, s3, lambda…" aria-label="Service" />
+      </div>
+      <div class="row">
+        <label for="aws-session">Session token</label>
+        <VarInput
+          id="aws-session"
+          v-model="auth.sessionToken"
+          placeholder="only for temporary credentials"
+          aria-label="Session token"
+        />
+      </div>
+    </template>
+
+    <template v-else-if="auth?.type === 'hawk'">
+      <div class="row">
+        <label for="hawk-id">Hawk ID</label>
+        <VarInput id="hawk-id" v-model="auth.id" placeholder="{{hawkId}}" aria-label="Hawk ID" />
+      </div>
+      <div class="row">
+        <label for="hawk-key">Hawk key</label>
+        <VarInput id="hawk-key" v-model="auth.key" placeholder="{{hawkKey}}" aria-label="Hawk key" />
+      </div>
+      <div class="row">
+        <label for="hawk-alg">Algorithm</label>
+        <select id="hawk-alg" v-model="auth.algorithm">
+          <option value="sha256">SHA-256</option>
+          <option value="sha1">SHA-1</option>
+        </select>
+      </div>
+      <div class="row">
+        <label for="hawk-ext">Ext</label>
+        <VarInput id="hawk-ext" v-model="auth.ext" placeholder="optional app data" aria-label="Ext" />
+      </div>
+      <div class="row">
+        <label for="hawk-payload">Body</label>
+        <label class="check"><input id="hawk-payload" v-model="auth.payload" type="checkbox" /> Sign the body too</label>
+      </div>
+    </template>
+
     <template v-else-if="auth?.type === 'oauth2'">
       <div class="row">
         <label for="oauth-grant">Grant</label>
@@ -338,6 +439,15 @@ const getLabel = computed(() =>
       Sent as <code>Authorization: {{ shown.headerPrefix || "Bearer" }} …</code>. Tokens are kept per environment in
       the OS keychain (never in git) and refreshed when they expire; a header with the same name in the
       Headers tab wins.
+    </p>
+    <p v-else-if="shown && (shown.type === 'digest' || shown.type === 'ntlm')" class="hint">
+      Pulpo sends the request, reads the server's <code>WWW-Authenticate</code> challenge and sends it again with the
+      answer<template v-if="shown.type === 'ntlm'"> on the same connection (HTTP/1.1)</template>. A header named
+      Authorization in the Headers tab wins.
+    </p>
+    <p v-else-if="shown && (shown.type === 'awsV4' || shown.type === 'hawk')" class="hint">
+      Signed when sent, over the method, URL, headers<template v-if="shown.type === 'awsV4' || shown.payload">
+      and body</template>. A header named Authorization in the Headers tab wins.
     </p>
     <p v-else-if="shown && shown.type !== 'none'" class="hint">
       Sent as

@@ -383,6 +383,50 @@ fn auth_yaml(auth: Option<&Auth>) -> String {
             };
             out.push_str(&format!("  in: {}\n", quote(place)));
         }
+        Auth::Digest(config) => {
+            out.push_str("  type: \"digest\"\n");
+            out.push_str(&format!("  username: {}\n", quote(&config.username)));
+            out.push_str(&format!("  password: {}\n", quote(&config.password)));
+        }
+        Auth::AwsV4(config) => {
+            out.push_str("  type: \"awsV4\"\n");
+            out.push_str(&format!("  accessKey: {}\n", quote(&config.access_key)));
+            out.push_str(&format!("  secretKey: {}\n", quote(&config.secret_key)));
+            if !config.session_token.is_empty() {
+                out.push_str(&format!(
+                    "  sessionToken: {}\n",
+                    quote(&config.session_token)
+                ));
+            }
+            out.push_str(&format!("  region: {}\n", quote(&config.region)));
+            out.push_str(&format!("  service: {}\n", quote(&config.service)));
+        }
+        Auth::Hawk(config) => {
+            out.push_str("  type: \"hawk\"\n");
+            out.push_str(&format!("  id: {}\n", quote(&config.id)));
+            out.push_str(&format!("  key: {}\n", quote(&config.key)));
+            out.push_str(&format!(
+                "  algorithm: {}\n",
+                quote(config.algorithm.as_str())
+            ));
+            if !config.ext.is_empty() {
+                out.push_str(&format!("  ext: {}\n", quote(&config.ext)));
+            }
+            if config.payload {
+                out.push_str("  payload: true\n");
+            }
+        }
+        Auth::Ntlm(config) => {
+            out.push_str("  type: \"ntlm\"\n");
+            out.push_str(&format!("  username: {}\n", quote(&config.username)));
+            out.push_str(&format!("  password: {}\n", quote(&config.password)));
+            if !config.domain.is_empty() {
+                out.push_str(&format!("  domain: {}\n", quote(&config.domain)));
+            }
+            if !config.workstation.is_empty() {
+                out.push_str(&format!("  workstation: {}\n", quote(&config.workstation)));
+            }
+        }
         Auth::OAuth2(config) => {
             use crate::oauth::{ClientAuth, Grant};
             out.push_str("  type: \"oauth2\"\n");

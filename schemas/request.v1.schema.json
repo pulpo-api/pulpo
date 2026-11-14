@@ -102,7 +102,7 @@
         {
           "additionalProperties": false,
           "required": ["tokenUrl"],
-          "description": "OAuth 2.0. The token is obtained when the request runs and cached in .pulpo/tokens.json (never in git); the authorization code grant logs in through the browser first.",
+          "description": "OAuth 2.0. The token is obtained when the request runs and cached in the OS keychain (never in git); the authorization code grant logs in through the browser first.",
           "properties": {
             "type": { "const": "oauth2" },
             "grant": { "enum": ["authorizationCode", "clientCredentials", "password"], "default": "authorizationCode" },
@@ -117,6 +117,50 @@
             "pkce": { "type": "boolean", "default": true },
             "clientAuth": { "enum": ["header", "body"], "default": "header", "description": "Send the client id and secret as Basic auth or in the form body." },
             "headerPrefix": { "type": "string", "default": "Bearer" }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["username"],
+          "description": "HTTP Digest: Pulpo answers the server's challenge (MD5, SHA-256 and -sess; qop auth).",
+          "properties": { "type": { "const": "digest" }, "username": { "type": "string" }, "password": { "type": "string" } }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["accessKey", "secretKey", "region", "service"],
+          "description": "AWS Signature v4, computed over the request when it is sent.",
+          "properties": {
+            "type": { "const": "awsV4" },
+            "accessKey": { "type": "string" },
+            "secretKey": { "type": "string" },
+            "sessionToken": { "type": "string", "description": "Only for temporary credentials." },
+            "region": { "type": "string" },
+            "service": { "type": "string", "description": "execute-api, s3, lambda…" }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["id", "key"],
+          "description": "Hawk: a MAC over the request, computed when it is sent.",
+          "properties": {
+            "type": { "const": "hawk" },
+            "id": { "type": "string" },
+            "key": { "type": "string" },
+            "algorithm": { "enum": ["sha256", "sha1"], "default": "sha256" },
+            "ext": { "type": "string" },
+            "payload": { "type": "boolean", "default": false, "description": "Also sign the body." }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["username"],
+          "description": "NTLMv2 handshake on one HTTP/1.1 connection.",
+          "properties": {
+            "type": { "const": "ntlm" },
+            "username": { "type": "string" },
+            "password": { "type": "string" },
+            "domain": { "type": "string" },
+            "workstation": { "type": "string" }
           }
         }
       ]

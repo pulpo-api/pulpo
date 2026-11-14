@@ -27,6 +27,7 @@ pub mod query;
 pub mod report;
 pub mod run;
 pub mod script;
+pub mod signing;
 pub mod snapshot;
 mod timing;
 pub mod variables;
