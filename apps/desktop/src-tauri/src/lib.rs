@@ -464,6 +464,65 @@ async fn oauth_discover(issuer: String) -> Result<Discovery, String> {
     oauth::discover(&issuer, &Settings::default()).await
 }
 
+/// What the git panel shows: status, branches and the collection's changes since HEAD.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GitPanel {
+    status: pulpo_core::git::Status,
+    branches: Vec<String>,
+    /// `None` before the first commit.
+    changes: Option<pulpo_core::diff::CollectionDiff>,
+}
+
+async fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn git_panel(root: String) -> Result<GitPanel, String> {
+    blocking(move || {
+        let root = PathBuf::from(root);
+        let status = pulpo_core::git::status(&root)?;
+        if !status.repo {
+            return Ok(GitPanel {
+                status,
+                branches: Vec::new(),
+                changes: None,
+            });
+        }
+        Ok(GitPanel {
+            branches: pulpo_core::git::branches(&root).unwrap_or_default(),
+            changes: pulpo_core::diff::diff_refs(&root, "HEAD", None).ok(),
+            status,
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn git_commit(root: String, message: String) -> Result<String, String> {
+    blocking(move || pulpo_core::git::commit(Path::new(&root), &message)).await
+}
+
+#[tauri::command]
+async fn git_switch(root: String, branch: String, create: bool) -> Result<(), String> {
+    blocking(move || pulpo_core::git::switch(Path::new(&root), &branch, create)).await
+}
+
+#[tauri::command]
+async fn git_pull(root: String) -> Result<String, String> {
+    blocking(move || pulpo_core::git::pull(Path::new(&root))).await
+}
+
+#[tauri::command]
+async fn git_push(root: String) -> Result<String, String> {
+    blocking(move || pulpo_core::git::push(Path::new(&root))).await
+}
+
 /// Exports a folder ("" = the workspace) as Postman, OpenAPI or a .http file.
 #[tauri::command]
 async fn export_collection(
@@ -590,7 +649,12 @@ pub fn run() {
             oauth_forget_key,
             export_collection,
             export_environment,
-            write_text_file
+            write_text_file,
+            git_panel,
+            git_commit,
+            git_switch,
+            git_pull,
+            git_push
         ])
         .run(tauri::generate_context!())
         .expect("error while running Pulpo");

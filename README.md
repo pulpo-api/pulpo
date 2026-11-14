@@ -269,6 +269,8 @@ Collection changes (main → working tree): 1 added, 0 removed, 1 changed
 
 Request by request, not line by line: moved and renamed requests are recognised, and folder auth, headers and environment variables are compared too (secret values are never in git). `--exit-code` fails a CI step when the collection changed.
 
+In the desktop app, **⑂** next to the collection name opens the git panel: the same request-by-request changes since the last commit (click one to open it), commit, switch or create a branch, pull and push. It uses your own `git` and its credentials, and only ever commits files of the workspace.
+
 ## Export: nobody is tied to Pulpo
 
 ```bash

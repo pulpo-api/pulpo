@@ -12,6 +12,7 @@ import RunnerPanel from "./components/RunnerPanel.vue";
 import CodePanel from "./components/CodePanel.vue";
 import ImportDialog from "./components/ImportDialog.vue";
 import ExportDialog from "./components/ExportDialog.vue";
+import GitPanel from "./components/GitPanel.vue";
 import { resolveText } from "./variables";
 import { applyPathParams } from "./params";
 import { applyAuth, asSendError, coreInfo, resolveAuth, type CoreInfo, type HttpResponse, type SendError } from "./core";
@@ -69,6 +70,7 @@ const problem = ref<CollectionError | null>(null);
 const showImport = ref(false);
 /** Folder being exported ("" = the whole collection); null = dialog closed. */
 const exporting = ref<string | null>(null);
+const showGit = ref(false);
 const importDialog = ref<InstanceType<typeof ImportDialog> | null>(null);
 const importBlocked = computed(() =>
   dirty.value.size ? `Save your ${dirty.value.size} unsaved request(s) first (Ctrl+S), so the import does not overwrite them.` : null,
@@ -701,6 +703,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       @new-folder="newFolder"
       @import="showImport = true"
       @export="exporting = $event"
+      @git="showGit = true"
       @rename="renameNode"
       @duplicate="duplicateNode"
       @delete="deleteNode"
@@ -882,6 +885,16 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       :names="requestNames"
       @open="openFromTokens"
       @close="showTokens = false"
+    />
+
+    <GitPanel
+      v-if="showGit && workspace"
+      :root="workspace.root"
+      :unsaved="dirty.size"
+      :names="requestNames"
+      @open="(id) => { showGit = false; openFromTokens(id); }"
+      @reload="organize(async () => {})"
+      @close="showGit = false"
     />
 
     <ExportDialog

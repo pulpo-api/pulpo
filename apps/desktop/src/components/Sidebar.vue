@@ -27,6 +27,7 @@ const emit = defineEmits<{
   addExample: [id: string];
   runFolder: [id: string];
   export: [id: string];
+  git: [];
 }>();
 
 const query = ref("");
@@ -200,6 +201,7 @@ function confirm() {
         </button>
         <button class="icon" title="Collection headers, auth, settings and scripts" @click="emit('editFolder', '')">⚙</button>
         <button class="icon" title="Export as Postman, OpenAPI or a .http file" @click="emit('export', '')">⇪</button>
+        <button v-if="persistent" class="icon" title="Git: changes, commit, branches, pull and push" @click="emit('git')">⑂</button>
         <button v-if="persistent" class="icon" title="Open another folder" @click="emit('open')">⇄</button>
       </div>
       <div class="actions">

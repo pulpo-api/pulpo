@@ -395,6 +395,37 @@ export interface Cookie {
 
 export type ExportFormat = "postman" | "openApi" | "http";
 
+export interface DiffItem {
+  id: string;
+  name: string;
+  folder: string[];
+  method: string;
+  url: string;
+}
+
+export interface CollectionDiff {
+  from: string;
+  to: string;
+  added: DiffItem[];
+  removed: DiffItem[];
+  changed: { item: DiffItem; was: DiffItem | null; changes: string[] }[];
+  folders: string[];
+  environments: string[];
+}
+
+export interface GitPanel {
+  status: {
+    repo: boolean;
+    branch: string;
+    upstream: string | null;
+    ahead: number;
+    behind: number;
+    files: { path: string; state: string }[];
+  };
+  branches: string[];
+  changes: CollectionDiff | null;
+}
+
 export interface Exported {
   text: string;
   fileName: string;
@@ -528,6 +559,12 @@ export interface WorkspaceBackend {
   exportCollection?(root: string, folderId: string, format: ExportFormat): Promise<Exported>;
   /** Desktop only: an environment as a Postman environment. */
   exportEnvironment?(root: string, environmentId: string): Promise<Exported>;
+  /** Desktop only: git status, branches and the collection's changes since HEAD. */
+  gitPanel?(root: string): Promise<GitPanel>;
+  gitCommit?(root: string, message: string): Promise<string>;
+  gitSwitch?(root: string, branch: string, create: boolean): Promise<void>;
+  gitPull?(root: string): Promise<string>;
+  gitPush?(root: string): Promise<string>;
   /** Desktop only: asks where to save and writes the text; false when cancelled. */
   saveTextFile?(defaultName: string, text: string): Promise<boolean>;
   /** Desktop only: picks a file to upload and returns its absolute path. */
@@ -637,6 +674,11 @@ const tauriBackend: WorkspaceBackend = {
   },
   stopLoadTest: () => invoke<void>("stop_load_test"),
   importInto: (root, folderId, source) => invoke<ImportSummary>("import_into", { root, folderId, ...source }),
+  gitPanel: (root) => invoke<GitPanel>("git_panel", { root }),
+  gitCommit: (root, message) => invoke<string>("git_commit", { root, message }),
+  gitSwitch: (root, branch, create) => invoke<void>("git_switch", { root, branch, create }),
+  gitPull: (root) => invoke<string>("git_pull", { root }),
+  gitPush: (root) => invoke<string>("git_push", { root }),
   exportCollection: (root, folderId, format) => invoke<Exported>("export_collection", { root, folderId, format }),
   exportEnvironment: (root, environmentId) => invoke<Exported>("export_environment", { root, environmentId }),
   async saveTextFile(defaultName, text) {
