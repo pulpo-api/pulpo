@@ -466,6 +466,11 @@ fn auth_yaml(auth: Option<&Auth>) -> String {
                 &config.redirect_uri,
                 !config.redirect_uri.is_empty(),
             );
+            field(
+                "revokeUrl",
+                &config.revoke_url,
+                !config.revoke_url.is_empty(),
+            );
             if !config.pkce {
                 out.push_str("  pkce: false\n");
             }

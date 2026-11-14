@@ -52,6 +52,8 @@ export interface OAuth2 {
   pkce: boolean;
   clientAuth: "header" | "body";
   headerPrefix: string;
+  /** Token revocation endpoint (RFC 7009), for "Revoke" in the tokens panel. */
+  revokeUrl: string;
 }
 
 export type OAuthAuth = { type: "oauth2" } & OAuth2;
@@ -77,6 +79,7 @@ export function newOAuth2(): OAuthAuth {
     pkce: true,
     clientAuth: "header",
     headerPrefix: "Bearer",
+    revokeUrl: "",
   };
 }
 
@@ -97,7 +100,39 @@ export interface TokenInfo {
 export interface Discovery {
   authorizationEndpoint: string;
   tokenEndpoint: string;
+  revocationEndpoint: string;
   scopesSupported: string[];
+}
+
+/** A cached token and the requests whose auth uses it. Mirrors `ActiveToken`. */
+export interface ActiveToken extends TokenInfo {
+  usedBy: string[];
+  canRenew: boolean;
+  canRevoke: boolean;
+}
+
+/** Every cached OAuth 2.0 token of an environment (empty in the browser preview). */
+export async function oauthTokens(root: string, environmentId: string): Promise<ActiveToken[]> {
+  if (!insideTauri) return [];
+  return invoke<ActiveToken[]>("oauth_tokens", { root, environmentId: environmentId || null });
+}
+
+/** Gets a fresh token now: refresh token, token request or browser login. */
+export async function oauthRenew(root: string, environmentId: string, key: string): Promise<TokenInfo> {
+  if (!insideTauri) throw new Error(OAUTH_DESKTOP_ONLY);
+  return invoke<TokenInfo>("oauth_renew", { root, environmentId: environmentId || null, key });
+}
+
+/** Revokes a token at the identity provider (when it can) and forgets it; returns a note
+ * when it was only forgotten. */
+export async function oauthRevoke(root: string, environmentId: string, key: string): Promise<string | null> {
+  if (!insideTauri) throw new Error(OAUTH_DESKTOP_ONLY);
+  return invoke<string | null>("oauth_revoke", { root, environmentId: environmentId || null, key });
+}
+
+export async function oauthForgetKey(root: string, environmentId: string, key: string): Promise<void> {
+  if (!insideTauri) return;
+  await invoke("oauth_forget_key", { root, environmentId: environmentId || null, key });
 }
 
 function oauthConfig(auth: OAuthAuth): OAuth2 {
@@ -144,6 +179,7 @@ export async function oauthDiscover(issuer: string): Promise<Discovery> {
   return {
     authorizationEndpoint: doc.authorization_endpoint ?? "",
     tokenEndpoint: doc.token_endpoint ?? "",
+    revocationEndpoint: doc.revocation_endpoint ?? "",
     scopesSupported: doc.scopes_supported ?? [],
   };
 }
@@ -246,6 +282,7 @@ export function resolveAuth(auth: Auth, resolve: (text: string) => string): Auth
         username: resolve(auth.username),
         password: resolve(auth.password),
         redirectUri: resolve(auth.redirectUri),
+        revokeUrl: resolve(auth.revokeUrl ?? ""),
         headerPrefix: resolve(auth.headerPrefix),
       };
     default:

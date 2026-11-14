@@ -105,6 +105,7 @@ fn parse_auth(auth: Option<&Value>, warnings: &mut Vec<String>, at: &str) -> Opt
                 } else {
                     prefix
                 },
+                revoke_url: String::new(),
             }))
         }
         "digest" => {

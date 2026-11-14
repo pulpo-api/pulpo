@@ -15,7 +15,7 @@ use crate::snapshot;
 use crate::variables::{self, Variables};
 use crate::Protocol;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -218,6 +218,173 @@ pub async fn oauth_login(
     let key = oauth::cache_key(&config);
     oauth::save_token(root, environment_id, store, &key, Some(&token))?;
     Ok(TokenInfo::of(&key, &token, oauth::now()))
+}
+
+/// A cached token and the requests whose auth uses it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActiveToken {
+    #[serde(flatten)]
+    pub info: TokenInfo,
+    /// Requests (ids) whose auth gives this token. Empty = none in the workspace now.
+    pub used_by: Vec<String>,
+    /// "Renew" can get a new one: a refresh token, a grant without the browser, or a
+    /// request that holds the settings for a browser login.
+    pub can_renew: bool,
+    /// The auth has a revocation URL.
+    pub can_revoke: bool,
+}
+
+/// An OAuth 2.0 auth (resolved), its settings and the requests that use it.
+type UsedAuth = (OAuth2, http::Settings, Vec<String>);
+
+/// OAuth 2.0 auths of the workspace's requests, resolved in the session, by cache key.
+fn oauth_auths(root: &Path, session: &Session) -> Result<BTreeMap<String, UsedAuth>, String> {
+    let workspace = collection::load_workspace(root).map_err(|e| e.to_string())?;
+    let mut found: BTreeMap<String, UsedAuth> = BTreeMap::new();
+    for entry in requests_under(&workspace.tree, "") {
+        let Ok((http::Auth::OAuth2(config), _)) = collection::effective_auth(root, &entry) else {
+            continue;
+        };
+        // An auth with variables the environment lacks cannot have a token here.
+        let Ok(config) = session.resolve_oauth(&config) else {
+            continue;
+        };
+        let settings = collection::effective_settings(root, &entry).map_err(|e| e.to_string())?;
+        let key = oauth::cache_key(&config);
+        found
+            .entry(key)
+            .or_insert_with(|| (config, settings, Vec::new()))
+            .2
+            .push(entry.id.clone());
+    }
+    Ok(found)
+}
+
+/// Every cached OAuth 2.0 token of an environment, newest first.
+pub fn oauth_tokens(
+    root: &Path,
+    environment_id: Option<&str>,
+    store: &dyn SecretStore,
+) -> Result<Vec<ActiveToken>, String> {
+    let session = Session::open(root, environment_id, store, false)?;
+    let auths = oauth_auths(root, &session)?;
+    let now = oauth::now();
+    let mut tokens: Vec<ActiveToken> = session
+        .tokens
+        .iter()
+        .map(|(key, token)| {
+            let auth = auths.get(key);
+            ActiveToken {
+                info: TokenInfo::of(key, token, now),
+                used_by: auth.map(|(_, _, ids)| ids.clone()).unwrap_or_default(),
+                can_renew: auth.is_some(),
+                can_revoke: auth.is_some_and(|(config, _, _)| !config.revoke_url.is_empty()),
+            }
+        })
+        .collect();
+    tokens.sort_by_key(|t| std::cmp::Reverse(t.info.obtained_at));
+    Ok(tokens)
+}
+
+/// The OAuth 2.0 auth (resolved) and settings behind a cached token.
+fn auth_for_key(
+    root: &Path,
+    session: &Session,
+    key: &str,
+) -> Result<(OAuth2, http::Settings), String> {
+    oauth_auths(root, session)?
+        .remove(key)
+        .map(|(config, settings, _)| (config, settings))
+        .ok_or_else(|| {
+            "no request of the workspace uses this token's settings any more; forget it instead"
+                .to_string()
+        })
+}
+
+fn oauth_context<'a>(
+    root: &'a Path,
+    session: &Session,
+    config: &OAuth2,
+) -> Result<SendContext<'a>, String> {
+    let mut vars = session.env.clone();
+    vars.extend(session.local.clone());
+    let client_pem =
+        client_certificate(root, &config.token_url, &vars).map_err(|e| e.to_string())?;
+    Ok(SendContext {
+        root: Some(root),
+        cookies: None,
+        client_pem,
+    })
+}
+
+/// Gets a fresh token for a cached one: with its refresh token, a new token request, or a
+/// browser login (authorization code without a refresh token).
+pub async fn oauth_renew(
+    root: &Path,
+    environment_id: Option<&str>,
+    store: &dyn SecretStore,
+    key: &str,
+    open: &(dyn Fn(&str) -> Result<(), String> + Sync),
+) -> Result<TokenInfo, String> {
+    let session = Session::open(root, environment_id, store, true)?;
+    let (config, settings) = auth_for_key(root, &session, key)?;
+    let context = oauth_context(root, &session, &config)?;
+    let refreshed = match session.tokens.get(key) {
+        Some(oauth::Token {
+            refresh_token: Some(refresh),
+            ..
+        }) => oauth::refresh(&config, refresh, &settings, &context)
+            .await
+            .ok(),
+        _ => None,
+    };
+    let token = match refreshed {
+        Some(token) => token,
+        None => match config.grant {
+            oauth::Grant::AuthorizationCode => {
+                oauth::authorize(&config, &settings, &context, open, oauth::LOGIN_TIMEOUT).await?
+            }
+            _ => oauth::fetch(&config, &settings, &context).await?,
+        },
+    };
+    oauth::save_token(root, environment_id, store, key, Some(&token))?;
+    Ok(TokenInfo::of(key, &token, oauth::now()))
+}
+
+/// Revokes a cached token at the identity provider and forgets it. Returns a note when it
+/// could only be forgotten (no revocation URL).
+pub async fn oauth_revoke(
+    root: &Path,
+    environment_id: Option<&str>,
+    store: &dyn SecretStore,
+    key: &str,
+) -> Result<Option<String>, String> {
+    let session = Session::open(root, environment_id, store, false)?;
+    let token = session
+        .tokens
+        .get(key)
+        .ok_or("this token is not cached any more")?;
+    let note = match auth_for_key(root, &session, key) {
+        Ok((config, settings)) if !config.revoke_url.is_empty() => {
+            let context = oauth_context(root, &session, &config)?;
+            oauth::revoke(&config, token, &settings, &context).await?;
+            None
+        }
+        _ => Some("no revocation URL: the token was only forgotten here".to_string()),
+    };
+    oauth::save_token(root, environment_id, store, key, None)?;
+    Ok(note)
+}
+
+/// Forgets a cached token by its key, without asking the identity provider.
+pub fn oauth_forget_key(
+    root: &Path,
+    environment_id: Option<&str>,
+    store: &dyn SecretStore,
+    key: &str,
+) -> Result<(), String> {
+    oauth::save_token(root, environment_id, store, key, None)
 }
 
 /// The cached token of an OAuth 2.0 auth in an environment, if any.
@@ -1063,6 +1230,9 @@ mod tests {
                     } else {
                         r#"{"error":"invalid_grant","error_description":"bad code"}"#.to_string()
                     }
+                } else if line.starts_with("POST /revoke") {
+                    log.lock().unwrap().push(format!("revoke|{body}"));
+                    "{}".to_string()
                 } else {
                     format!(r#"{{"auth":"{auth}"}}"#)
                 };
@@ -1161,6 +1331,67 @@ mod tests {
             oauth_status(ws.path(), None, &store, &config).unwrap(),
             None
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn lists_renews_and_revokes_active_tokens() {
+        let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let base = identity_server(log.clone()).await;
+        let ws = tempfile::tempdir().unwrap();
+        init_workspace(ws.path(), "Demo").unwrap();
+        let config = OAuth2 {
+            grant: oauth::Grant::ClientCredentials,
+            token_url: format!("{base}/token"),
+            revoke_url: format!("{base}/revoke"),
+            client_id: "app".into(),
+            client_secret: "s3".into(),
+            ..Default::default()
+        };
+        let entry = oauth_request(&base, config);
+        collection::save_request(ws.path(), &entry).unwrap();
+        let store = MemoryStore::default();
+        assert!(oauth_tokens(ws.path(), None, &store).unwrap().is_empty());
+
+        let report = run_entry(ws.path(), &entry, None, &store).await;
+        assert!(report.passed(), "{report:?}");
+        let tokens = oauth_tokens(ws.path(), None, &store).unwrap();
+        assert_eq!(tokens.len(), 1);
+        let token = &tokens[0];
+        assert_eq!(token.info.preview, "cc-1");
+        assert_eq!(token.used_by, vec![entry.id.clone()]);
+        assert!(token.can_renew && token.can_revoke);
+
+        // Renew uses the refresh token.
+        let never = |_: &str| -> Result<(), String> { panic!("no browser for this grant") };
+        let renewed = oauth_renew(ws.path(), None, &store, &token.info.key, &never)
+            .await
+            .unwrap();
+        assert_eq!(renewed.preview, "cc-2");
+        assert!(log.lock().unwrap()[1].contains("grant_type=refresh_token"));
+
+        // Revoke sends the refresh token (it ends its access tokens too) and forgets it.
+        let note = oauth_revoke(ws.path(), None, &store, &token.info.key)
+            .await
+            .unwrap();
+        assert_eq!(note, None);
+        let revoked = log.lock().unwrap()[2].clone();
+        assert!(
+            revoked.starts_with("revoke|token=r-1&token_type_hint=refresh_token"),
+            "{revoked}"
+        );
+        assert!(oauth_tokens(ws.path(), None, &store).unwrap().is_empty());
+
+        // A token no request uses any more can only be forgotten.
+        run_entry(ws.path(), &entry, None, &store).await;
+        collection::delete_request(ws.path(), &entry.id).unwrap();
+        let orphan = oauth_tokens(ws.path(), None, &store).unwrap().remove(0);
+        assert!(orphan.used_by.is_empty() && !orphan.can_renew && !orphan.can_revoke);
+        let error = oauth_renew(ws.path(), None, &store, &orphan.info.key, &never)
+            .await
+            .unwrap_err();
+        assert!(error.contains("forget it"), "{error}");
+        oauth_forget_key(ws.path(), None, &store, &orphan.info.key).unwrap();
+        assert!(oauth_tokens(ws.path(), None, &store).unwrap().is_empty());
     }
 
     #[tokio::test(flavor = "multi_thread")]

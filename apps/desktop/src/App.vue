@@ -6,6 +6,7 @@ import RequestEditor from "./components/RequestEditor.vue";
 import ResponseViewer from "./components/ResponseViewer.vue";
 import EnvironmentPanel from "./components/EnvironmentPanel.vue";
 import CookiesPanel from "./components/CookiesPanel.vue";
+import TokensPanel from "./components/TokensPanel.vue";
 import FolderEditor from "./components/FolderEditor.vue";
 import RunnerPanel from "./components/RunnerPanel.vue";
 import CodePanel from "./components/CodePanel.vue";
@@ -115,6 +116,7 @@ watchEffect(() => {
 });
 const showEnvironments = ref(false);
 const showCookies = ref(false);
+const showTokens = ref(false);
 const showCode = ref(false);
 /** A short message in the top bar ("Copied as curl"). */
 const notice = ref("");
@@ -345,6 +347,15 @@ const requests = computed(() => {
 });
 
 const selected = computed(() => requests.value.find((n) => n.id === selectedId.value) ?? null);
+const requestNames = computed(() => Object.fromEntries(requests.value.map((n) => [n.id, n.name])));
+
+/** Opens a request picked in the tokens panel. */
+function openFromTokens(id: string) {
+  const node = requests.value.find((n) => n.id === id);
+  if (!node) return;
+  showTokens.value = false;
+  select(toEntry(node));
+}
 const dirty = computed(() => new Set(requests.value.filter((n) => saved.get(n.id) !== snapshot(n)).map((n) => n.id)));
 const result = computed<Result>(() => {
   const id = selectedId.value;
@@ -757,6 +768,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
           </select>
           <button class="ghost" title="Manage environments" @click="showEnvironments = true">⚙</button>
           <button class="ghost" title="Cookies of this environment" @click="showCookies = true">🍪</button>
+          <button class="ghost" title="OAuth 2.0 tokens of this environment" @click="showTokens = true">🔑</button>
           <button class="ghost" title="Show as code: curl, fetch, Python, Java, Go, C#…" @click="showCode = true">&lt;/&gt;</button>
           <span v-if="notice" class="notice" role="status">{{ notice }}</span>
           <button class="ghost danger" :class="{ armed: confirmDelete }" @click="deleteSelected">
@@ -856,6 +868,16 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       :environment-id="activeEnvId"
       :environment-name="environments.find((e) => e.id === activeEnvId)?.name ?? ''"
       @close="showCookies = false"
+    />
+
+    <TokensPanel
+      v-if="showTokens && workspace"
+      :root="workspace.root"
+      :environment-id="activeEnvId"
+      :environment-name="environments.find((e) => e.id === activeEnvId)?.name ?? ''"
+      :names="requestNames"
+      @open="openFromTokens"
+      @close="showTokens = false"
     />
 
     <ImportDialog

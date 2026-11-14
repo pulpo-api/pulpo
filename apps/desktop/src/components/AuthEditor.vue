@@ -186,6 +186,7 @@ async function discover() {
     const found = await oauthDiscover(issuer.value.trim());
     if (found.authorizationEndpoint) a.authUrl = found.authorizationEndpoint;
     a.tokenUrl = found.tokenEndpoint;
+    if (found.revocationEndpoint) a.revokeUrl = found.revocationEndpoint;
     if (!a.scope && found.scopesSupported.includes("openid")) a.scope = "openid";
   } catch (e) {
     problem.value = `OpenID discovery: ${e instanceof Error ? e.message : String(e)}`;
@@ -386,6 +387,15 @@ const getLabel = computed(() =>
       </template>
       <details class="advanced">
         <summary>Advanced</summary>
+        <div class="row">
+          <label for="oauth-revoke">Revocation URL</label>
+          <VarInput
+            id="oauth-revoke"
+            v-model="auth.revokeUrl"
+            placeholder="optional, for Revoke in the tokens panel"
+            aria-label="Revocation URL"
+          />
+        </div>
         <div v-if="auth.grant === 'authorizationCode'" class="row">
           <label for="oauth-redirect">Redirect URI</label>
           <VarInput

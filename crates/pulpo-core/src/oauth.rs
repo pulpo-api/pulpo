@@ -96,6 +96,9 @@ pub struct OAuth2 {
     /// Word before the token in the `Authorization` header.
     #[serde(default = "bearer")]
     pub header_prefix: String,
+    /// Token revocation endpoint (RFC 7009), used by "Revoke".
+    #[serde(default)]
+    pub revoke_url: String,
 }
 
 impl Default for OAuth2 {
@@ -113,6 +116,7 @@ impl Default for OAuth2 {
             pkce: true,
             client_auth: ClientAuth::default(),
             header_prefix: bearer(),
+            revoke_url: String::new(),
         }
     }
 }
@@ -460,16 +464,15 @@ fn parse_query(query: &str) -> HashMap<String, String> {
 }
 
 /// Sends a token request (form POST) and reads the token from the answer.
-async fn token_request(
+/// A form POST to an endpoint of the identity provider, with the client's credentials.
+async fn client_post(
     config: &OAuth2,
+    url: &str,
     mut fields: Vec<(&str, String)>,
     settings: &Settings,
     context: &SendContext<'_>,
-) -> Result<Token, String> {
-    if config.token_url.trim().is_empty() {
-        return Err("OAuth 2.0: the token URL is empty".into());
-    }
-    let mut request = HttpRequest::new(HttpMethod::Post, config.token_url.trim());
+) -> Result<http::HttpResponse, String> {
+    let mut request = HttpRequest::new(HttpMethod::Post, url.trim());
     request
         .headers
         .push(Header::new("Accept", "application/json"));
@@ -503,7 +506,37 @@ async fn token_request(
         cookies: None,
         client_pem: context.client_pem.clone(),
     };
-    let response = http::send_with(&request, &context)
+    http::send_with(&request, &context)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// `error: error_description` of an OAuth error answer, or the start of the body.
+fn error_reason(response: &http::HttpResponse) -> String {
+    let json: Option<serde_json::Value> = serde_json::from_str(&response.body).ok();
+    let field = |name: &str| {
+        json.as_ref()
+            .and_then(|j| j.get(name))
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+    };
+    match (field("error"), field("error_description")) {
+        (Some(error), Some(description)) => format!("{error}: {description}"),
+        (Some(error), None) => error,
+        _ => response.body.chars().take(300).collect(),
+    }
+}
+
+async fn token_request(
+    config: &OAuth2,
+    fields: Vec<(&str, String)>,
+    settings: &Settings,
+    context: &SendContext<'_>,
+) -> Result<Token, String> {
+    if config.token_url.trim().is_empty() {
+        return Err("OAuth 2.0: the token URL is empty".into());
+    }
+    let response = client_post(config, &config.token_url, fields, settings, context)
         .await
         .map_err(|e| format!("OAuth 2.0 token request: {e}"))?;
     let json: Option<serde_json::Value> = serde_json::from_str(&response.body).ok();
@@ -517,14 +550,11 @@ async fn token_request(
             })
     };
     if !(200..300).contains(&response.status) || field("error").is_some() {
-        let reason = match (field("error"), field("error_description")) {
-            (Some(error), Some(description)) => format!("{error}: {description}"),
-            (Some(error), None) => error,
-            _ => response.body.chars().take(300).collect(),
-        };
         return Err(format!(
-            "OAuth 2.0 token request: {} {} ({reason})",
-            response.status, response.status_text
+            "OAuth 2.0 token request: {} {} ({})",
+            response.status,
+            response.status_text,
+            error_reason(&response)
         ));
     }
     let Some(access_token) = field("access_token") else {
@@ -782,12 +812,46 @@ pub async fn authorize(
     token_request(config, fields, settings, context).await
 }
 
+/// Asks the identity provider to revoke the token (RFC 7009): the refresh token when there
+/// is one, which also ends its access tokens, else the access token.
+pub async fn revoke(
+    config: &OAuth2,
+    token: &Token,
+    settings: &Settings,
+    context: &SendContext<'_>,
+) -> Result<(), String> {
+    if config.revoke_url.trim().is_empty() {
+        return Err("OAuth 2.0: no revocation URL".into());
+    }
+    let (value, hint) = match &token.refresh_token {
+        Some(refresh) => (refresh.clone(), "refresh_token"),
+        None => (token.access_token.clone(), "access_token"),
+    };
+    let fields = vec![("token", value), ("token_type_hint", hint.to_string())];
+    let response = client_post(config, &config.revoke_url, fields, settings, context)
+        .await
+        .map_err(|e| format!("OAuth 2.0 revocation: {e}"))?;
+    if (200..300).contains(&response.status) {
+        Ok(())
+    } else {
+        Err(format!(
+            "OAuth 2.0 revocation: {} {} ({})",
+            response.status,
+            response.status_text,
+            error_reason(&response)
+        ))
+    }
+}
+
 /// Endpoints read from an OpenID Connect discovery document.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Discovery {
     pub authorization_endpoint: String,
     pub token_endpoint: String,
+    /// Empty when the provider does not publish one.
+    #[serde(default)]
+    pub revocation_endpoint: String,
     pub scopes_supported: Vec<String>,
 }
 
@@ -829,6 +893,7 @@ pub async fn discover(issuer: &str, settings: &Settings) -> Result<Discovery, St
     let discovery = Discovery {
         authorization_endpoint: text("authorization_endpoint"),
         token_endpoint: text("token_endpoint"),
+        revocation_endpoint: text("revocation_endpoint"),
         scopes_supported: json
             .get("scopes_supported")
             .and_then(|s| s.as_array())

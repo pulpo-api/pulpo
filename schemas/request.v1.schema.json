@@ -116,7 +116,8 @@
             "redirectUri": { "type": "string", "description": "Empty = http://127.0.0.1:<free port>/callback. Must be http on 127.0.0.1, localhost or [::1]." },
             "pkce": { "type": "boolean", "default": true },
             "clientAuth": { "enum": ["header", "body"], "default": "header", "description": "Send the client id and secret as Basic auth or in the form body." },
-            "headerPrefix": { "type": "string", "default": "Bearer" }
+            "headerPrefix": { "type": "string", "default": "Bearer" },
+            "revokeUrl": { "type": "string", "description": "Token revocation endpoint (RFC 7009), for Revoke in the tokens panel and pulpo auth revoke." }
           }
         },
         {

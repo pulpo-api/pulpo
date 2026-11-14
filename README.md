@@ -124,8 +124,9 @@ auth:
 - **Client credentials and password**: the token is requested when you send, cached and reused until it expires.
 - **Authorization code**: press *Get new access token* in the Auth tab (or run `pulpo auth login <request>`). Your browser opens the login page and comes back to `http://127.0.0.1:<free port>/callback`. Register that redirect URI with your provider, or set a fixed one such as `http://127.0.0.1:8765/callback` in `redirectUri`.
 - Expired tokens are renewed with the refresh token when there is one.
-- Tokens are kept per environment in the OS keychain, split into parts because Windows caps a credential at 2.5 KB and tokens from Azure AD and others are longer. Only their expiry, scope and grant go to `.pulpo/tokens.json` (local, never committed). `pulpo auth ls` lists them and `pulpo auth clear` forgets them.
-- *Discover* fills the URLs from an issuer (OpenID Connect discovery).
+- Tokens are kept per environment in the OS keychain, split into parts because Windows caps a credential at 2.5 KB and tokens from Azure AD and others are longer. Only their expiry, scope and grant go to `.pulpo/tokens.json` (local, never committed). `pulpo auth clear` forgets them all.
+- *Discover* fills the URLs from an issuer (OpenID Connect discovery), the revocation URL included.
+- The **🔑 tokens panel** lists the tokens of the environment: how long each one has left, which requests use it, and buttons to **Renew** it now, **Revoke** it at the identity provider (when the auth has a `revokeUrl`) or **Forget** it on this machine. In the terminal: `pulpo auth ls`, `pulpo auth renew <KEY>` and `pulpo auth revoke <KEY>`.
 - Imported from Postman collections and from OpenAPI `oauth2` security schemes.
 
 ### Digest, AWS Signature v4, Hawk and NTLM

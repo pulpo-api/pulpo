@@ -183,6 +183,7 @@ pub fn resolve_request(
                     password: text(&config.password),
                     redirect_uri: text(&config.redirect_uri),
                     header_prefix: text(&config.header_prefix),
+                    revoke_url: text(&config.revoke_url),
                     ..config.clone()
                 })
             }

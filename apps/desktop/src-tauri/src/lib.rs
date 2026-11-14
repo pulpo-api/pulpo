@@ -411,7 +411,6 @@ async fn import_into(
     import::apply(Path::new(&root), &folder_id, &plan, &Keychain).map_err(|e| e.to_string())
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
 /// Gets a new OAuth 2.0 token (browser login for the authorization code grant) and caches it.
 #[tauri::command]
 async fn oauth_login(
@@ -465,6 +464,51 @@ async fn oauth_discover(issuer: String) -> Result<Discovery, String> {
     oauth::discover(&issuer, &Settings::default()).await
 }
 
+/// Every cached OAuth 2.0 token of an environment and the requests that use it.
+#[tauri::command]
+async fn oauth_tokens(
+    root: String,
+    environment_id: Option<String>,
+) -> Result<Vec<run::ActiveToken>, String> {
+    run::oauth_tokens(Path::new(&root), environment_id.as_deref(), &Keychain)
+}
+
+#[tauri::command]
+async fn oauth_renew(
+    root: String,
+    environment_id: Option<String>,
+    key: String,
+) -> Result<TokenInfo, String> {
+    run::oauth_renew(
+        Path::new(&root),
+        environment_id.as_deref(),
+        &Keychain,
+        &key,
+        &oauth::open_browser,
+    )
+    .await
+}
+
+/// Revokes a token at the identity provider (when it can) and forgets it.
+#[tauri::command]
+async fn oauth_revoke(
+    root: String,
+    environment_id: Option<String>,
+    key: String,
+) -> Result<Option<String>, String> {
+    run::oauth_revoke(Path::new(&root), environment_id.as_deref(), &Keychain, &key).await
+}
+
+#[tauri::command]
+async fn oauth_forget_key(
+    root: String,
+    environment_id: Option<String>,
+    key: String,
+) -> Result<(), String> {
+    run::oauth_forget_key(Path::new(&root), environment_id.as_deref(), &Keychain, &key)
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -513,7 +557,11 @@ pub fn run() {
             oauth_login,
             oauth_status,
             oauth_forget,
-            oauth_discover
+            oauth_discover,
+            oauth_tokens,
+            oauth_renew,
+            oauth_revoke,
+            oauth_forget_key
         ])
         .run(tauri::generate_context!())
         .expect("error while running Pulpo");

@@ -58,10 +58,16 @@ COMMANDS:
     auth login <REQUEST> [-w DIR] [-e ENV]
                Get an OAuth 2.0 token for the auth a request uses (its own or
                a folder's): opens the browser for the authorization code
-               grant. Tokens are cached in .pulpo/tokens.json (never in git)
-               and refreshed when they expire.
+               grant. Tokens are cached in the OS keychain (never in git) and
+               refreshed when they expire.
     auth ls [-w DIR] [-e ENV]
-               List the cached OAuth 2.0 tokens of an environment
+               List the cached OAuth 2.0 tokens of an environment and the
+               requests that use them
+    auth renew <KEY> [-w DIR] [-e ENV]
+               Get a fresh token now (refresh token, token request or login)
+    auth revoke <KEY> [-w DIR] [-e ENV]
+               Revoke a token at the identity provider (when the auth has a
+               revokeUrl) and forget it
     auth clear [-w DIR] [-e ENV]
                Forget the cached OAuth 2.0 tokens of an environment
     env [DIR]  List environments and their variables (secrets are masked)
@@ -477,7 +483,11 @@ fn run_auth(args: &[String]) -> ExitCode {
                 Some(e) => env_name = Some(e.clone()),
                 None => return usage_error("auth: -e needs an ENV"),
             },
-            other if !other.starts_with('-') && target.is_empty() && action == "login" => {
+            other
+                if !other.starts_with('-')
+                    && target.is_empty()
+                    && matches!(action, "login" | "renew" | "revoke") =>
+            {
                 target = other.replace('\\', "/")
             }
             other => return usage_error(&format!("auth: unexpected {other}")),
@@ -513,9 +523,7 @@ fn run_auth(args: &[String]) -> ExitCode {
             };
             let open = |url: &str| {
                 eprintln!(
-                    "Opening the login page in your browser. If it does not open, visit:
-{url}
-"
+                    "Opening the login page in your browser. If it does not open, visit:\n{url}\n"
                 );
                 if let Err(e) = pulpo_core::oauth::open_browser(url) {
                     eprintln!("{e}");
@@ -545,27 +553,84 @@ fn run_auth(args: &[String]) -> ExitCode {
             }
         }
         "ls" => {
-            let tokens = pulpo_core::oauth::load_tokens(&dir, environment_id, &Keychain);
+            let tokens = match run::oauth_tokens(&dir, environment_id, &Keychain) {
+                Ok(tokens) => tokens,
+                Err(e) => return fail(e),
+            };
             if tokens.is_empty() {
                 println!("No OAuth 2.0 tokens cached.");
             }
-            let now = pulpo_core::oauth::now();
-            for (key, token) in &tokens {
-                let info = pulpo_core::oauth::TokenInfo::of(key, token, now);
+            for token in &tokens {
+                let info = &token.info;
                 println!(
-                    "{key}  {}  {}  client {}{}{}",
+                    "{}  {}  {}  client {}{}{}{}",
+                    info.key,
                     info.grant.as_str(),
                     info.token_url,
                     info.client_id,
-                    expiry(&info),
+                    expiry(info),
                     if info.has_refresh {
                         ", can refresh"
                     } else {
                         ""
-                    }
+                    },
+                    if token.can_revoke { ", can revoke" } else { "" }
                 );
+                if token.used_by.is_empty() {
+                    println!("    used by no request now");
+                }
+                for id in &token.used_by {
+                    println!("    {id}");
+                }
             }
             ExitCode::SUCCESS
+        }
+        "renew" | "revoke" => {
+            if target.is_empty() {
+                return usage_error(&format!("auth {action}: expected a KEY (see auth ls)"));
+            }
+            let runtime = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(runtime) => runtime,
+                Err(e) => return fail(format!("could not start the runtime: {e}")),
+            };
+            if action == "renew" {
+                let open = |url: &str| {
+                    eprintln!("Opening the login page in your browser. If it does not open, visit:\n{url}\n");
+                    if let Err(e) = pulpo_core::oauth::open_browser(url) {
+                        eprintln!("{e}");
+                    }
+                    Ok(())
+                };
+                match runtime.block_on(run::oauth_renew(
+                    &dir,
+                    environment_id,
+                    &Keychain,
+                    &target,
+                    &open,
+                )) {
+                    Ok(info) => {
+                        println!("Got an access token ({}…){}", info.preview, expiry(&info));
+                        ExitCode::SUCCESS
+                    }
+                    Err(e) => fail(e),
+                }
+            } else {
+                match runtime.block_on(run::oauth_revoke(&dir, environment_id, &Keychain, &target))
+                {
+                    Ok(None) => {
+                        println!("Revoked and forgotten.");
+                        ExitCode::SUCCESS
+                    }
+                    Ok(Some(note)) => {
+                        println!("Forgotten ({note}).");
+                        ExitCode::SUCCESS
+                    }
+                    Err(e) => fail(e),
+                }
+            }
         }
         "clear" => match pulpo_core::oauth::clear_tokens(&dir, environment_id, &Keychain) {
             Ok(count) => {
@@ -574,7 +639,7 @@ fn run_auth(args: &[String]) -> ExitCode {
             }
             Err(e) => fail(e),
         },
-        _ => usage_error("auth: expected login, ls or clear"),
+        _ => usage_error("auth: expected login, ls, renew, revoke or clear"),
     }
 }
 
