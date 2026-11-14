@@ -394,7 +394,17 @@ export interface Cookie {
 }
 
 export interface ImportSummary {
-  format: "postmanCollection" | "postmanEnvironment" | "openApi" | "curl" | null;
+  format:
+    | "postmanCollection"
+    | "postmanEnvironment"
+    | "openApi"
+    | "curl"
+    | "insomnia"
+    | "bruno"
+    | "hoppscotch"
+    | "har"
+    | "httpFile"
+    | null;
   folderId: string;
   folders: number;
   requests: number;
@@ -616,8 +626,13 @@ const tauriBackend: WorkspaceBackend = {
     const { open } = await import("@tauri-apps/plugin-dialog");
     const picked = await open({
       multiple: false,
-      title: "Import a collection, environment, OpenAPI document or curl file",
-      filters: [{ name: "Collections and specs", extensions: ["json", "yaml", "yml", "txt", "sh"] }],
+      title: "Import a collection, environment, OpenAPI document, HAR, .http or curl file",
+      filters: [
+        {
+          name: "Collections and specs",
+          extensions: ["json", "yaml", "yml", "har", "http", "rest", "txt", "sh"],
+        },
+      ],
     });
     return typeof picked === "string" ? picked : null;
   },

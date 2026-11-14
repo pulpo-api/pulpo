@@ -230,9 +230,26 @@ pulpo import my-collection.postman_collection.json my-api   # folders, auth, bod
 pulpo import local.postman_environment.json my-api          # secrets go to the keychain
 pulpo import openapi.yaml my-api                            # one folder per tag, example bodies
 pbpaste | pulpo import - my-api                             # a curl command ("Copy as cURL")
+pulpo import Insomnia_2026.json my-api                      # Insomnia v4 (JSON) or v5 (YAML)
+pulpo import ~/bruno/shop/bruno.json my-api                 # a Bruno collection folder
+pulpo import requests.http my-api                           # VS Code REST Client / JetBrains
+pulpo import session.har my-api                             # browser DevTools: API calls only
 ```
 
-Postman v2.1 collections and environments, OpenAPI 3 (JSON or YAML, including `$ref`s to sibling files) and curl commands (Unix and Windows `^` continuations) are recognised automatically. Anything that cannot be imported yet, like pre-request and test scripts, is listed as a warning. In the desktop app, use **Import** in the sidebar.
+Recognised automatically:
+
+| From | What comes in |
+|---|---|
+| Postman v2.1 | Collections (folders, auth, bodies, scripts) and environments |
+| Insomnia v4 / v5 | Folders, requests, auth, base and sub-environments; `insomnia.*` scripts become `pm.*` |
+| Bruno | The `.bru` folder or its JSON export, with environments (secret values stay on each machine) |
+| Hoppscotch | Collections, `<<variables>>` become `{{variables}}` |
+| OpenAPI 3 | JSON or YAML, including `$ref`s to sibling files |
+| HAR | XHR and fetch calls grouped by host; cookies left to the jar |
+| `.http` / `.rest` | Requests, `@variables` as an environment, `# @name`, `< file` bodies |
+| curl | Unix and Windows `^` continuations |
+
+Scripts written for Bruno (`bru.*`) or Hoppscotch (`pw.*`) are kept as a comment to rewrite, so nothing breaks when they run. Anything that cannot be imported is listed as a warning. In the desktop app, use **Import** in the sidebar.
 
 ## Roadmap
 

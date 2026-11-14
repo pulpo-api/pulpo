@@ -43,6 +43,11 @@ const formats: Record<string, string> = {
   postmanEnvironment: "Postman environment",
   openApi: "OpenAPI",
   curl: "curl command",
+  insomnia: "Insomnia export",
+  bruno: "Bruno collection",
+  hoppscotch: "Hoppscotch collection",
+  har: "HAR file",
+  httpFile: ".http file",
 };
 </script>
 
@@ -60,8 +65,9 @@ const formats: Record<string, string> = {
       <p v-else-if="blocked" class="warn">{{ blocked }}</p>
       <template v-else>
         <p class="muted">
-          Into <code>{{ target || "workspace root" }}</code>. Postman collections (v2.1) and environments,
-          OpenAPI 3 (JSON or YAML) and curl commands are recognised automatically.
+          Into <code>{{ target || "workspace root" }}</code>. Recognised automatically: Postman (v2.1) collections and
+          environments, Insomnia, Hoppscotch, Bruno (pick its <code>bruno.json</code>), OpenAPI 3, HAR files from the browser,
+          <code>.http</code> files and curl commands.
         </p>
 
         <button class="primary" :disabled="busy" @click="pickFile">Choose a file…</button>

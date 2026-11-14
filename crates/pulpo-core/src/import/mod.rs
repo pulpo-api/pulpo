@@ -1,9 +1,15 @@
-//! Importers: Postman collections and environments, OpenAPI 3 and curl commands.
+//! Importers: Postman collections and environments, OpenAPI 3, curl commands, Insomnia,
+//! Bruno, Hoppscotch, HAR files and `.http` files.
 //!
 //! Each importer turns its input into an [`ImportPlan`]; [`apply`] writes the plan
 //! into a workspace as regular Pulpo files.
 
+mod bruno;
+mod common;
 mod curl;
+mod hoppscotch;
+mod http_file;
+mod insomnia;
 mod openapi;
 mod postman;
 
@@ -58,6 +64,11 @@ pub enum ImportFormat {
     PostmanEnvironment,
     OpenApi,
     Curl,
+    Insomnia,
+    Bruno,
+    Hoppscotch,
+    Har,
+    HttpFile,
 }
 
 impl ImportFormat {
@@ -67,6 +78,11 @@ impl ImportFormat {
             ImportFormat::PostmanEnvironment => "Postman environment",
             ImportFormat::OpenApi => "OpenAPI",
             ImportFormat::Curl => "curl command",
+            ImportFormat::Insomnia => "Insomnia export",
+            ImportFormat::Bruno => "Bruno collection",
+            ImportFormat::Hoppscotch => "Hoppscotch collection",
+            ImportFormat::Har => "HAR file",
+            ImportFormat::HttpFile => ".http file",
         }
     }
 }
@@ -108,22 +124,29 @@ pub fn parse(text: &str) -> Result<ImportPlan, ImportError> {
     if trimmed.starts_with("curl ") || trimmed.starts_with("curl\t") || trimmed == "curl" {
         return curl::plan(trimmed);
     }
-    if trimmed.starts_with('{') {
+    if trimmed.starts_with('{') || trimmed.starts_with('[') {
         let value: serde_json::Value = serde_json::from_str(trimmed)
             .map_err(|e| ImportError::Invalid(format!("JSON: {e}")))?;
         return parse_value(value);
     }
     match serde_norway::from_str::<serde_json::Value>(trimmed) {
         Ok(value) if value.is_object() => parse_value(value),
-        _ => Err(ImportError::UnknownFormat(
-            "expected a Postman collection or environment, an OpenAPI 3 document or a curl command"
-                .into(),
-        )),
+        _ if http_file::looks_like_http_file(trimmed) => http_file::plan(trimmed),
+        _ => Err(ImportError::UnknownFormat(EXPECTED.into())),
     }
 }
 
+const EXPECTED: &str = "expected a Postman, Insomnia, Bruno or Hoppscotch collection, an OpenAPI 3 document, a HAR file, a .http file or a curl command";
+
 /// Like [`parse`], but reads a file and follows OpenAPI `$ref`s to sibling files.
 pub fn parse_file(path: &Path) -> Result<ImportPlan, ImportError> {
+    // A Bruno collection is a folder: pick it or its bruno.json.
+    if path.is_dir() {
+        return bruno::folder(path);
+    }
+    if path.file_name().is_some_and(|n| n == "bruno.json") {
+        return bruno::folder(path.parent().unwrap_or_else(|| Path::new(".")));
+    }
     let text = std::fs::read_to_string(path)
         .map_err(|e| ImportError::Invalid(format!("{}: {e}", path.display())))?;
     let trimmed = text.trim_start_matches('\u{feff}').trim();
@@ -181,10 +204,19 @@ fn parse_value(value: serde_json::Value) -> Result<ImportPlan, ImportError> {
             "Swagger 2.0 is not supported yet; convert it to OpenAPI 3 first".into(),
         ));
     }
-    Err(ImportError::UnknownFormat(
-        "expected a Postman collection or environment, an OpenAPI 3 document or a curl command"
-            .into(),
-    ))
+    if insomnia::is_insomnia(&value) {
+        return insomnia::plan(&value);
+    }
+    if hoppscotch::is_har(&value) {
+        return hoppscotch::har(&value);
+    }
+    if hoppscotch::is_hoppscotch(&value) {
+        return hoppscotch::plan(&value);
+    }
+    if bruno::is_bruno_json(&value) {
+        return bruno::json(&value);
+    }
+    Err(ImportError::UnknownFormat(EXPECTED.into()))
 }
 
 /// Writes the plan into `folder_id` of the workspace at `root`.
