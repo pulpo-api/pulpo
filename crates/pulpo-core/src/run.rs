@@ -9,6 +9,7 @@ use crate::data::Row;
 use crate::environment::{self, SecretStore};
 use crate::http::{self, HttpResponse, SendContext, SendError};
 use crate::local;
+use crate::oauth::{self, OAuth2, Obtained, TokenInfo, Tokens};
 use crate::script::{self, Phase, Script, ScriptContext, TestResult};
 use crate::snapshot;
 use crate::variables::{self, Variables};
@@ -73,6 +74,10 @@ pub struct Session {
     env: Variables,
     local: HashMap<String, String>,
     jar: Arc<SharedJar>,
+    /// OAuth 2.0 tokens of the environment.
+    tokens: Tokens,
+    /// Tokens obtained in this session, for [`Session::save_tokens`].
+    new_tokens: Vec<String>,
     persist: bool,
 }
 
@@ -97,6 +102,8 @@ impl Session {
             env,
             local: local::load_local(root, environment_id),
             jar: Arc::new(SharedJar::new(cookies::load_jar(root, environment_id))),
+            tokens: oauth::load_tokens(root, environment_id, store),
+            new_tokens: Vec::new(),
             persist,
         })
     }
@@ -109,9 +116,135 @@ impl Session {
             env: self.env.clone(),
             local: self.local.clone(),
             jar: Arc::new(SharedJar::new(self.jar.snapshot())),
+            tokens: self.tokens.clone(),
+            new_tokens: Vec::new(),
             persist: false,
         }
     }
+
+    /// `{{variables}}` of an OAuth 2.0 auth, with the environment and local values.
+    fn resolve_oauth(&self, config: &OAuth2) -> Result<OAuth2, String> {
+        let mut vars = self.env.clone();
+        vars.extend(self.local.clone());
+        let mut request = http::HttpRequest::new(crate::HttpMethod::Get, "");
+        request.auth = Some(http::Auth::OAuth2(config.clone()));
+        match variables::resolve_request(&request, &vars) {
+            Ok(resolved) => match resolved.auth {
+                Some(http::Auth::OAuth2(config)) => Ok(config),
+                _ => unreachable!("resolving keeps the kind of auth"),
+            },
+            Err(missing) => Err(SendError::Unresolved(missing.join(", ")).to_string()),
+        }
+    }
+
+    /// The access token for a (resolved) OAuth 2.0 auth, and a note when it is new.
+    async fn oauth_token(
+        &mut self,
+        root: &Path,
+        config: &OAuth2,
+        settings: &http::Settings,
+        vars: &Variables,
+    ) -> Result<(String, Option<String>), String> {
+        let client_pem =
+            client_certificate(root, &config.token_url, vars).map_err(|e| e.to_string())?;
+        let context = SendContext {
+            root: Some(root),
+            cookies: None,
+            client_pem,
+        };
+        let (token, obtained) = oauth::token_for(config, &self.tokens, settings, &context).await?;
+        if obtained == Obtained::Cached {
+            return Ok((token.access_token, None));
+        }
+        let note = match (obtained, token.expires_at) {
+            (Obtained::Refreshed, _) => "OAuth 2.0: refreshed the access token".to_string(),
+            (_, Some(at)) => format!(
+                "OAuth 2.0: got a new access token (expires in {} s)",
+                at.saturating_sub(token.obtained_at)
+            ),
+            _ => "OAuth 2.0: got a new access token".to_string(),
+        };
+        let key = oauth::cache_key(config);
+        self.tokens.insert(key.clone(), token.clone());
+        if self.persist && !self.new_tokens.contains(&key) {
+            self.new_tokens.push(key);
+        }
+        Ok((token.access_token, Some(note)))
+    }
+
+    /// Caches the tokens this session obtained (the secrets go to the keychain). On error
+    /// they stay in memory for the rest of the session; returns what went wrong.
+    pub fn save_tokens(&mut self, root: &Path, store: &dyn SecretStore) -> Vec<String> {
+        let environment_id = self.environment_id.clone();
+        std::mem::take(&mut self.new_tokens)
+            .into_iter()
+            .filter_map(|key| {
+                let token = self.tokens.get(&key)?;
+                oauth::save_token(root, environment_id.as_deref(), store, &key, Some(token))
+                    .err()
+                    .map(|e| format!("OAuth 2.0: {e}; the token is kept only for this run"))
+            })
+            .collect()
+    }
+}
+
+/// Gets a new OAuth 2.0 token and caches it: a login in the browser (`open` shows the
+/// page) for the authorization code grant, a token request for the others.
+pub async fn oauth_login(
+    root: &Path,
+    environment_id: Option<&str>,
+    store: &dyn SecretStore,
+    config: &OAuth2,
+    settings: &http::Settings,
+    open: &(dyn Fn(&str) -> Result<(), String> + Sync),
+) -> Result<TokenInfo, String> {
+    let session = Session::open(root, environment_id, store, true)?;
+    let config = session.resolve_oauth(config)?;
+    let mut vars = session.env.clone();
+    vars.extend(session.local.clone());
+    let client_pem =
+        client_certificate(root, &config.token_url, &vars).map_err(|e| e.to_string())?;
+    let context = SendContext {
+        root: Some(root),
+        cookies: None,
+        client_pem,
+    };
+    let token = match config.grant {
+        oauth::Grant::AuthorizationCode => {
+            oauth::authorize(&config, settings, &context, open, oauth::LOGIN_TIMEOUT).await?
+        }
+        _ => oauth::fetch(&config, settings, &context).await?,
+    };
+    let key = oauth::cache_key(&config);
+    oauth::save_token(root, environment_id, store, &key, Some(&token))?;
+    Ok(TokenInfo::of(&key, &token, oauth::now()))
+}
+
+/// The cached token of an OAuth 2.0 auth in an environment, if any.
+pub fn oauth_status(
+    root: &Path,
+    environment_id: Option<&str>,
+    store: &dyn SecretStore,
+    config: &OAuth2,
+) -> Result<Option<TokenInfo>, String> {
+    let session = Session::open(root, environment_id, store, false)?;
+    let key = oauth::cache_key(&session.resolve_oauth(config)?);
+    Ok(session
+        .tokens
+        .get(&key)
+        .map(|token| TokenInfo::of(&key, token, oauth::now())))
+}
+
+/// Forgets the cached token of an OAuth 2.0 auth in an environment.
+pub fn oauth_forget(
+    root: &Path,
+    environment_id: Option<&str>,
+    store: &dyn SecretStore,
+    config: &OAuth2,
+) -> Result<(), String> {
+    let session = Session::open(root, environment_id, store, false)?;
+    let key = oauth::cache_key(&session.resolve_oauth(config)?);
+    oauth::save_token(root, environment_id, store, &key, None)
 }
 
 fn scripts_for(
@@ -180,7 +313,11 @@ pub async fn run_entry_with(
     options: &RunOptions,
 ) -> RunReport {
     match Session::open(root, environment_id, store, true) {
-        Ok(mut session) => run_in(root, entry, &mut session, options).await,
+        Ok(mut session) => {
+            let mut report = run_in(root, entry, &mut session, options).await;
+            report.logs.extend(session.save_tokens(root, store));
+            report
+        }
         Err(e) => RunReport {
             id: entry.id.clone(),
             name: entry.name.clone(),
@@ -291,7 +428,23 @@ pub async fn run_in(
         });
     match prepared {
         Err(e) => report.error = Some(e),
-        Ok((resolved, client_pem)) => {
+        Ok((mut resolved, client_pem)) => 'send: {
+            if let Some(http::Auth::OAuth2(config)) = resolved.auth.clone() {
+                match session
+                    .oauth_token(root, &config, &resolved.settings, &vars)
+                    .await
+                {
+                    Ok((token, note)) => {
+                        report.logs.extend(note);
+                        resolved.auth = None;
+                        oauth::apply_token(&mut resolved.headers, &config.header_prefix, &token);
+                    }
+                    Err(e) => {
+                        report.error = Some(SendError::Other(e));
+                        break 'send;
+                    }
+                }
+            }
             let send_context = SendContext {
                 root: Some(root),
                 cookies: Some(jar.clone()),
@@ -849,5 +1002,253 @@ mod tests {
         assert_eq!(names(&folder), ["Create", "List"]);
         assert_eq!(names("02-health.pulpo.yaml"), ["Health"]);
         assert!(names("nope").is_empty());
+    }
+
+    /// A fake identity server: `/token` hands out tokens by grant, anything else echoes
+    /// the Authorization header. Records each token request as `auth|body`.
+    async fn identity_server(log: Arc<std::sync::Mutex<Vec<String>>>) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let mut refreshed = 0;
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    return;
+                };
+                let mut data = Vec::new();
+                let mut buffer = vec![0u8; 8192];
+                loop {
+                    let read = socket.read(&mut buffer).await.unwrap_or(0);
+                    data.extend_from_slice(&buffer[..read]);
+                    let text = String::from_utf8_lossy(&data).to_string();
+                    if let Some((head, body)) = text.split_once("\r\n\r\n") {
+                        let length = head
+                            .lines()
+                            .find_map(|l| {
+                                l.to_ascii_lowercase()
+                                    .strip_prefix("content-length: ")
+                                    .map(|v| v.trim().parse::<usize>().unwrap_or(0))
+                            })
+                            .unwrap_or(0);
+                        if body.len() >= length {
+                            break;
+                        }
+                    }
+                    if read == 0 {
+                        break;
+                    }
+                }
+                let text = String::from_utf8_lossy(&data).to_string();
+                let (head, body) = text.split_once("\r\n\r\n").unwrap_or((&text, ""));
+                let line = head.lines().next().unwrap_or("").to_string();
+                let auth = head
+                    .lines()
+                    .find_map(|l| l.strip_prefix("authorization: "))
+                    .unwrap_or("")
+                    .to_string();
+                let reply = if line.starts_with("POST /token") {
+                    log.lock().unwrap().push(format!("{auth}|{body}"));
+                    if body.contains("grant_type=client_credentials") {
+                        r#"{"access_token":"cc-1","token_type":"Bearer","expires_in":1,"refresh_token":"r-1"}"#.to_string()
+                    } else if body.contains("grant_type=refresh_token") {
+                        refreshed += 1;
+                        format!(
+                            r#"{{"access_token":"cc-{}","expires_in":3600}}"#,
+                            refreshed + 1
+                        )
+                    } else if body.contains("grant_type=authorization_code")
+                        && body.contains("code=abc")
+                    {
+                        r#"{"access_token":"ac-1","expires_in":3600}"#.to_string()
+                    } else {
+                        r#"{"error":"invalid_grant","error_description":"bad code"}"#.to_string()
+                    }
+                } else {
+                    format!(r#"{{"auth":"{auth}"}}"#)
+                };
+                let status = if reply.contains("\"error\"") {
+                    "400 Bad Request"
+                } else {
+                    "200 OK"
+                };
+                let reply = format!(
+                    "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{reply}",
+                    reply.len()
+                );
+                let _ = socket.write_all(reply.as_bytes()).await;
+            }
+        });
+        format!("http://{address}")
+    }
+
+    fn oauth_request(base: &str, config: OAuth2) -> RequestEntry {
+        let mut request = HttpRequest::new(HttpMethod::Get, format!("{base}/api"));
+        request.auth = Some(http::Auth::OAuth2(config));
+        RequestEntry {
+            id: "01-api.pulpo.yaml".into(),
+            name: "api".into(),
+            protocol: Protocol::Http,
+            request,
+            scripts: Scripts::default(),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn fetches_caches_and_refreshes_client_credentials_tokens() {
+        let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let base = identity_server(log.clone()).await;
+        let ws = tempfile::tempdir().unwrap();
+        init_workspace(ws.path(), "Demo").unwrap();
+        local::apply_changes(
+            ws.path(),
+            None,
+            &HashMap::from([("secret".to_string(), Some("s3".to_string()))]),
+        )
+        .unwrap();
+        let config = OAuth2 {
+            grant: oauth::Grant::ClientCredentials,
+            token_url: format!("{base}/token"),
+            client_id: "app".into(),
+            client_secret: "{{secret}}".into(),
+            scope: "read".into(),
+            ..Default::default()
+        };
+        let entry = oauth_request(&base, config.clone());
+        let store = MemoryStore::default();
+        let body = |r: &RunReport| {
+            r.response
+                .as_ref()
+                .map(|r| r.body.clone())
+                .unwrap_or_default()
+        };
+
+        let first = run_entry(ws.path(), &entry, None, &store).await;
+        assert!(first.passed(), "{first:?}");
+        assert_eq!(body(&first), r#"{"auth":"Bearer cc-1"}"#);
+        assert!(
+            first
+                .logs
+                .iter()
+                .any(|l| l.contains("got a new access token")),
+            "{:?}",
+            first.logs
+        );
+        let sent = log.lock().unwrap()[0].clone();
+        assert!(
+            sent.starts_with("Basic YXBwOnMz|"),
+            "client secret in the header: {sent}"
+        );
+        assert!(sent.contains("scope=read"), "{sent}");
+
+        // cc-1 expires in 1 s (inside the safety margin): the refresh token gets a new one.
+        let second = run_entry(ws.path(), &entry, None, &store).await;
+        assert_eq!(body(&second), r#"{"auth":"Bearer cc-2"}"#, "{second:?}");
+        assert!(log.lock().unwrap()[1].contains("grant_type=refresh_token"));
+
+        // cc-2 is valid for an hour: no token request at all.
+        let third = run_entry(ws.path(), &entry, None, &store).await;
+        assert_eq!(body(&third), r#"{"auth":"Bearer cc-2"}"#);
+        assert!(third.logs.is_empty(), "{:?}", third.logs);
+        assert_eq!(log.lock().unwrap().len(), 2);
+
+        let status = oauth_status(ws.path(), None, &store, &config)
+            .unwrap()
+            .unwrap();
+        assert!(status.valid && status.has_refresh);
+        assert_eq!(status.preview, "cc-2");
+        oauth_forget(ws.path(), None, &store, &config).unwrap();
+        assert_eq!(
+            oauth_status(ws.path(), None, &store, &config).unwrap(),
+            None
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn logs_in_with_the_authorization_code_and_pkce() {
+        let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let base = identity_server(log.clone()).await;
+        let ws = tempfile::tempdir().unwrap();
+        init_workspace(ws.path(), "Demo").unwrap();
+        let config = OAuth2 {
+            grant: oauth::Grant::AuthorizationCode,
+            auth_url: format!("{base}/authorize"),
+            token_url: format!("{base}/token"),
+            client_id: "spa".into(),
+            client_auth: oauth::ClientAuth::Body,
+            ..Default::default()
+        };
+        let entry = oauth_request(&base, config.clone());
+        let store = MemoryStore::default();
+
+        let before = run_entry(ws.path(), &entry, None, &store).await;
+        let error = before.error.map(|e| e.to_string()).unwrap_or_default();
+        assert!(error.contains("Get new access token"), "{error}");
+
+        // The "browser": reads the login URL and comes back to the redirect URI.
+        let challenge = Arc::new(std::sync::Mutex::new(String::new()));
+        let seen = challenge.clone();
+        let browser = move |url: &str| -> Result<(), String> {
+            let query = url.split_once('?').unwrap().1.to_string();
+            let param = |name: &str| {
+                query
+                    .split('&')
+                    .find_map(|p| p.strip_prefix(&format!("{name}=")))
+                    .unwrap()
+                    .to_string()
+            };
+            *seen.lock().unwrap() = param("code_challenge");
+            let redirect = param("redirect_uri")
+                .replace("%3A", ":")
+                .replace("%2F", "/");
+            let state = param("state");
+            let rest = redirect.strip_prefix("http://").unwrap().to_string();
+            let (host, path) = rest.split_once('/').unwrap();
+            let (host, path) = (host.to_string(), path.to_string());
+            std::thread::spawn(move || {
+                use std::io::{Read, Write};
+                let mut stream = std::net::TcpStream::connect(&host).unwrap();
+                write!(
+                    stream,
+                    "GET /{path}?code=abc&state={state} HTTP/1.1\r\nhost: {host}\r\n\r\n"
+                )
+                .unwrap();
+                let mut page = String::new();
+                let _ = stream.read_to_string(&mut page);
+                assert!(page.contains("Logged in"), "{page}");
+            });
+            Ok(())
+        };
+        let info = oauth_login(
+            ws.path(),
+            None,
+            &store,
+            &config,
+            &http::Settings::default(),
+            &browser,
+        )
+        .await
+        .unwrap();
+        assert_eq!(info.preview, "ac-1");
+        let sent = log.lock().unwrap()[0].clone();
+        assert!(
+            sent.starts_with('|'),
+            "no Authorization header for a public client: {sent}"
+        );
+        assert!(sent.contains("client_id=spa"), "{sent}");
+        let verifier = sent
+            .split('|')
+            .nth(1)
+            .unwrap()
+            .split('&')
+            .find_map(|p| p.strip_prefix("code_verifier="))
+            .unwrap()
+            .to_string();
+        assert_eq!(oauth::pkce_challenge(&verifier), *challenge.lock().unwrap());
+
+        let after = run_entry(ws.path(), &entry, None, &store).await;
+        assert_eq!(
+            after.response.map(|r| r.body).unwrap_or_default(),
+            r#"{"auth":"Bearer ac-1"}"#
+        );
     }
 }

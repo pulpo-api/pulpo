@@ -55,6 +55,15 @@ COMMANDS:
                java, go, csharp or powershell. Variables stay as {{name}}
                unless --resolve; secrets and values set by scripts only
                with --secrets.
+    auth login <REQUEST> [-w DIR] [-e ENV]
+               Get an OAuth 2.0 token for the auth a request uses (its own or
+               a folder's): opens the browser for the authorization code
+               grant. Tokens are cached in .pulpo/tokens.json (never in git)
+               and refreshed when they expire.
+    auth ls [-w DIR] [-e ENV]
+               List the cached OAuth 2.0 tokens of an environment
+    auth clear [-w DIR] [-e ENV]
+               Forget the cached OAuth 2.0 tokens of an environment
     env [DIR]  List environments and their variables (secrets are masked)
     secret set <DIR> <ENV> <NAME>
                Store a secret in the OS keychain, reading the value from stdin
@@ -92,6 +101,7 @@ fn main() -> ExitCode {
         Some("run") => run_run(&args[1..]),
         Some("load") => run_load(&args[1..]),
         Some("code") => run_code(&args[1..]),
+        Some("auth") => run_auth(&args[1..]),
         Some(other) => usage_error(&format!("unknown command: {other}")),
     }
 }
@@ -451,6 +461,139 @@ fn run_code(args: &[String]) -> ExitCode {
     }
 }
 
+fn run_auth(args: &[String]) -> ExitCode {
+    let action = args.first().map(String::as_str).unwrap_or("");
+    let mut target = String::new();
+    let mut dir = PathBuf::from(".");
+    let mut env_name: Option<String> = None;
+    let mut rest = args.iter().skip(1);
+    while let Some(arg) = rest.next() {
+        match arg.as_str() {
+            "-w" | "--workspace" => match rest.next() {
+                Some(d) => dir = PathBuf::from(d),
+                None => return usage_error("auth: -w needs a DIR"),
+            },
+            "-e" | "--env" => match rest.next() {
+                Some(e) => env_name = Some(e.clone()),
+                None => return usage_error("auth: -e needs an ENV"),
+            },
+            other if !other.starts_with('-') && target.is_empty() && action == "login" => {
+                target = other.replace('\\', "/")
+            }
+            other => return usage_error(&format!("auth: unexpected {other}")),
+        }
+    }
+    let environment_id = match &env_name {
+        Some(name) => match find_environment(&dir, name, &Keychain) {
+            Ok(env) => Some(env.id),
+            Err(e) => return fail(e),
+        },
+        None => None,
+    };
+    let environment_id = environment_id.as_deref();
+    match action {
+        "login" => {
+            if target.is_empty() {
+                return usage_error(
+                    "auth login: expected a REQUEST (its path inside the workspace)",
+                );
+            }
+            let entry = match collection::load_request(&dir, &target) {
+                Ok(entry) => entry,
+                Err(e) => return fail(e),
+            };
+            let found = collection::effective_auth(&dir, &entry)
+                .and_then(|(auth, _)| Ok((auth, collection::effective_settings(&dir, &entry)?)));
+            let (config, settings) = match found {
+                Ok((http::Auth::OAuth2(config), settings)) => (config, settings),
+                Ok((auth, _)) => {
+                    return fail(format!("{target} uses {}, not OAuth 2.0", auth.label()))
+                }
+                Err(e) => return fail(e),
+            };
+            let open = |url: &str| {
+                eprintln!(
+                    "Opening the login page in your browser. If it does not open, visit:
+{url}
+"
+                );
+                if let Err(e) = pulpo_core::oauth::open_browser(url) {
+                    eprintln!("{e}");
+                }
+                Ok(())
+            };
+            let runtime = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(runtime) => runtime,
+                Err(e) => return fail(format!("could not start the runtime: {e}")),
+            };
+            match runtime.block_on(run::oauth_login(
+                &dir,
+                environment_id,
+                &Keychain,
+                &config,
+                &settings,
+                &open,
+            )) {
+                Ok(info) => {
+                    println!("Got an access token ({}…){}", info.preview, expiry(&info));
+                    ExitCode::SUCCESS
+                }
+                Err(e) => fail(e),
+            }
+        }
+        "ls" => {
+            let tokens = pulpo_core::oauth::load_tokens(&dir, environment_id, &Keychain);
+            if tokens.is_empty() {
+                println!("No OAuth 2.0 tokens cached.");
+            }
+            let now = pulpo_core::oauth::now();
+            for (key, token) in &tokens {
+                let info = pulpo_core::oauth::TokenInfo::of(key, token, now);
+                println!(
+                    "{key}  {}  {}  client {}{}{}",
+                    info.grant.as_str(),
+                    info.token_url,
+                    info.client_id,
+                    expiry(&info),
+                    if info.has_refresh {
+                        ", can refresh"
+                    } else {
+                        ""
+                    }
+                );
+            }
+            ExitCode::SUCCESS
+        }
+        "clear" => match pulpo_core::oauth::clear_tokens(&dir, environment_id, &Keychain) {
+            Ok(count) => {
+                println!("Forgot {count} token(s).");
+                ExitCode::SUCCESS
+            }
+            Err(e) => fail(e),
+        },
+        _ => usage_error("auth: expected login, ls or clear"),
+    }
+}
+
+/// `", expires in 59 min"`, `", expired"` or nothing.
+fn expiry(info: &pulpo_core::oauth::TokenInfo) -> String {
+    match info.expires_at {
+        None => String::new(),
+        Some(_) if !info.valid => ", expired".into(),
+        Some(at) => {
+            let secs = at.saturating_sub(pulpo_core::oauth::now());
+            if secs >= 120 {
+                format!(", expires in {} min", secs / 60)
+            } else {
+                format!(", expires in {secs} s")
+            }
+        }
+    }
+}
+
 /// Parses `"30"`, `"30s"`, `"2m"` into seconds.
 fn parse_seconds(text: &str) -> Option<u64> {
     let text = text.trim();
@@ -594,7 +737,8 @@ fn run_run(args: &[String]) -> ExitCode {
                 std::thread::sleep(std::time::Duration::from_millis(options.delay_ms));
             }
             first = false;
-            let report = runtime.block_on(run::run_in(dir, entry, &mut session, &run_options));
+            let mut report = runtime.block_on(run::run_in(dir, entry, &mut session, &run_options));
+            report.logs.extend(session.save_tokens(dir, &Keychain));
             print_report(&report);
             let failed = !report.passed();
             reports.push(report);

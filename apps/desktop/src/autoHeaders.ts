@@ -104,6 +104,14 @@ export function automaticHeaders(
     });
   } else if (auth.type === "apiKey" && auth.in === "header") {
     out.push({ name: auth.key, value: auth.value, from: "the Auth tab", stop: null, override: true });
+  } else if (auth.type === "oauth2") {
+    out.push({
+      name: "Authorization",
+      value: `${auth.headerPrefix || "Bearer"} (OAuth 2.0 access token)`,
+      from: "the Auth tab",
+      stop: null,
+      override: true,
+    });
   }
   if (request.cookies ?? true) {
     out.push({

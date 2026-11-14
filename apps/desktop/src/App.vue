@@ -715,6 +715,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         :key="editingFolder"
         :workspace="workspace"
         :folder-id="editingFolder"
+        :environment-id="activeEnvId"
         @close="editingFolder = null"
         @saved="onFolderSaved"
       />
@@ -791,6 +792,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         :version="info?.version ?? ''"
         :environment-name="environments.find((e) => e.id === activeEnvId)?.name ?? ''"
         :root="workspace?.root ?? ''"
+        :environment-id="activeEnvId"
         @send="send"
         @save="save()"
       />

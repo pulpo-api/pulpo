@@ -3,6 +3,7 @@
 use super::{workspace_path, ImportError, ImportFormat, ImportNode, ImportPlan, ImportedBody};
 use crate::environment::{Environment, Variable};
 use crate::http::{ApiKeyLocation, Auth, Form, FormField, FormKind, Header, HttpRequest};
+use crate::oauth::{Grant, OAuth2};
 use crate::HttpMethod;
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
@@ -287,6 +288,49 @@ fn path_template(path: &str) -> String {
 }
 
 /// The security schemes Pulpo can express, by name, as auth that uses variables.
+/// An `oauth2` security scheme as Pulpo's OAuth 2.0 auth: the first flow Pulpo runs
+/// (authorization code, client credentials, password; implicit is left as a bearer token).
+fn oauth_flow(def: &Value) -> Option<OAuth2> {
+    let flows = def.get("flows")?;
+    let text = |flow: &Value, name: &str| {
+        flow.get(name)
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string()
+    };
+    let (grant, flow) = [
+        ("authorizationCode", Grant::AuthorizationCode),
+        ("clientCredentials", Grant::ClientCredentials),
+        ("password", Grant::Password),
+    ]
+    .into_iter()
+    .find_map(|(name, grant)| flows.get(name).map(|flow| (grant, flow)))?;
+    let scope = flow
+        .get("scopes")
+        .and_then(|s| s.as_object())
+        .map(|scopes| scopes.keys().cloned().collect::<Vec<_>>().join(" "))
+        .unwrap_or_default();
+    Some(OAuth2 {
+        grant,
+        auth_url: text(flow, "authorizationUrl"),
+        token_url: text(flow, "tokenUrl"),
+        client_id: "{{clientId}}".into(),
+        client_secret: "{{clientSecret}}".into(),
+        scope,
+        username: if grant == Grant::Password {
+            "{{username}}".into()
+        } else {
+            String::new()
+        },
+        password: if grant == Grant::Password {
+            "{{password}}".into()
+        } else {
+            String::new()
+        },
+        ..Default::default()
+    })
+}
+
 fn auth_schemes(doc: &Value) -> Vec<(String, Auth)> {
     let mut schemes = Vec::new();
     if let Some(defs) = doc
@@ -301,7 +345,14 @@ fn auth_schemes(doc: &Value) -> Vec<(String, Auth)> {
                 .and_then(|s| s.as_str())
                 .unwrap_or("")
                 .to_ascii_lowercase();
-            let auth = if (kind == "http" && scheme == "bearer")
+            let oauth = if kind == "oauth2" {
+                oauth_flow(def)
+            } else {
+                None
+            };
+            let auth = if let Some(config) = oauth {
+                Auth::OAuth2(config)
+            } else if (kind == "http" && scheme == "bearer")
                 || kind == "oauth2"
                 || kind == "openIdConnect"
             {
@@ -605,15 +656,26 @@ pub(super) fn document(doc: &Value) -> Result<ImportPlan, ImportError> {
             Auth::Bearer { .. } => vec!["token"],
             Auth::Basic { .. } => vec!["username", "password"],
             Auth::ApiKey { .. } => vec!["apiKey"],
+            Auth::OAuth2(config) if config.grant == Grant::Password => {
+                vec!["clientId", "clientSecret", "username", "password"]
+            }
+            Auth::OAuth2(_) => vec!["clientId", "clientSecret"],
             Auth::None => vec![],
         })
         .collect();
-    for name in ["token", "apiKey", "username", "password"] {
+    for name in [
+        "token",
+        "apiKey",
+        "clientId",
+        "clientSecret",
+        "username",
+        "password",
+    ] {
         if used.contains(&name) {
             variables.push(Variable {
                 name: name.into(),
                 value: String::new(),
-                secret: name != "username",
+                secret: name != "username" && name != "clientId",
                 has_value: false,
             });
         }

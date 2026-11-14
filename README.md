@@ -97,7 +97,7 @@ PULPO_SECRET_TOKEN=... pulpo send ...         # in CI, secrets come from env var
 
 ## Auth
 
-Set auth once on a folder (`_folder.yaml`) or the whole workspace (`pulpo.yaml`) and every request inside inherits it. A request or subfolder can set its own, or `type: "none"` to send nothing. Supported: `bearer`, `basic` and `apiKey` (in a header or the query string).
+Set auth once on a folder (`_folder.yaml`) or the whole workspace (`pulpo.yaml`) and every request inside inherits it. A request or subfolder can set its own, or `type: "none"` to send nothing. Supported: `bearer`, `basic`, `apiKey` (in a header or the query string) and `oauth2`.
 
 ```yaml
 version: 1
@@ -106,6 +106,27 @@ auth:
   type: "bearer"
   token: "{{token}}"
 ```
+
+### OAuth 2.0
+
+Pulpo gets the token for you and sends it as `Authorization: Bearer …`. Grants: `authorizationCode` (with PKCE, through your browser), `clientCredentials` and `password`.
+
+```yaml
+auth:
+  type: "oauth2"
+  grant: "authorizationCode"
+  authUrl: "{{idp}}/authorize"
+  tokenUrl: "{{idp}}/token"
+  clientId: "{{clientId}}"
+  scope: "openid api"
+```
+
+- **Client credentials and password**: the token is requested when you send, cached and reused until it expires.
+- **Authorization code**: press *Get new access token* in the Auth tab (or run `pulpo auth login <request>`). Your browser opens the login page and comes back to `http://127.0.0.1:<free port>/callback`. Register that redirect URI with your provider, or set a fixed one such as `http://127.0.0.1:8765/callback` in `redirectUri`.
+- Expired tokens are renewed with the refresh token when there is one.
+- Tokens are kept per environment in the OS keychain, split into parts because Windows caps a credential at 2.5 KB and tokens from Azure AD and others are longer. Only their expiry, scope and grant go to `.pulpo/tokens.json` (local, never committed). `pulpo auth ls` lists them and `pulpo auth clear` forgets them.
+- *Discover* fills the URLs from an issuer (OpenID Connect discovery).
+- Imported from Postman collections and from OpenAPI `oauth2` security schemes.
 
 Folders and the workspace can also set **common headers** (`headers:`), which Postman lacks: every request inside sends them, a deeper folder replaces one with the same name, a request can override it, or stop it with a disabled header of the same name. In the app, right-click a folder (or ⚙ next to the collection name) to edit its headers, auth, settings and scripts.
 

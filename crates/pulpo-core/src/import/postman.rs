@@ -59,6 +59,54 @@ fn parse_auth(auth: Option<&Value>, warnings: &mut Vec<String>, at: &str) -> Opt
                 },
             })
         }
+        "oauth2" => {
+            use crate::oauth::{ClientAuth, Grant, OAuth2};
+            let get = |key: &str| kv(auth.get("oauth2"), key);
+            let grant_type = get("grant_type");
+            let grant = match grant_type.as_str() {
+                "client_credentials" => Grant::ClientCredentials,
+                "password_credentials" | "password" => Grant::Password,
+                "authorization_code" | "authorization_code_with_pkce" | "" => {
+                    Grant::AuthorizationCode
+                }
+                other => {
+                    warnings.push(format!(
+                        "{at}: OAuth 2.0 '{other}' grant is not supported; it inherits from its folder"
+                    ));
+                    return None;
+                }
+            };
+            // Postman's own callback page cannot reach Pulpo: use the loopback default.
+            let redirect_uri = get("redirect_uri");
+            let redirect_uri = if redirect_uri.contains("oauth.pstmn.io") {
+                String::new()
+            } else {
+                redirect_uri
+            };
+            let prefix = get("headerPrefix");
+            Some(Auth::OAuth2(OAuth2 {
+                grant,
+                auth_url: get("authUrl"),
+                token_url: get("accessTokenUrl"),
+                client_id: get("clientId"),
+                client_secret: get("clientSecret"),
+                scope: get("scope"),
+                username: get("username"),
+                password: get("password"),
+                redirect_uri,
+                pkce: grant_type != "authorization_code",
+                client_auth: if get("client_authentication") == "body" {
+                    ClientAuth::Body
+                } else {
+                    ClientAuth::Header
+                },
+                header_prefix: if prefix.is_empty() {
+                    "Bearer".into()
+                } else {
+                    prefix
+                },
+            }))
+        }
         other => {
             warnings.push(format!(
                 "{at}: '{other}' auth is not supported yet; it inherits from its folder"
@@ -657,5 +705,35 @@ mod tests {
                 password: "pw".into()
             })
         );
+    }
+
+    #[test]
+    fn imports_oauth2_auth() {
+        let auth: Value = serde_json::from_str(
+            r#"{"type": "oauth2", "oauth2": [
+                {"key": "grant_type", "value": "authorization_code_with_pkce"},
+                {"key": "authUrl", "value": "{{idp}}/authorize"},
+                {"key": "accessTokenUrl", "value": "{{idp}}/token"},
+                {"key": "clientId", "value": "{{clientId}}"},
+                {"key": "scope", "value": "openid"},
+                {"key": "redirect_uri", "value": "https://oauth.pstmn.io/v1/callback"},
+                {"key": "client_authentication", "value": "body"}
+            ]}"#,
+        )
+        .unwrap();
+        let mut warnings = Vec::new();
+        let Some(Auth::OAuth2(config)) = parse_auth(Some(&auth), &mut warnings, "x") else {
+            panic!("expected OAuth 2.0");
+        };
+        assert!(warnings.is_empty());
+        assert_eq!(config.grant, crate::oauth::Grant::AuthorizationCode);
+        assert_eq!(config.token_url, "{{idp}}/token");
+        assert!(config.pkce);
+        assert_eq!(
+            config.redirect_uri, "",
+            "Postman's callback cannot reach Pulpo"
+        );
+        assert_eq!(config.client_auth, crate::oauth::ClientAuth::Body);
+        assert_eq!(config.header_prefix, "Bearer");
     }
 }

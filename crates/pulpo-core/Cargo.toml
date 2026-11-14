@@ -22,7 +22,7 @@ jaq-json = "2"
 serde_norway = "0.9"
 uuid = { version = "1", features = ["v4"] }
 rquickjs = "0.14"
-tokio = { workspace = true, features = ["rt", "net"] }
+tokio = { workspace = true, features = ["rt", "net", "time", "io-util"] }
 tower-layer = "0.3"
 tower-service = "0.3"
 sha1 = "0.10"

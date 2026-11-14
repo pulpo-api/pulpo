@@ -98,7 +98,27 @@
         { "additionalProperties": false, "properties": { "type": { "const": "none" } } },
         { "additionalProperties": false, "required": ["token"], "properties": { "type": { "const": "bearer" }, "token": { "type": "string" } } },
         { "additionalProperties": false, "required": ["username"], "properties": { "type": { "const": "basic" }, "username": { "type": "string" }, "password": { "type": "string" } } },
-        { "additionalProperties": false, "required": ["key", "value"], "properties": { "type": { "const": "apiKey" }, "key": { "type": "string" }, "value": { "type": "string" }, "in": { "enum": ["header", "query"], "default": "header" } } }
+        { "additionalProperties": false, "required": ["key", "value"], "properties": { "type": { "const": "apiKey" }, "key": { "type": "string" }, "value": { "type": "string" }, "in": { "enum": ["header", "query"], "default": "header" } } },
+        {
+          "additionalProperties": false,
+          "required": ["tokenUrl"],
+          "description": "OAuth 2.0. The token is obtained when the request runs and cached in .pulpo/tokens.json (never in git); the authorization code grant logs in through the browser first.",
+          "properties": {
+            "type": { "const": "oauth2" },
+            "grant": { "enum": ["authorizationCode", "clientCredentials", "password"], "default": "authorizationCode" },
+            "authUrl": { "type": "string", "description": "Authorization endpoint (authorization code grant)." },
+            "tokenUrl": { "type": "string" },
+            "clientId": { "type": "string" },
+            "clientSecret": { "type": "string", "description": "Use a {{secret}} variable. Empty for public clients." },
+            "scope": { "type": "string", "description": "Space-separated scopes." },
+            "username": { "type": "string", "description": "Password grant." },
+            "password": { "type": "string", "description": "Password grant. Use a {{secret}} variable." },
+            "redirectUri": { "type": "string", "description": "Empty = http://127.0.0.1:<free port>/callback. Must be http on 127.0.0.1, localhost or [::1]." },
+            "pkce": { "type": "boolean", "default": true },
+            "clientAuth": { "enum": ["header", "body"], "default": "header", "description": "Send the client id and secret as Basic auth or in the form body." },
+            "headerPrefix": { "type": "string", "default": "Bearer" }
+          }
+        }
       ]
     }
   }

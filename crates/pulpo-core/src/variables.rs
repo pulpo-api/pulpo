@@ -171,6 +171,21 @@ pub fn resolve_request(
                 value: resolve_text(value, vars, &mut missing),
                 location: *location,
             },
+            Auth::OAuth2(config) => {
+                let mut text = |t: &String| resolve_text(t, vars, &mut missing);
+                Auth::OAuth2(crate::oauth::OAuth2 {
+                    auth_url: text(&config.auth_url),
+                    token_url: text(&config.token_url),
+                    client_id: text(&config.client_id),
+                    client_secret: text(&config.client_secret),
+                    scope: text(&config.scope),
+                    username: text(&config.username),
+                    password: text(&config.password),
+                    redirect_uri: text(&config.redirect_uri),
+                    header_prefix: text(&config.header_prefix),
+                    ..config.clone()
+                })
+            }
         }),
         path_params: request
             .path_params

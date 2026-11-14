@@ -29,6 +29,8 @@ const props = defineProps<{
   /** For the automatic headers: Pulpo's version and the selected environment. */
   version: string;
   environmentName: string;
+  /** For OAuth 2.0 tokens; "" = no environment. */
+  environmentId: string;
 }>();
 const emit = defineEmits<{ send: []; save: [] }>();
 
@@ -62,7 +64,7 @@ const auth = computed({
     props.request.auth = value;
   },
 });
-const SHORT: Record<string, string> = { bearer: "Bearer", basic: "Basic", apiKey: "Key" };
+const SHORT: Record<string, string> = { bearer: "Bearer", basic: "Basic", apiKey: "Key", oauth2: "OAuth" };
 const authBadge = computed(() => {
   const own = props.request.auth;
   if (own) return SHORT[own.type] ?? "";
@@ -70,6 +72,17 @@ const authBadge = computed(() => {
   return inherited.found && SHORT[inherited.auth.type] ? `${SHORT[inherited.auth.type]} ↑` : "";
 });
 const activeHeaders = computed(() => props.request.headers.filter((h) => h.enabled && h.name.trim()).length);
+/** The settings the request really uses (its own, else inherited): token requests use them too. */
+const effectiveSettings = computed(() => {
+  const own = props.request.settings ?? {};
+  const inherited = props.inheritedSettings;
+  return {
+    timeoutMs: own.timeoutMs ?? inherited.timeoutMs.value,
+    verifySsl: own.verifySsl ?? inherited.verifySsl.value,
+    followRedirects: own.followRedirects ?? inherited.followRedirects.value,
+    proxy: own.proxy ?? inherited.proxy.value,
+  };
+});
 const automatic = computed(() =>
   automaticHeaders(props.request, {
     version: props.version,
@@ -144,7 +157,14 @@ const inheritedCount = computed(
 
     <ParamsEditor v-if="tab === 'params'" :request="request" />
 
-    <AuthEditor v-else-if="tab === 'auth'" v-model="auth" :inherited="inheritedAuth" />
+    <AuthEditor
+      v-else-if="tab === 'auth'"
+      v-model="auth"
+      :inherited="inheritedAuth"
+      :root="root"
+      :environment-id="environmentId"
+      :settings="effectiveSettings"
+    />
 
     <ExamplesEditor
       v-else-if="tab === 'examples'"

@@ -1,12 +1,33 @@
 <script setup lang="ts">
-import { computed } from "vue";
-import { AUTH_LABELS, type Auth } from "../core";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
+import {
+  AUTH_LABELS,
+  OAUTH_DESKTOP_ONLY,
+  OAUTH_GRANTS,
+  insideTauri,
+  newOAuth2,
+  oauthDiscover,
+  oauthForget,
+  oauthLogin,
+  oauthStatus,
+  type Auth,
+  type OAuthAuth,
+  type Settings,
+  type TokenInfo,
+} from "../core";
 import type { InheritedAuth } from "../workspace";
 import VarInput from "./VarInput.vue";
 
 /** Edits an auth. `null` = inherit (only offered when `inherited` is given). */
 const auth = defineModel<Auth | null>({ required: true });
-const props = defineProps<{ inherited?: InheritedAuth }>();
+const props = defineProps<{
+  inherited?: InheritedAuth;
+  /** Workspace and environment, for OAuth 2.0 tokens. */
+  root?: string;
+  environmentId?: string;
+  /** Settings for token requests (SSL, proxy, timeout). */
+  settings?: Settings;
+}>();
 
 type Choice = Auth["type"] | "inherit";
 
@@ -32,15 +53,30 @@ const choice = computed<Choice>({
       case "apiKey":
         auth.value = { type: "apiKey", key: "X-API-Key", value: token || "{{apiKey}}", in: "header" };
         break;
+      case "oauth2":
+        auth.value = newOAuth2();
+        break;
     }
   },
 });
 
+const isLiteral = (value: string) => value.trim() !== "" && !value.includes("{{");
+
 /** Secret-looking values typed literally end up in git. */
 const literalSecret = computed(() => {
   const a = auth.value;
-  const secret = a?.type === "bearer" ? a.token : a?.type === "basic" ? a.password : a?.type === "apiKey" ? a.value : "";
-  return secret.trim() !== "" && !secret.includes("{{");
+  switch (a?.type) {
+    case "bearer":
+      return isLiteral(a.token);
+    case "basic":
+      return isLiteral(a.password);
+    case "apiKey":
+      return isLiteral(a.value);
+    case "oauth2":
+      return isLiteral(a.clientSecret) || isLiteral(a.password);
+    default:
+      return false;
+  }
 });
 
 const shown = computed(() => (auth.value === null && props.inherited ? props.inherited.auth : auth.value));
@@ -49,6 +85,94 @@ const inheritedFrom = computed(() => {
   if (!i) return "";
   return i.sourceId ? `folder “${i.sourceName}”` : `the workspace (pulpo.yaml)`;
 });
+
+// --- OAuth 2.0 -------------------------------------------------------------------------
+
+/** The OAuth 2.0 auth in use (own or inherited), for the token status. */
+const oauth = computed<OAuthAuth | null>(() => (shown.value?.type === "oauth2" ? shown.value : null));
+const status = ref<TokenInfo | null>(null);
+const busy = ref(false);
+const problem = ref("");
+const issuer = ref("");
+const now = ref(Date.now() / 1000);
+const clock = setInterval(() => (now.value = Date.now() / 1000), 15_000);
+onBeforeUnmount(() => clearInterval(clock));
+
+let pending: ReturnType<typeof setTimeout> | undefined;
+async function refreshStatus() {
+  const config = oauth.value;
+  if (!config || !props.root) {
+    status.value = null;
+    return;
+  }
+  try {
+    status.value = await oauthStatus(props.root, props.environmentId ?? "", config);
+  } catch {
+    // Missing variables: there cannot be a token for it yet.
+    status.value = null;
+  }
+}
+watch(
+  [oauth, () => props.root, () => props.environmentId],
+  () => {
+    clearTimeout(pending);
+    pending = setTimeout(refreshStatus, 300);
+  },
+  { deep: true, immediate: true },
+);
+onBeforeUnmount(() => clearTimeout(pending));
+
+const expiry = computed(() => {
+  const s = status.value;
+  if (!s) return "";
+  if (!s.valid) return s.hasRefresh ? "expired; refreshed on the next send" : "expired";
+  if (s.expiresAt == null) return "valid, no expiry given";
+  const minutes = Math.round((s.expiresAt - now.value) / 60);
+  return minutes >= 1 ? `valid for ${minutes} min` : "valid for less than a minute";
+});
+
+async function getToken() {
+  const config = oauth.value;
+  if (!config || !props.root) return;
+  busy.value = true;
+  problem.value = "";
+  try {
+    status.value = await oauthLogin(props.root, props.environmentId ?? "", config, props.settings);
+  } catch (e) {
+    problem.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function forget() {
+  const config = oauth.value;
+  if (!config || !props.root) return;
+  await oauthForget(props.root, props.environmentId ?? "", config);
+  status.value = null;
+}
+
+async function discover() {
+  const a = auth.value;
+  if (a?.type !== "oauth2" || !issuer.value.trim()) return;
+  problem.value = "";
+  try {
+    const found = await oauthDiscover(issuer.value.trim());
+    if (found.authorizationEndpoint) a.authUrl = found.authorizationEndpoint;
+    a.tokenUrl = found.tokenEndpoint;
+    if (!a.scope && found.scopesSupported.includes("openid")) a.scope = "openid";
+  } catch (e) {
+    problem.value = `OpenID discovery: ${e instanceof Error ? e.message : String(e)}`;
+  }
+}
+
+const getLabel = computed(() =>
+  busy.value
+    ? oauth.value?.grant === "authorizationCode"
+      ? "Waiting for the browser…"
+      : "Getting a token…"
+    : "Get new access token",
+);
 </script>
 
 <template>
@@ -104,9 +228,116 @@ const inheritedFrom = computed(() => {
       </div>
     </template>
 
+    <template v-else-if="auth?.type === 'oauth2'">
+      <div class="row">
+        <label for="oauth-grant">Grant</label>
+        <select id="oauth-grant" v-model="auth.grant">
+          <option v-for="(label, grant) in OAUTH_GRANTS" :key="grant" :value="grant">{{ label }}</option>
+        </select>
+      </div>
+      <div class="row">
+        <label for="oauth-issuer">Issuer</label>
+        <div class="inline">
+          <input
+            id="oauth-issuer"
+            v-model="issuer"
+            spellcheck="false"
+            placeholder="https://login.example.com (fills the URLs)"
+            @keydown.enter.prevent="discover"
+          />
+          <button type="button" :disabled="!issuer.trim()" @click="discover">Discover</button>
+        </div>
+      </div>
+      <div v-if="auth.grant === 'authorizationCode'" class="row">
+        <label for="oauth-auth-url">Auth URL</label>
+        <VarInput id="oauth-auth-url" v-model="auth.authUrl" placeholder="https://…/authorize" aria-label="Authorization URL" />
+      </div>
+      <div class="row">
+        <label for="oauth-token-url">Token URL</label>
+        <VarInput id="oauth-token-url" v-model="auth.tokenUrl" placeholder="https://…/token" aria-label="Token URL" />
+      </div>
+      <div class="row">
+        <label for="oauth-client-id">Client ID</label>
+        <VarInput id="oauth-client-id" v-model="auth.clientId" placeholder="{{clientId}}" aria-label="Client ID" />
+      </div>
+      <div class="row">
+        <label for="oauth-client-secret">Client secret</label>
+        <VarInput
+          id="oauth-client-secret"
+          v-model="auth.clientSecret"
+          placeholder="{{clientSecret}} (empty for public clients)"
+          aria-label="Client secret"
+        />
+      </div>
+      <div class="row">
+        <label for="oauth-scope">Scope</label>
+        <VarInput id="oauth-scope" v-model="auth.scope" placeholder="openid profile api" aria-label="Scope" />
+      </div>
+      <template v-if="auth.grant === 'password'">
+        <div class="row">
+          <label for="oauth-user">Username</label>
+          <VarInput id="oauth-user" v-model="auth.username" aria-label="Username" />
+        </div>
+        <div class="row">
+          <label for="oauth-pass">Password</label>
+          <VarInput id="oauth-pass" v-model="auth.password" placeholder="{{password}}" aria-label="Password" />
+        </div>
+      </template>
+      <details class="advanced">
+        <summary>Advanced</summary>
+        <div v-if="auth.grant === 'authorizationCode'" class="row">
+          <label for="oauth-redirect">Redirect URI</label>
+          <VarInput
+            id="oauth-redirect"
+            v-model="auth.redirectUri"
+            placeholder="automatic: http://127.0.0.1:<free port>/callback"
+            aria-label="Redirect URI"
+          />
+        </div>
+        <div v-if="auth.grant === 'authorizationCode'" class="row">
+          <label for="oauth-pkce">PKCE</label>
+          <label class="check"><input id="oauth-pkce" v-model="auth.pkce" type="checkbox" /> Send a code challenge (S256)</label>
+        </div>
+        <div class="row">
+          <label for="oauth-client-auth">Client auth</label>
+          <select id="oauth-client-auth" v-model="auth.clientAuth">
+            <option value="header">Basic auth header</option>
+            <option value="body">In the request body</option>
+          </select>
+        </div>
+        <div class="row">
+          <label for="oauth-prefix">Header prefix</label>
+          <input id="oauth-prefix" v-model="auth.headerPrefix" spellcheck="false" placeholder="Bearer" />
+        </div>
+      </details>
+    </template>
+
+    <div v-if="oauth" class="token">
+      <span v-if="!insideTauri" class="muted">{{ OAUTH_DESKTOP_ONLY }}</span>
+      <template v-else>
+        <span v-if="status" :class="status.valid ? 'ok' : 'muted'">
+          Token <code>{{ status.preview }}…</code> {{ expiry }}<template v-if="environmentId === ''"> (no environment)</template>
+        </span>
+        <span v-else class="muted">
+          <template v-if="oauth.grant === 'authorizationCode'">No token yet: log in to get one.</template>
+          <template v-else>No token yet: Pulpo gets one when you send.</template>
+        </span>
+        <span class="actions">
+          <button type="button" class="primary" :disabled="busy || !root" @click="getToken">{{ getLabel }}</button>
+          <button v-if="status" type="button" :disabled="busy" @click="forget">Forget</button>
+        </span>
+      </template>
+    </div>
+    <p v-if="problem" class="warn">{{ problem }}</p>
+
     <p v-if="literalSecret" class="warn">
       This value is saved as plain text in the request file, so it ends up in git. Use a variable such as
       <code v-pre>{{token}}</code> and mark it secret in the environment: its value then lives in the OS keychain.
+    </p>
+    <p v-else-if="shown && shown.type === 'oauth2'" class="hint">
+      Sent as <code>Authorization: {{ shown.headerPrefix || "Bearer" }} …</code>. Tokens are kept per environment in
+      the OS keychain (never in git) and refreshed when they expire; a header with the same name in the
+      Headers tab wins.
     </p>
     <p v-else-if="shown && shown.type !== 'none'" class="hint">
       Sent as
@@ -146,6 +377,7 @@ select {
   font-family: var(--mono);
   font-size: 13px;
   outline: none;
+  min-width: 0;
 }
 select {
   font-family: inherit;
@@ -154,6 +386,75 @@ select {
 input:focus,
 select:focus {
   border-color: var(--accent);
+}
+input[type="checkbox"] {
+  padding: 0;
+}
+.check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+}
+.inline {
+  display: flex;
+  gap: 6px;
+}
+.inline input {
+  flex: 1;
+}
+button {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text);
+  padding: 5px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.advanced {
+  max-width: 560px;
+}
+.advanced summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+.advanced .row + .row {
+  margin-top: 8px;
+}
+.token {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  max-width: 640px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+}
+.token .actions {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+.ok {
+  color: var(--text);
+}
+.muted {
+  color: var(--muted);
 }
 .note,
 .hint,

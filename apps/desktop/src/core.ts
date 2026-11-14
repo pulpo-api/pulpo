@@ -25,13 +25,128 @@ export type Auth =
   | { type: "none" }
   | { type: "bearer"; token: string }
   | { type: "basic"; username: string; password: string }
-  | { type: "apiKey"; key: string; value: string; in: ApiKeyLocation };
+  | { type: "apiKey"; key: string; value: string; in: ApiKeyLocation }
+  | ({ type: "oauth2" } & OAuth2);
+
+export type OAuthGrant = "authorizationCode" | "clientCredentials" | "password";
+
+/** OAuth 2.0 settings. Mirrors `OAuth2` in pulpo-core. */
+export interface OAuth2 {
+  grant: OAuthGrant;
+  authUrl: string;
+  tokenUrl: string;
+  clientId: string;
+  clientSecret: string;
+  scope: string;
+  username: string;
+  password: string;
+  /** Empty = http://127.0.0.1:<free port>/callback. */
+  redirectUri: string;
+  pkce: boolean;
+  clientAuth: "header" | "body";
+  headerPrefix: string;
+}
+
+export type OAuthAuth = { type: "oauth2" } & OAuth2;
+
+export const OAUTH_GRANTS: Record<OAuthGrant, string> = {
+  authorizationCode: "Authorization code (browser login)",
+  clientCredentials: "Client credentials",
+  password: "Password",
+};
+
+export function newOAuth2(): OAuthAuth {
+  return {
+    type: "oauth2",
+    grant: "authorizationCode",
+    authUrl: "",
+    tokenUrl: "",
+    clientId: "{{clientId}}",
+    clientSecret: "",
+    scope: "",
+    username: "",
+    password: "",
+    redirectUri: "",
+    pkce: true,
+    clientAuth: "header",
+    headerPrefix: "Bearer",
+  };
+}
+
+/** What Pulpo knows about a cached token (never the token itself). Mirrors `TokenInfo`. */
+export interface TokenInfo {
+  key: string;
+  grant: OAuthGrant;
+  tokenUrl: string;
+  clientId: string;
+  scope: string;
+  obtainedAt: number;
+  expiresAt: number | null;
+  valid: boolean;
+  hasRefresh: boolean;
+  preview: string;
+}
+
+export interface Discovery {
+  authorizationEndpoint: string;
+  tokenEndpoint: string;
+  scopesSupported: string[];
+}
+
+function oauthConfig(auth: OAuthAuth): OAuth2 {
+  const { type: _type, ...config } = auth;
+  return config;
+}
+
+export const OAUTH_DESKTOP_ONLY = "OAuth 2.0 tokens are obtained by the desktop app; the browser preview cannot.";
+
+/** Gets a new token: browser login for the authorization code grant, a token request otherwise. */
+export async function oauthLogin(
+  root: string,
+  environmentId: string,
+  auth: OAuthAuth,
+  settings?: Settings,
+): Promise<TokenInfo> {
+  if (!insideTauri) throw new Error(OAUTH_DESKTOP_ONLY);
+  return invoke<TokenInfo>("oauth_login", {
+    root,
+    environmentId: environmentId || null,
+    config: oauthConfig(auth),
+    settings: settings ?? null,
+  });
+}
+
+/** The cached token for this auth in the environment, if any. */
+export async function oauthStatus(root: string, environmentId: string, auth: OAuthAuth): Promise<TokenInfo | null> {
+  if (!insideTauri) return null;
+  return invoke<TokenInfo | null>("oauth_status", { root, environmentId: environmentId || null, config: oauthConfig(auth) });
+}
+
+export async function oauthForget(root: string, environmentId: string, auth: OAuthAuth): Promise<void> {
+  if (!insideTauri) return;
+  await invoke("oauth_forget", { root, environmentId: environmentId || null, config: oauthConfig(auth) });
+}
+
+/** Reads an OpenID Connect discovery document to fill the URLs. */
+export async function oauthDiscover(issuer: string): Promise<Discovery> {
+  if (insideTauri) return invoke<Discovery>("oauth_discover", { issuer });
+  const url = issuer.includes("/.well-known/")
+    ? issuer
+    : `${issuer.trim().replace(/\/+$/, "")}/.well-known/openid-configuration`;
+  const doc = await (await fetch(url)).json();
+  return {
+    authorizationEndpoint: doc.authorization_endpoint ?? "",
+    tokenEndpoint: doc.token_endpoint ?? "",
+    scopesSupported: doc.scopes_supported ?? [],
+  };
+}
 
 export const AUTH_LABELS: Record<Auth["type"], string> = {
   none: "No auth",
   bearer: "Bearer token",
   basic: "Basic",
   apiKey: "API key",
+  oauth2: "OAuth 2.0",
 };
 
 function base64Utf8(text: string): string {
@@ -88,6 +203,19 @@ export function resolveAuth(auth: Auth, resolve: (text: string) => string): Auth
       return { ...auth, username: resolve(auth.username), password: resolve(auth.password) };
     case "apiKey":
       return { ...auth, key: resolve(auth.key), value: resolve(auth.value) };
+    case "oauth2":
+      return {
+        ...auth,
+        authUrl: resolve(auth.authUrl),
+        tokenUrl: resolve(auth.tokenUrl),
+        clientId: resolve(auth.clientId),
+        clientSecret: resolve(auth.clientSecret),
+        scope: resolve(auth.scope),
+        username: resolve(auth.username),
+        password: resolve(auth.password),
+        redirectUri: resolve(auth.redirectUri),
+        headerPrefix: resolve(auth.headerPrefix),
+      };
     default:
       return auth;
   }
@@ -212,6 +340,9 @@ export async function sendHttp(
         }
       : null,
   };
+  if (request.auth?.type === "oauth2") {
+    throw { kind: "other", message: OAUTH_DESKTOP_ONLY } satisfies SendError;
+  }
   const auth = request.auth ? resolveAuth(request.auth, (text) => resolveText(text, vars, missing)) : null;
   resolved.url = applyAuth(resolved.url, resolved.headers, auth);
   if (missing.size) {

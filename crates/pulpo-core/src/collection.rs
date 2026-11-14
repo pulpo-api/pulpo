@@ -383,6 +383,58 @@ fn auth_yaml(auth: Option<&Auth>) -> String {
             };
             out.push_str(&format!("  in: {}\n", quote(place)));
         }
+        Auth::OAuth2(config) => {
+            use crate::oauth::{ClientAuth, Grant};
+            out.push_str("  type: \"oauth2\"\n");
+            out.push_str(&format!("  grant: {}\n", quote(config.grant.as_str())));
+            let mut field = |name: &str, value: &str, keep: bool| {
+                if keep {
+                    out.push_str(&format!("  {name}: {}\n", quote(value)));
+                }
+            };
+            let code = config.grant == Grant::AuthorizationCode;
+            let password = config.grant == Grant::Password;
+            field(
+                "authUrl",
+                &config.auth_url,
+                code || !config.auth_url.is_empty(),
+            );
+            field("tokenUrl", &config.token_url, true);
+            field("clientId", &config.client_id, true);
+            field(
+                "clientSecret",
+                &config.client_secret,
+                !config.client_secret.is_empty(),
+            );
+            field("scope", &config.scope, !config.scope.is_empty());
+            field(
+                "username",
+                &config.username,
+                password || !config.username.is_empty(),
+            );
+            field(
+                "password",
+                &config.password,
+                password || !config.password.is_empty(),
+            );
+            field(
+                "redirectUri",
+                &config.redirect_uri,
+                !config.redirect_uri.is_empty(),
+            );
+            if !config.pkce {
+                out.push_str("  pkce: false\n");
+            }
+            if config.client_auth == ClientAuth::Body {
+                out.push_str("  clientAuth: \"body\"\n");
+            }
+            if config.header_prefix != crate::oauth::bearer() {
+                out.push_str(&format!(
+                    "  headerPrefix: {}\n",
+                    quote(&config.header_prefix)
+                ));
+            }
+        }
     }
     out
 }

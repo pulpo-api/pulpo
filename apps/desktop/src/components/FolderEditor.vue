@@ -18,7 +18,7 @@ import HeadersEditor from "./HeadersEditor.vue";
 import SettingsEditor from "./SettingsEditor.vue";
 
 /** Edits what a folder ("" = the whole collection) sets for the requests inside. */
-const props = defineProps<{ workspace: Workspace; folderId: string }>();
+const props = defineProps<{ workspace: Workspace; folderId: string; environmentId: string }>();
 const emit = defineEmits<{ close: []; saved: [folderId: string, meta: FolderMeta] }>();
 
 const tab = ref<"headers" | "auth" | "settings" | "pre" | "test">("headers");
@@ -138,7 +138,13 @@ defineExpose({ save, dirty });
         </p>
       </HeadersEditor>
 
-      <AuthEditor v-else-if="tab === 'auth'" v-model="auth" :inherited="parentAuth" />
+      <AuthEditor
+        v-else-if="tab === 'auth'"
+        v-model="auth"
+        :inherited="parentAuth"
+        :root="workspace.root"
+        :environment-id="environmentId"
+      />
 
       <SettingsEditor
         v-else-if="tab === 'settings'"

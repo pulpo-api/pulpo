@@ -21,6 +21,7 @@ pub mod import;
 pub mod keychain;
 pub mod load;
 pub mod local;
+pub mod oauth;
 pub mod organize;
 pub mod query;
 pub mod report;

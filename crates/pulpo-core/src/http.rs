@@ -164,6 +164,9 @@ pub enum Auth {
         #[serde(default, rename = "in")]
         location: ApiKeyLocation,
     },
+    /// The token is obtained (and cached) when the request runs; see [`crate::oauth`].
+    #[serde(rename = "oauth2")]
+    OAuth2(crate::oauth::OAuth2),
 }
 
 impl Auth {
@@ -173,6 +176,7 @@ impl Auth {
             Auth::Bearer { .. } => "Bearer token",
             Auth::Basic { .. } => "Basic",
             Auth::ApiKey { .. } => "API key",
+            Auth::OAuth2(_) => "OAuth 2.0",
         }
     }
 }
@@ -203,7 +207,8 @@ pub fn apply_auth(url: &mut String, headers: &mut Vec<Header>, auth: &Auth) {
             .any(|h| h.enabled && h.name.eq_ignore_ascii_case(name))
     };
     match auth {
-        Auth::None => {}
+        // The runner swaps it for the token before sending.
+        Auth::None | Auth::OAuth2(_) => {}
         Auth::Bearer { token } => {
             if !has(headers, "authorization") {
                 headers.push(Header::new("Authorization", format!("Bearer {token}")));

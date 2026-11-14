@@ -8,6 +8,7 @@ use pulpo_core::http::{self, Auth, HttpRequest, HttpResponse, SendError, Setting
 use pulpo_core::import::{self, ImportSummary};
 use pulpo_core::keychain::Keychain;
 use pulpo_core::load::{self, LoadOptions, LoadProgress, LoadSummary};
+use pulpo_core::oauth::{self, Discovery, OAuth2, TokenInfo};
 use pulpo_core::organize;
 use pulpo_core::report;
 use pulpo_core::run::{self, RunOptions, RunReport};
@@ -411,6 +412,59 @@ async fn import_into(
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// Gets a new OAuth 2.0 token (browser login for the authorization code grant) and caches it.
+#[tauri::command]
+async fn oauth_login(
+    root: String,
+    environment_id: Option<String>,
+    config: OAuth2,
+    settings: Option<Settings>,
+) -> Result<TokenInfo, String> {
+    run::oauth_login(
+        Path::new(&root),
+        environment_id.as_deref(),
+        &Keychain,
+        &config,
+        &settings.unwrap_or_default(),
+        &oauth::open_browser,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn oauth_status(
+    root: String,
+    environment_id: Option<String>,
+    config: OAuth2,
+) -> Result<Option<TokenInfo>, String> {
+    run::oauth_status(
+        Path::new(&root),
+        environment_id.as_deref(),
+        &Keychain,
+        &config,
+    )
+}
+
+#[tauri::command]
+async fn oauth_forget(
+    root: String,
+    environment_id: Option<String>,
+    config: OAuth2,
+) -> Result<(), String> {
+    run::oauth_forget(
+        Path::new(&root),
+        environment_id.as_deref(),
+        &Keychain,
+        &config,
+    )
+}
+
+/// Reads an OpenID Connect discovery document to fill the OAuth 2.0 URLs.
+#[tauri::command]
+async fn oauth_discover(issuer: String) -> Result<Discovery, String> {
+    oauth::discover(&issuer, &Settings::default()).await
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -455,7 +509,11 @@ pub fn run() {
             save_folder_settings,
             local_values,
             generate_code,
-            clear_local_values
+            clear_local_values,
+            oauth_login,
+            oauth_status,
+            oauth_forget,
+            oauth_discover
         ])
         .run(tauri::generate_context!())
         .expect("error while running Pulpo");
