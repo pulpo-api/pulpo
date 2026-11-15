@@ -347,8 +347,21 @@ export interface HttpRequest {
   cookies?: boolean;
   /** A GraphQL operation, sent as `{query, variables, operationName}`; wins over `body`. */
   graphql?: Graphql | null;
-  /** WebSocket requests (`ws://`, `wss://`): saved messages, in order. */
+  /** WebSocket requests (`ws://`, `wss://`): saved messages, in order (gRPC client streaming too). */
   messages?: WsMessage[];
+  /** gRPC requests (`grpc://`, `grpcs://`): the method and its `.proto` files (none = reflection). */
+  grpc?: GrpcTarget | null;
+}
+
+export interface GrpcTarget {
+  /** `package.Service/Method`. */
+  method: string;
+  protoFiles?: string[];
+}
+
+/** `grpc://` and `grpcs://` URLs are gRPC requests. */
+export function isGrpcUrl(url: string): boolean {
+  return /^\s*grpcs?:\/\//i.test(url);
 }
 
 export interface WsMessage {

@@ -565,7 +565,7 @@ pub async fn run_in(
     };
     if !matches!(
         entry.protocol,
-        Protocol::Http | Protocol::Graphql | Protocol::Websocket | Protocol::Sse
+        Protocol::Http | Protocol::Graphql | Protocol::Websocket | Protocol::Sse | Protocol::Grpc
     ) {
         report.error = Some(SendError::Other(format!(
             "{} requests arrive in phase 4",
@@ -668,7 +668,10 @@ pub async fn run_in(
             };
             let websocket = crate::websocket::is_websocket_url(&resolved.url);
             let stream = crate::sse::is_event_stream(&resolved);
-            let mut sent = if websocket {
+            let grpc = crate::grpc::is_grpc_url(&resolved.url);
+            let mut sent = if grpc {
+                crate::grpc::invoke(root, &with_auth(&resolved)).await
+            } else if websocket {
                 crate::websocket::exchange(&with_auth(&resolved)).await
             } else if stream {
                 crate::sse::collect(&with_auth(&resolved)).await
@@ -676,7 +679,12 @@ pub async fn run_in(
                 http::send_with(&resolved, &send_context).await
             };
             report.attempts = 1;
-            while !websocket && !stream && retryable(&sent) && report.attempts <= options.retries {
+            while !websocket
+                && !stream
+                && !grpc
+                && retryable(&sent)
+                && report.attempts <= options.retries
+            {
                 report.attempts += 1;
                 sent = http::send_with(&resolved, &send_context).await;
             }

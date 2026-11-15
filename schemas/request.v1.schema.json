@@ -57,6 +57,15 @@
       "description": "json/xml/html/javascript/graphql/text: the body is the file next to this one (.body.json, .body.xml, .body.html, .body.js, .body.graphql or .body.txt), chosen from the Content-Type header. graphql: an operation, with its variables in .variables.json, sent as JSON {query, variables, operationName}. urlencoded/multipart: the fields in form. file: the workspace file in bodyFile."
     },
     "operationName": { "type": "string", "description": "GraphQL: the operation of the query to run, when it has several." },
+    "grpc": {
+      "type": "object",
+      "description": "gRPC (grpc:// or grpcs:// URL): the method and where its descriptors come from. The message is the body (JSON).",
+      "additionalProperties": false,
+      "properties": {
+        "method": { "type": "string", "description": "package.Service/Method" },
+        "protoFiles": { "type": "array", "items": { "type": "string" }, "description": "Workspace .proto files; empty = server reflection." }
+      }
+    },
     "messages": {
       "type": "array",
       "description": "WebSocket (ws:// or wss:// URL): messages saved to send, in order. Bodies may contain {{variables}}.",

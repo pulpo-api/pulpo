@@ -456,6 +456,24 @@ export interface WsFrame {
   atMs: number;
 }
 
+export interface GrpcMethod {
+  /** `package.Service/Method`. */
+  path: string;
+  service: string;
+  name: string;
+  clientStreaming: boolean;
+  serverStreaming: boolean;
+  input: string;
+  output: string;
+  /** A JSON message with every field. */
+  example: string;
+}
+
+export interface GrpcSchema {
+  source: string;
+  methods: GrpcMethod[];
+}
+
 /** One event of a Server-Sent Events stream; `info`/`error` are Pulpo's own lines. */
 export interface SseEvent {
   event: string;
@@ -606,6 +624,7 @@ export function canonicalRequest(r: HttpRequest): HttpRequest {
       ? { query: r.graphql.query, variables: r.graphql.variables ?? "", operationName: r.graphql.operationName ?? null }
       : null,
     messages: (r.messages ?? []).map((m) => ({ name: m.name, body: m.body })),
+    grpc: r.grpc ? { method: r.grpc.method ?? "", protoFiles: [...(r.grpc.protoFiles ?? [])] } : null,
   };
 }
 
@@ -698,6 +717,8 @@ export interface WorkspaceBackend {
   deleteFlow?(root: string, id: string): Promise<void>;
   addFlowStep?(root: string, flowId: string, requestId: string): Promise<Flow>;
   moveFlowStep?(root: string, flowId: string, from: number, to: number): Promise<Flow>;
+  /** The methods of a gRPC request: by reflection, or from its `.proto` files. */
+  grpcSchema?(root: string, entry: RequestEntry, environmentId: string): Promise<GrpcSchema>;
   /** Listens to a request's event stream (SSE); every event goes to `onEvent`. */
   sseListen?(root: string, entry: RequestEntry, environmentId: string, onEvent: (event: SseEvent) => void): Promise<SseStream>;
   /** Opens a WebSocket for a request; every frame (sent, received, closed) goes to `onFrame`. */
@@ -845,6 +866,8 @@ const tauriBackend: WorkspaceBackend = {
   moveFlowStep: (root, flowId, from, to) => invoke<Flow>("move_flow_step", { root, flowId, from, to }),
   graphqlSchema: (root, entry, environmentId, refresh) =>
     invoke<GraphqlSchema | null>("graphql_schema", { root, entry, environmentId: environmentId || null, refresh }),
+  grpcSchema: (root, entry, environmentId) =>
+    invoke<GrpcSchema>("grpc_schema", { root, entry, environmentId: environmentId || null }),
   async sseListen(root, entry, environmentId, onEvent) {
     const { listen } = await import("@tauri-apps/api/event");
     let id: string | null = null;
@@ -1287,6 +1310,10 @@ function memoryBackend(): WorkspaceBackend {
         iteration: options?.iteration ?? 0,
         attempts: 1,
       };
+      if (/^\s*grpcs?:\/\//i.test(entry.request.url)) {
+        report.error = { kind: "other", message: "gRPC calls are made by the desktop app; a browser can only speak gRPC-Web." };
+        return report;
+      }
       const hasScripts = !!(entry.scripts.pre.trim() || entry.scripts.test.trim());
       if (hasScripts) report.scriptErrors.push("Scripts run in the desktop app; the browser preview only sends the request.");
       try {

@@ -186,6 +186,18 @@ fn ws_close(sockets: tauri::State<'_, Sockets>, id: String) -> Result<(), String
     Ok(())
 }
 
+/// The methods of a gRPC request's server (reflection) or `.proto` files.
+#[tauri::command]
+async fn grpc_schema(
+    root: String,
+    entry: RequestEntry,
+    environment_id: Option<String>,
+) -> Result<pulpo_core::grpc::GrpcSchema, String> {
+    let root = PathBuf::from(root);
+    let (request, _) = run::prepare(&root, &entry, environment_id.as_deref(), &Keychain).await?;
+    pulpo_core::grpc::schema(&root, &request).await
+}
+
 /// Live event streams (SSE) by id.
 #[derive(Default)]
 struct Streams(std::sync::Mutex<std::collections::HashMap<String, pulpo_core::sse::Live>>);
@@ -1130,6 +1142,7 @@ pub fn run() {
             ws_close,
             sse_listen,
             sse_stop,
+            grpc_schema,
             flow_usage,
             run_flow,
             scan_contracts,

@@ -32,6 +32,14 @@ md4 = "0.10"
 regex = "1"
 tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+tonic = { version = "=0.14.6", default-features = false, features = ["channel", "codegen", "tls-ring", "tls-webpki-roots"] }
+tonic-prost = "=0.14.6"
+tonic-reflection = { version = "=0.14.6", default-features = false }
+prost = "=0.14.4"
+prost-types = "=0.14.4"
+tokio-stream = "0.1"
+prost-reflect = { version = "0.16", features = ["serde"] }
+protox = "0.10"
 hmac = "0.12"
 jsonschema = { version = "0.59", default-features = false }
 keyring = { version = "3.6", optional = true, features = ["apple-native", "windows-native", "linux-native-sync-persistent", "crypto-rust"] }
@@ -40,6 +48,9 @@ keyring = { version = "3.6", optional = true, features = ["apple-native", "windo
 keychain = ["dep:keyring"]
 
 [dev-dependencies]
+tokio-stream = { version = "0.1", features = ["net"] }
+tonic = { version = "=0.14.6", default-features = false, features = ["transport", "router"] }
+tonic-reflection = { version = "=0.14.6", default-features = false, features = ["server"] }
 tempfile = "3"
 rcgen = "0.13"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "io-util"] }

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import { HTTP_METHODS, bodyMode, isEventStream, isWebSocketUrl, type HttpRequest } from "../core";
+import { HTTP_METHODS, bodyMode, isEventStream, isGrpcUrl, isWebSocketUrl, type HttpRequest } from "../core";
 import type { InheritedAuth, InheritedSettings, Scripts } from "../workspace";
 import type { Header } from "../core";
 import HeadersEditor from "./HeadersEditor.vue";
@@ -13,6 +13,7 @@ import CodeEditor from "./CodeEditor.vue";
 import BodyEditor from "./BodyEditor.vue";
 import ParamsEditor from "./ParamsEditor.vue";
 import WsMessagesEditor from "./WsMessagesEditor.vue";
+import GrpcEditor from "./GrpcEditor.vue";
 import { pathParamNames, splitUrl } from "../params";
 
 const props = defineProps<{
@@ -40,6 +41,8 @@ const tab = ref<"params" | "auth" | "body" | "headers" | "settings" | "pre" | "t
 );
 /** `ws://`/`wss://`: no method or Send; the Body tab holds the saved messages. */
 const websocket = computed(() => isWebSocketUrl(props.request.url));
+/** `grpc://`/`grpcs://`: the Body tab picks the method and holds the message. */
+const grpc = computed(() => isGrpcUrl(props.request.url));
 /** `Accept: text/event-stream`: listened to in the panel below instead of sent. */
 const stream = computed(() => isEventStream(props.request));
 function toggleStream() {
@@ -120,6 +123,7 @@ const inheritedCount = computed(
   <section class="card editor">
     <div class="urlbar">
       <span v-if="websocket" class="method ws" title="WebSocket: connect below">WS</span>
+      <span v-else-if="grpc" class="method grpc" title="gRPC: pick the method in Message">gRPC</span>
       <select v-else v-model="request.method" class="method" :class="`m-${request.method.toLowerCase()}`">
         <option v-for="m in HTTP_METHODS" :key="m" :value="m">{{ m }}</option>
       </select>
@@ -133,7 +137,7 @@ const inheritedCount = computed(
         @save="emit('save')"
       />
       <button
-        v-if="!websocket"
+        v-if="!websocket && !grpc"
         class="stream"
         :class="{ on: stream }"
         :title="stream ? 'Listening to Server-Sent Events: click to send it as a normal request' : 'Listen to it as Server-Sent Events (Accept: text/event-stream)'"
@@ -145,7 +149,7 @@ const inheritedCount = computed(
         {{ sending ? "Sending…" : "Send" }}
       </button>
     </div>
-    <p v-if="!supported" class="hint">This protocol is not supported yet. HTTP, GraphQL and WebSocket work today.</p>
+    <p v-if="!supported" class="hint">This protocol is not supported yet. HTTP, GraphQL, WebSocket, SSE and gRPC work today.</p>
     <p v-else-if="preview && (preview.changed || preview.missing.length)" class="resolved">
       <span v-if="preview.changed" class="url" :title="preview.url">→ {{ preview.url }}</span>
       <span v-if="preview.missing.length" class="missing">
@@ -160,7 +164,10 @@ const inheritedCount = computed(
       <button :class="{ on: tab === 'auth' }" @click="tab = 'auth'">
         Auth <span v-if="authBadge" class="count" :title="request.auth ? 'Set on this request' : 'Inherited from a parent'">{{ authBadge }}</span>
       </button>
-      <button v-if="websocket" :class="{ on: tab === 'body' }" @click="tab = 'body'">
+      <button v-if="grpc" :class="{ on: tab === 'body' }" @click="tab = 'body'">
+        Message <span v-if="request.grpc?.method" class="count">{{ request.grpc.method.split("/").pop() }}</span>
+      </button>
+      <button v-else-if="websocket" :class="{ on: tab === 'body' }" @click="tab = 'body'">
         Messages <span v-if="request.messages?.length" class="count">{{ request.messages.length }}</span>
       </button>
       <button v-else :class="{ on: tab === 'body' }" @click="tab = 'body'">
@@ -209,6 +216,17 @@ const inheritedCount = computed(
       :inherited="inheritedSettings"
       :root="root"
       :resolved-url="preview?.url ?? request.url"
+    />
+
+    <GrpcEditor
+      v-else-if="tab === 'body' && grpc"
+      :request="request"
+      :root="root"
+      :request-id="requestId"
+      :scripts="scripts"
+      :environment-id="environmentId"
+      @send="emit('send')"
+      @save="emit('save')"
     />
 
     <WsMessagesEditor v-else-if="tab === 'body' && websocket" :request="request" @save="emit('save')" />
@@ -295,6 +313,12 @@ const inheritedCount = computed(
 .stream.on {
   color: var(--p-sse, var(--accent));
   border-color: var(--p-sse, var(--accent));
+}
+.method.grpc {
+  display: inline-flex;
+  align-items: center;
+  color: var(--p-grpc, var(--accent));
+  cursor: default;
 }
 .method.ws {
   display: inline-flex;

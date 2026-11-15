@@ -41,9 +41,11 @@ function toggle(id: string) {
 }
 
 const WS_URL = /^\s*wss?:\/\//i;
+const GRPC_URL = /^\s*grpcs?:\/\//i;
 
 function badge(node: RequestEntry): string {
   if (node.protocol === "websocket" || WS_URL.test(node.request.url)) return "WS";
+  if (node.protocol === "grpc" || GRPC_URL.test(node.request.url)) return "gRPC";
   if (node.protocol === "sse" || isEventStream(node.request)) return "SSE";
   if (node.protocol === "graphql" || node.request.graphql) return "GQL";
   return node.protocol === "http" ? node.request.method : node.protocol.toUpperCase().slice(0, 4);
@@ -51,6 +53,7 @@ function badge(node: RequestEntry): string {
 
 function badgeClass(node: RequestEntry): string {
   if (node.protocol === "websocket" || WS_URL.test(node.request.url)) return "p-websocket";
+  if (node.protocol === "grpc" || GRPC_URL.test(node.request.url)) return "p-grpc";
   if (node.protocol === "sse" || isEventStream(node.request)) return "p-sse";
   if (node.protocol === "graphql" || node.request.graphql) return "p-graphql";
   return node.protocol === "http" ? `m-${node.request.method.toLowerCase()}` : `p-${node.protocol}`;

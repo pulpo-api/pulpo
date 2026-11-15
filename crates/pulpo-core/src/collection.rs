@@ -329,6 +329,9 @@ struct RequestFileV1 {
     /// WebSocket: saved messages.
     #[serde(default)]
     messages: Vec<crate::websocket::WsMessage>,
+    /// gRPC: method and `.proto` files.
+    #[serde(default)]
+    grpc: Option<crate::grpc::GrpcTarget>,
 }
 
 /// GraphQL variables of a request live next to it, as JSON.
@@ -633,6 +636,16 @@ fn request_yaml(entry: &RequestEntry, body: Option<BodyKind>) -> String {
             out.push_str(&format!("operationName: {}\n", quote(name)));
         }
     }
+    if let Some(g) = &entry.request.grpc {
+        out.push_str("grpc:\n");
+        out.push_str(&format!("  method: {}\n", quote(&g.method)));
+        if !g.proto_files.is_empty() {
+            out.push_str("  protoFiles:\n");
+            for f in &g.proto_files {
+                out.push_str(&format!("    - {}\n", quote(f)));
+            }
+        }
+    }
     if !entry.request.messages.is_empty() {
         out.push_str("messages:\n");
         for m in &entry.request.messages {
@@ -650,6 +663,9 @@ fn request_yaml(entry: &RequestEntry, body: Option<BodyKind>) -> String {
 /// The protocol a request is saved with: `ws://`/`wss://` URLs are WebSocket, an
 /// operation makes it GraphQL, and back to HTTP when neither holds.
 pub(crate) fn protocol_of(entry: &RequestEntry) -> Protocol {
+    if crate::grpc::is_grpc_url(&entry.request.url) {
+        return Protocol::Grpc;
+    }
     let ws = crate::websocket::is_websocket_url(&entry.request.url);
     let stream = crate::sse::is_event_stream(&entry.request);
     let graphql = entry.request.graphql.is_some();
@@ -662,7 +678,7 @@ pub(crate) fn protocol_of(entry: &RequestEntry) -> Protocol {
         }
         Protocol::Http | Protocol::Websocket | Protocol::Sse if graphql => Protocol::Graphql,
         Protocol::Graphql if !graphql => Protocol::Http,
-        Protocol::Websocket | Protocol::Sse => Protocol::Http,
+        Protocol::Websocket | Protocol::Sse | Protocol::Grpc => Protocol::Http,
         p => p,
     }
 }
@@ -1232,6 +1248,7 @@ fn load_request_file(root: &Path, path: &Path) -> Result<RequestEntry, Collectio
             auth: file.auth,
             graphql,
             messages: file.messages,
+            grpc: file.grpc,
         },
         scripts: read_scripts(path, &stem_of(path))?,
     })
@@ -1480,6 +1497,7 @@ mod tests {
                 cookies: false,
                 graphql: None,
                 messages: Vec::new(),
+                grpc: None,
                 disabled_params: vec![Param::new("debug", "true")],
                 path_params: vec![Param::new("tenant", "{{tenantId}}")],
                 auth: Some(Auth::Bearer {

@@ -300,9 +300,13 @@ pub struct HttpRequest {
     /// A GraphQL operation; sent as `{query, variables, operationName}` (wins over `body`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub graphql: Option<Graphql>,
-    /// WebSocket requests (`ws://`, `wss://`): the saved messages, in order.
+    /// WebSocket requests (`ws://`, `wss://`): the saved messages, in order. gRPC
+    /// client streaming sends them too.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub messages: Vec<crate::websocket::WsMessage>,
+    /// gRPC requests (`grpc://`, `grpcs://`): the method and where its descriptors are.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grpc: Option<crate::grpc::GrpcTarget>,
 }
 
 /// A GraphQL operation as it is edited: the query and its variables (JSON text).
@@ -422,6 +426,7 @@ impl HttpRequest {
             cookies: true,
             graphql: None,
             messages: Vec::new(),
+            grpc: None,
         }
     }
 }

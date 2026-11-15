@@ -245,6 +245,25 @@ const events = pm.response.json();   // [{ "event": "tick", "data": { "n": 1 }, 
 pm.test("first tick", () => pm.expect(events[0].data.n).to.eql(1));
 ```
 
+## gRPC
+
+Write a `grpc://host:port` URL (`grpcs://` for TLS) and the request becomes gRPC. **Load methods** asks the server (reflection) or reads the `.proto` files you list, compiled by Pulpo itself (no `protoc` needed); pick a method and **Use example** writes a message with every field.
+
+- The message is JSON (protobuf's JSON mapping) with `{{variables}}`; headers go as metadata.
+- Unary and server streaming send the message; client and bidirectional streaming send the saved messages in order.
+- The reply comes back as JSON (a list when the server streams). Errors keep their gRPC code (`NotFound: no such order`) and map to the closest HTTP status, so tests read them as usual; `grpc-status` and the trailers are in the headers.
+- `pulpo run` and flows call gRPC methods like any other request.
+
+```yaml
+protocol: "grpc"
+url: "grpc://localhost:50051"
+grpc:
+  method: "orders.Orders/Get"
+  protoFiles:
+    - "protos/orders.proto"     # leave it out to use server reflection
+body: "json"                    # the message, in 01-get.body.json
+```
+
 ## Run collections
 
 In the app, **▶** (or right-click a folder → Run folder…) opens the runner: pick requests, iterations, a CSV or JSON data file, delay, retries; watch the progress, re-run only the failed ones, export HTML or JUnit, and accept a changed snapshot with one click. From the terminal:

@@ -298,6 +298,7 @@ pub fn parse_curl(command: &str) -> Result<(HttpRequest, Vec<String>), ImportErr
             cookies: true,
             graphql: None,
             messages: Vec::new(),
+            grpc: None,
             disabled_params: Vec::new(),
             path_params: Vec::new(),
             auth,
