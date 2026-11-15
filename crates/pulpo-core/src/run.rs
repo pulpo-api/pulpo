@@ -512,6 +512,45 @@ fn retryable(outcome: &Result<HttpResponse, SendError>) -> bool {
 }
 
 /// Runs one request inside a session, which keeps the values its scripts set.
+/// A request ready to open a connection (WebSocket): folder headers, auth, settings and
+/// variables (environment and local values) applied, OAuth 2.0 token included. Also
+/// returns the variables, to resolve messages typed later. Scripts do not run here.
+pub async fn prepare(
+    root: &Path,
+    entry: &RequestEntry,
+    environment_id: Option<&str>,
+    store: &dyn SecretStore,
+) -> Result<(http::HttpRequest, Variables), String> {
+    let mut session = Session::open(root, environment_id, store, false)?.detached();
+    let mut effective = entry.request.clone();
+    let (auth, _) = collection::effective_auth(root, entry).map_err(|e| e.to_string())?;
+    effective.auth = Some(auth);
+    effective.settings = collection::effective_settings(root, entry).map_err(|e| e.to_string())?;
+    effective.headers = collection::effective_headers(root, entry).map_err(|e| e.to_string())?;
+    let vars = session.variables();
+    let mut resolved = variables::resolve_request(&effective, &vars)
+        .map_err(|missing| SendError::Unresolved(missing.join(", ")).to_string())?;
+    if let Some(http::Auth::OAuth2(config)) = resolved.auth.clone() {
+        let (token, _) = session
+            .oauth_token(root, &config, &resolved.settings, &vars)
+            .await?;
+        resolved.auth = None;
+        oauth::apply_token(&mut resolved.headers, &config.header_prefix, &token);
+    }
+    Ok((with_auth(&resolved), vars))
+}
+
+/// The request with its (simple) auth written into headers or the URL, for protocols
+/// that do not go through `http::send_with` (WebSocket handshakes).
+pub fn with_auth(request: &http::HttpRequest) -> http::HttpRequest {
+    let mut out = request.clone();
+    if let Some(auth) = request.auth.clone() {
+        http::apply_auth(&mut out.url, &mut out.headers, &auth);
+        out.auth = None;
+    }
+    out
+}
+
 pub async fn run_in(
     root: &Path,
     entry: &RequestEntry,
@@ -524,7 +563,10 @@ pub async fn run_in(
         iteration: options.iteration,
         ..Default::default()
     };
-    if !matches!(entry.protocol, Protocol::Http | Protocol::Graphql) {
+    if !matches!(
+        entry.protocol,
+        Protocol::Http | Protocol::Graphql | Protocol::Websocket
+    ) {
         report.error = Some(SendError::Other(format!(
             "{} requests arrive in phase 4",
             entry.protocol.as_str()
@@ -624,9 +666,14 @@ pub async fn run_in(
                 cookies: Some(jar.clone()),
                 client_pem,
             };
-            let mut sent = http::send_with(&resolved, &send_context).await;
+            let websocket = crate::websocket::is_websocket_url(&resolved.url);
+            let mut sent = if websocket {
+                crate::websocket::exchange(&with_auth(&resolved)).await
+            } else {
+                http::send_with(&resolved, &send_context).await
+            };
             report.attempts = 1;
-            while retryable(&sent) && report.attempts <= options.retries {
+            while !websocket && retryable(&sent) && report.attempts <= options.retries {
                 report.attempts += 1;
                 sent = http::send_with(&resolved, &send_context).await;
             }

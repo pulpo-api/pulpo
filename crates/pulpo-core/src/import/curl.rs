@@ -297,6 +297,7 @@ pub fn parse_curl(command: &str) -> Result<(HttpRequest, Vec<String>), ImportErr
             settings: Default::default(),
             cookies: true,
             graphql: None,
+            messages: Vec::new(),
             disabled_params: Vec::new(),
             path_params: Vec::new(),
             auth,

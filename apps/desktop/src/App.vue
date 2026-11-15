@@ -4,6 +4,7 @@ import { varContext } from "./varContext";
 import Sidebar from "./components/Sidebar.vue";
 import RequestEditor from "./components/RequestEditor.vue";
 import ResponseViewer from "./components/ResponseViewer.vue";
+import WebSocketPanel from "./components/WebSocketPanel.vue";
 import EnvironmentPanel from "./components/EnvironmentPanel.vue";
 import CookiesPanel from "./components/CookiesPanel.vue";
 import TokensPanel from "./components/TokensPanel.vue";
@@ -17,7 +18,7 @@ import FlowView from "./components/FlowView.vue";
 import ContractsPanel from "./components/ContractsPanel.vue";
 import { resolveText } from "./variables";
 import { applyPathParams } from "./params";
-import { applyAuth, asSendError, coreInfo, resolveAuth, type CoreInfo, type HttpResponse, type SendError } from "./core";
+import { applyAuth, asSendError, coreInfo, isWebSocketUrl, resolveAuth, type CoreInfo, type HttpResponse, type SendError } from "./core";
 import {
   asCollectionError,
   backend,
@@ -1007,7 +1008,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
           @auxclick.middle.prevent="closeTab(tab.id)"
         >
           <span class="badge" :class="`m-${tab.request.method.toLowerCase()}`">{{
-            tab.protocol === "http" ? tab.request.method : tab.protocol === "graphql" ? "GQL" : tab.protocol.toUpperCase().slice(0, 4)
+            isWebSocketUrl(tab.request.url) ? "WS" : tab.request.graphql ? "GQL" : tab.protocol === "http" ? tab.request.method : tab.protocol.toUpperCase().slice(0, 4)
           }}</span>
           <span class="tab-name">{{ tab.name }}</span>
           <span v-if="dirty.has(tab.id)" class="dirty" title="Unsaved changes"></span>
@@ -1065,7 +1066,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         :request="selected.request"
         :scripts="selected.scripts"
         :sending="result.sending"
-        :supported="['http', 'graphql'].includes(selected.protocol)"
+        :supported="['http', 'graphql', 'websocket'].includes(selected.protocol) || isWebSocketUrl(selected.request.url)"
         :preview="preview"
         :inherited-auth="selectedInheritedAuth"
         :inherited-settings="selectedInheritedSettings"
@@ -1079,7 +1080,19 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         @save="save()"
       />
 
+      <WebSocketPanel
+        v-if="isWebSocketUrl(selected.request.url)"
+        :key="`ws-${selected.id}`"
+        :request="selected.request"
+        :scripts="selected.scripts"
+        :request-id="selected.id"
+        :name="selected.name"
+        :root="workspace?.root ?? ''"
+        :environment-id="activeEnvId"
+      />
+
       <ResponseViewer
+        v-else
         :response="result.response"
         :error="result.error"
         :sending="result.sending"

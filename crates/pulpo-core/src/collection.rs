@@ -326,6 +326,9 @@ struct RequestFileV1 {
     /// GraphQL: which operation of the query to run.
     #[serde(default)]
     operation_name: Option<String>,
+    /// WebSocket: saved messages.
+    #[serde(default)]
+    messages: Vec<crate::websocket::WsMessage>,
 }
 
 /// GraphQL variables of a request live next to it, as JSON.
@@ -575,12 +578,7 @@ fn request_yaml(entry: &RequestEntry, body: Option<BodyKind>) -> String {
     let mut out = format!("# yaml-language-server: $schema={REQUEST_SCHEMA_URL}\n");
     out.push_str(&format!("version: {FORMAT_VERSION}\n"));
     out.push_str(&format!("name: {}\n", quote(&entry.name)));
-    // An HTTP request with a GraphQL operation is a GraphQL request, and back.
-    let protocol = match (entry.protocol, entry.request.graphql.is_some()) {
-        (Protocol::Http, true) => Protocol::Graphql,
-        (Protocol::Graphql, false) => Protocol::Http,
-        (p, _) => p,
-    };
+    let protocol = protocol_of(entry);
     out.push_str(&format!("protocol: {}\n", quote(protocol.as_str())));
     if matches!(protocol, Protocol::Http | Protocol::Graphql) {
         out.push_str(&format!(
@@ -635,11 +633,61 @@ fn request_yaml(entry: &RequestEntry, body: Option<BodyKind>) -> String {
             out.push_str(&format!("operationName: {}\n", quote(name)));
         }
     }
+    if !entry.request.messages.is_empty() {
+        out.push_str("messages:\n");
+        for m in &entry.request.messages {
+            out.push_str(&format!("  - name: {}\n", quote(&m.name)));
+            out.push_str(&format!("    body: {}\n", block_or_quoted(&m.body, 6)));
+        }
+    }
     out.push_str(&settings_yaml(&entry.request.settings));
     if !entry.request.cookies {
         out.push_str("cookies: false\n");
     }
     out
+}
+
+/// The protocol a request is saved with: `ws://`/`wss://` URLs are WebSocket, an
+/// operation makes it GraphQL, and back to HTTP when neither holds.
+pub(crate) fn protocol_of(entry: &RequestEntry) -> Protocol {
+    let ws = crate::websocket::is_websocket_url(&entry.request.url);
+    match entry.protocol {
+        Protocol::Http | Protocol::Graphql | Protocol::Websocket if ws => Protocol::Websocket,
+        Protocol::Http | Protocol::Websocket if entry.request.graphql.is_some() => {
+            Protocol::Graphql
+        }
+        Protocol::Graphql if entry.request.graphql.is_none() => Protocol::Http,
+        Protocol::Websocket => Protocol::Http,
+        p => p,
+    }
+}
+
+/// Multi-line text as a YAML literal block (it diffs line by line); one line, or text a
+/// block cannot hold exactly, as a quoted string.
+fn block_or_quoted(text: &str, indent: usize) -> String {
+    let body = text.strip_suffix('\n').unwrap_or(text);
+    let safe = text.contains('\n')
+        && !body.is_empty()
+        && !body.starts_with([' ', '\t'])
+        && !body.ends_with('\n')
+        && !body.contains('\r')
+        && !text.ends_with("\n\n");
+    if !safe {
+        return quote(text);
+    }
+    let chomp = if text.ends_with('\n') { "" } else { "-" };
+    let pad = " ".repeat(indent);
+    let lines: Vec<String> = body
+        .split('\n')
+        .map(|l| {
+            if l.is_empty() {
+                String::new()
+            } else {
+                format!("{pad}{l}")
+            }
+        })
+        .collect();
+    format!("|{chomp}\n{}", lines.join("\n"))
 }
 
 // ---------------------------------------------------------------- paths
@@ -1177,6 +1225,7 @@ fn load_request_file(root: &Path, path: &Path) -> Result<RequestEntry, Collectio
             path_params: file.path_params,
             auth: file.auth,
             graphql,
+            messages: file.messages,
         },
         scripts: read_scripts(path, &stem_of(path))?,
     })
@@ -1424,6 +1473,7 @@ mod tests {
                 },
                 cookies: false,
                 graphql: None,
+                messages: Vec::new(),
                 disabled_params: vec![Param::new("debug", "true")],
                 path_params: vec![Param::new("tenant", "{{tenantId}}")],
                 auth: Some(Auth::Bearer {

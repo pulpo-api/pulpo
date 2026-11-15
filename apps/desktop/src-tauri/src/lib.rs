@@ -97,6 +97,95 @@ fn run_report(name: String, reports: Vec<RunReport>, format: String) -> String {
     }
 }
 
+/// Open WebSocket connections by id, with the variables to resolve typed messages.
+#[derive(Default)]
+struct Sockets(
+    std::sync::Mutex<
+        std::collections::HashMap<
+            String,
+            (
+                pulpo_core::websocket::Live,
+                pulpo_core::variables::Variables,
+            ),
+        >,
+    >,
+);
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SocketFrame {
+    id: String,
+    frame: pulpo_core::websocket::Frame,
+}
+
+/// Opens a WebSocket for a request; frames arrive as `ws-frame` events with this id.
+#[tauri::command]
+async fn ws_connect(
+    app: tauri::AppHandle,
+    sockets: tauri::State<'_, Sockets>,
+    root: String,
+    entry: RequestEntry,
+    environment_id: Option<String>,
+) -> Result<String, String> {
+    let root = PathBuf::from(root);
+    let (request, vars) = run::prepare(&root, &entry, environment_id.as_deref(), &Keychain).await?;
+    let id = format!("{}-{}", entry.id, uuid_like());
+    let frame_id = id.clone();
+    let live = pulpo_core::websocket::open(&request, move |frame| {
+        let _ = app.emit(
+            "ws-frame",
+            SocketFrame {
+                id: frame_id.clone(),
+                frame,
+            },
+        );
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    sockets
+        .0
+        .lock()
+        .map_err(|e| e.to_string())?
+        .insert(id.clone(), (live, vars));
+    Ok(id)
+}
+
+fn uuid_like() -> String {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos().to_string())
+        .unwrap_or_default()
+}
+
+/// Sends a text message on an open WebSocket; `{{variables}}` are filled in.
+#[tauri::command]
+fn ws_send(sockets: tauri::State<'_, Sockets>, id: String, text: String) -> Result<(), String> {
+    let map = sockets.0.lock().map_err(|e| e.to_string())?;
+    let (live, vars) = map.get(&id).ok_or("the connection is closed")?;
+    let mut missing = std::collections::BTreeSet::new();
+    let resolved = pulpo_core::variables::resolve_text(&text, vars, &mut missing);
+    if !missing.is_empty() {
+        return Err(format!(
+            "unresolved variables: {}",
+            missing.into_iter().collect::<Vec<_>>().join(", ")
+        ));
+    }
+    if live.send(resolved) {
+        Ok(())
+    } else {
+        Err("the connection is closed".into())
+    }
+}
+
+/// Closes a WebSocket (a `Closed` frame follows).
+#[tauri::command]
+fn ws_close(sockets: tauri::State<'_, Sockets>, id: String) -> Result<(), String> {
+    if let Some((live, _)) = sockets.0.lock().map_err(|e| e.to_string())?.remove(&id) {
+        live.close();
+    }
+    Ok(())
+}
+
 /// Runs a load test, emitting `load-progress` about once a second.
 #[tauri::command]
 async fn load_test(
@@ -886,6 +975,7 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(LoadStop::default())
+        .manage(Sockets::default())
         .manage(StartupLinks(std::sync::Mutex::new(links_in(
             std::env::args().skip(1),
         ))))
@@ -982,6 +1072,9 @@ pub fn run() {
             add_flow_step,
             move_flow_step,
             graphql_schema,
+            ws_connect,
+            ws_send,
+            ws_close,
             flow_usage,
             run_flow,
             scan_contracts,

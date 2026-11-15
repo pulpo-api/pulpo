@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import { HTTP_METHODS, bodyMode, type HttpRequest } from "../core";
+import { HTTP_METHODS, bodyMode, isWebSocketUrl, type HttpRequest } from "../core";
 import type { InheritedAuth, InheritedSettings, Scripts } from "../workspace";
 import type { Header } from "../core";
 import HeadersEditor from "./HeadersEditor.vue";
@@ -12,6 +12,7 @@ import AuthEditor from "./AuthEditor.vue";
 import CodeEditor from "./CodeEditor.vue";
 import BodyEditor from "./BodyEditor.vue";
 import ParamsEditor from "./ParamsEditor.vue";
+import WsMessagesEditor from "./WsMessagesEditor.vue";
 import { pathParamNames, splitUrl } from "../params";
 
 const props = defineProps<{
@@ -37,6 +38,8 @@ const emit = defineEmits<{ send: []; save: [] }>();
 const tab = ref<"params" | "auth" | "body" | "headers" | "settings" | "pre" | "test" | "examples">(
   props.request.graphql || !(props.request.method === "GET" || splitUrl(props.request.url).params.length) ? "body" : "params",
 );
+/** `ws://`/`wss://`: no method or Send; the Body tab holds the saved messages. */
+const websocket = computed(() => isWebSocketUrl(props.request.url));
 const paramCount = computed(() => splitUrl(props.request.url).params.length + pathParamNames(props.request.url).length);
 const BODY_BADGES: Partial<Record<ReturnType<typeof bodyMode>, string>> = {
   urlencoded: "Form",
@@ -104,7 +107,8 @@ const inheritedCount = computed(
 <template>
   <section class="card editor">
     <div class="urlbar">
-      <select v-model="request.method" class="method" :class="`m-${request.method.toLowerCase()}`">
+      <span v-if="websocket" class="method ws" title="WebSocket: connect below">WS</span>
+      <select v-else v-model="request.method" class="method" :class="`m-${request.method.toLowerCase()}`">
         <option v-for="m in HTTP_METHODS" :key="m" :value="m">{{ m }}</option>
       </select>
       <VarInput
@@ -116,11 +120,11 @@ const inheritedCount = computed(
         @run="emit('send')"
         @save="emit('save')"
       />
-      <button class="send" :disabled="sending || !supported" @click="emit('send')">
+      <button v-if="!websocket" class="send" :disabled="sending || !supported" @click="emit('send')">
         {{ sending ? "Sending…" : "Send" }}
       </button>
     </div>
-    <p v-if="!supported" class="hint">This protocol is not supported yet. HTTP and GraphQL work today.</p>
+    <p v-if="!supported" class="hint">This protocol is not supported yet. HTTP, GraphQL and WebSocket work today.</p>
     <p v-else-if="preview && (preview.changed || preview.missing.length)" class="resolved">
       <span v-if="preview.changed" class="url" :title="preview.url">→ {{ preview.url }}</span>
       <span v-if="preview.missing.length" class="missing">
@@ -135,7 +139,10 @@ const inheritedCount = computed(
       <button :class="{ on: tab === 'auth' }" @click="tab = 'auth'">
         Auth <span v-if="authBadge" class="count" :title="request.auth ? 'Set on this request' : 'Inherited from a parent'">{{ authBadge }}</span>
       </button>
-      <button :class="{ on: tab === 'body' }" @click="tab = 'body'">
+      <button v-if="websocket" :class="{ on: tab === 'body' }" @click="tab = 'body'">
+        Messages <span v-if="request.messages?.length" class="count">{{ request.messages.length }}</span>
+      </button>
+      <button v-else :class="{ on: tab === 'body' }" @click="tab = 'body'">
         Body <span v-if="bodyBadge" class="count">{{ bodyBadge }}</span>
       </button>
       <button :class="{ on: tab === 'headers' }" @click="tab = 'headers'">
@@ -182,6 +189,8 @@ const inheritedCount = computed(
       :root="root"
       :resolved-url="preview?.url ?? request.url"
     />
+
+    <WsMessagesEditor v-else-if="tab === 'body' && websocket" :request="request" @save="emit('save')" />
 
     <BodyEditor
       v-else-if="tab === 'body'"
@@ -252,6 +261,12 @@ const inheritedCount = computed(
   padding: 0 10px;
   font: 600 12px var(--mono);
   cursor: pointer;
+}
+.method.ws {
+  display: inline-flex;
+  align-items: center;
+  color: var(--p-websocket, var(--accent));
+  cursor: default;
 }
 .m-get { color: var(--m-get); }
 .m-post { color: var(--m-post); }

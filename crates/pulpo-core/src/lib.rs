@@ -44,6 +44,7 @@ pub mod snapshot;
 pub mod sync;
 mod timing;
 pub mod variables;
+pub mod websocket;
 
 /// Version of the Pulpo core engine.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

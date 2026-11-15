@@ -39,11 +39,17 @@ function toggle(id: string) {
   emit("folder", id);
 }
 
+const WS_URL = /^\s*wss?:\/\//i;
+
 function badge(node: RequestEntry): string {
-  return node.protocol === "http" ? node.request.method : node.protocol === "graphql" ? "GQL" : node.protocol.toUpperCase().slice(0, 4);
+  if (node.protocol === "websocket" || WS_URL.test(node.request.url)) return "WS";
+  if (node.protocol === "graphql" || node.request.graphql) return "GQL";
+  return node.protocol === "http" ? node.request.method : node.protocol.toUpperCase().slice(0, 4);
 }
 
 function badgeClass(node: RequestEntry): string {
+  if (node.protocol === "websocket" || WS_URL.test(node.request.url)) return "p-websocket";
+  if (node.protocol === "graphql" || node.request.graphql) return "p-graphql";
   return node.protocol === "http" ? `m-${node.request.method.toLowerCase()}` : `p-${node.protocol}`;
 }
 

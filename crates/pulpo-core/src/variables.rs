@@ -126,6 +126,14 @@ pub fn resolve_request(
             variables: resolve_text(&g.variables, vars, &mut missing),
             operation_name: g.operation_name.clone(),
         }),
+        messages: request
+            .messages
+            .iter()
+            .map(|m| crate::websocket::WsMessage {
+                name: m.name.clone(),
+                body: resolve_text(&m.body, vars, &mut missing),
+            })
+            .collect(),
         form: request.form.as_ref().map(|form| Form {
             kind: form.kind,
             fields: form

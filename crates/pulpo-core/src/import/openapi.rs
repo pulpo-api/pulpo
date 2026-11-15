@@ -673,6 +673,7 @@ pub(super) fn document(doc: &Value) -> Result<ImportPlan, ImportError> {
                         settings: Default::default(),
                         cookies: true,
                         graphql: None,
+                        messages: Vec::new(),
                         disabled_params: Vec::new(),
                         path_params: Vec::new(),
                         auth,

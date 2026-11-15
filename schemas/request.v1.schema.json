@@ -57,6 +57,19 @@
       "description": "json/xml/html/javascript/graphql/text: the body is the file next to this one (.body.json, .body.xml, .body.html, .body.js, .body.graphql or .body.txt), chosen from the Content-Type header. graphql: an operation, with its variables in .variables.json, sent as JSON {query, variables, operationName}. urlencoded/multipart: the fields in form. file: the workspace file in bodyFile."
     },
     "operationName": { "type": "string", "description": "GraphQL: the operation of the query to run, when it has several." },
+    "messages": {
+      "type": "array",
+      "description": "WebSocket (ws:// or wss:// URL): messages saved to send, in order. Bodies may contain {{variables}}.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "body"],
+        "properties": {
+          "name": { "type": "string" },
+          "body": { "type": "string" }
+        }
+      }
+    },
     "form": {
       "type": "array",
       "description": "Fields of a urlencoded or multipart body. Values may contain {{variables}}.",

@@ -82,6 +82,26 @@ export function sampleWorkspace(): Workspace {
           ),
         ],
       },
+      {
+        type: "folder",
+        id: "04-websocket",
+        name: "WebSocket",
+        children: [
+          request(
+            "04-websocket/01-echo.pulpo.yaml",
+            "Echo",
+            {
+              method: "GET",
+              url: "wss://echo.websocket.org",
+              messages: [
+                { name: "Hello", body: "hola pulpo" },
+                { name: "Subscribe", body: '{\n  "type": "subscribe",\n  "user": "{{userId}}"\n}' },
+              ],
+            },
+            "websocket",
+          ),
+        ],
+      },
     ],
   };
 }

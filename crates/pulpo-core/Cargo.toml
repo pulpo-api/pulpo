@@ -22,7 +22,7 @@ jaq-json = "2"
 serde_norway = "0.9"
 uuid = { version = "1", features = ["v4"] }
 rquickjs = "0.14"
-tokio = { workspace = true, features = ["rt", "net", "time", "io-util"] }
+tokio = { workspace = true, features = ["rt", "net", "time", "io-util", "sync", "macros"] }
 tower-layer = "0.3"
 tower-service = "0.3"
 sha1 = "0.10"
@@ -30,6 +30,8 @@ sha2 = "0.10"
 md-5 = "0.10"
 md4 = "0.10"
 regex = "1"
+tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 hmac = "0.12"
 jsonschema = { version = "0.59", default-features = false }
 keyring = { version = "3.6", optional = true, features = ["apple-native", "windows-native", "linux-native-sync-persistent", "crypto-rust"] }

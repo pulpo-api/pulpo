@@ -207,6 +207,32 @@ orders/
   01-order.variables.json      { "id": "{{orderId}}" }
 ```
 
+## WebSocket
+
+Write a `ws://` or `wss://` URL and the request becomes a WebSocket: **Connect** opens it with the request's headers and auth (also the ones inherited from folders), and a log shows what you send and receive, with times; JSON opens formatted.
+
+- **Messages** keeps the ones you send often (subscribe, ping…), with `{{variables}}`: one click sends them while connected.
+- `pulpo run` and flows connect, send the saved messages in order and collect what comes back until the line goes quiet. Tests read it as a list:
+
+```js
+const got = pm.response.json();          // every message received, JSON ones as objects
+pm.test("subscribed", () => pm.expect(got[0].type).to.eql("subscribed"));
+```
+
+- Saved messages live in the request file as readable YAML blocks:
+
+```yaml
+protocol: "websocket"
+url: "wss://stream.example.com/live"
+messages:
+  - name: "Subscribe"
+    body: |-
+      {
+        "type": "subscribe",
+        "channel": "{{channel}}"
+      }
+```
+
 ## Run collections
 
 In the app, **▶** (or right-click a folder → Run folder…) opens the runner: pick requests, iterations, a CSV or JSON data file, delay, retries; watch the progress, re-run only the failed ones, export HTML or JUnit, and accept a changed snapshot with one click. From the terminal:

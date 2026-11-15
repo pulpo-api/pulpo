@@ -12,6 +12,7 @@ import {
   type Settings,
 } from "./core";
 import { sampleEnvironments, sampleWorkspace } from "./sample";
+import { resolveText } from "./variables";
 import { base64ToBytes } from "./responseFiles";
 
 export type Protocol = "http" | "graphql" | "grpc" | "websocket" | "soap" | "sse";
@@ -445,6 +446,20 @@ export interface GraphqlSchema {
   cached: boolean;
 }
 
+/** One line of a WebSocket conversation. */
+export interface WsFrame {
+  direction: "sent" | "received" | "info" | "error";
+  text: string;
+  binary?: boolean;
+  /** Milliseconds since the connection opened. */
+  atMs: number;
+}
+
+export interface WsConnection {
+  send(text: string): Promise<void>;
+  close(): Promise<void>;
+}
+
 export interface FlowPlanNode {
   path: string;
   depth: number;
@@ -577,6 +592,7 @@ export function canonicalRequest(r: HttpRequest): HttpRequest {
     graphql: r.graphql
       ? { query: r.graphql.query, variables: r.graphql.variables ?? "", operationName: r.graphql.operationName ?? null }
       : null,
+    messages: (r.messages ?? []).map((m) => ({ name: m.name, body: m.body })),
   };
 }
 
@@ -669,6 +685,8 @@ export interface WorkspaceBackend {
   deleteFlow?(root: string, id: string): Promise<void>;
   addFlowStep?(root: string, flowId: string, requestId: string): Promise<Flow>;
   moveFlowStep?(root: string, flowId: string, from: number, to: number): Promise<Flow>;
+  /** Opens a WebSocket for a request; every frame (sent, received, closed) goes to `onFrame`. */
+  wsConnect?(root: string, entry: RequestEntry, environmentId: string, onFrame: (frame: WsFrame) => void): Promise<WsConnection>;
   /** The schema of a GraphQL endpoint: cached (`refresh` false) or asked again. */
   graphqlSchema?(root: string, entry: RequestEntry, environmentId: string, refresh: boolean): Promise<GraphqlSchema | null>;
   flowUsage?(root: string): Promise<Record<string, string[]>>;
@@ -812,6 +830,32 @@ const tauriBackend: WorkspaceBackend = {
   moveFlowStep: (root, flowId, from, to) => invoke<Flow>("move_flow_step", { root, flowId, from, to }),
   graphqlSchema: (root, entry, environmentId, refresh) =>
     invoke<GraphqlSchema | null>("graphql_schema", { root, entry, environmentId: environmentId || null, refresh }),
+  async wsConnect(root, entry, environmentId, onFrame) {
+    const { listen } = await import("@tauri-apps/api/event");
+    // Frames can arrive before the id does: keep them until it is known.
+    let id: string | null = null;
+    const early: { id: string; frame: WsFrame }[] = [];
+    const deliver = (frame: WsFrame) => {
+      onFrame(frame);
+      if (frame.direction === "error" || (frame.direction === "info" && frame.text.startsWith("Closed"))) unlisten();
+    };
+    const unlisten = await listen<{ id: string; frame: WsFrame }>("ws-frame", (event) => {
+      if (id === null) early.push(event.payload);
+      else if (event.payload.id === id) deliver(event.payload.frame);
+    });
+    try {
+      id = await invoke<string>("ws_connect", { root, entry, environmentId: environmentId || null });
+    } catch (e) {
+      unlisten();
+      throw e;
+    }
+    for (const e of early) if (e.id === id) deliver(e.frame);
+    const connection = id;
+    return {
+      send: (text) => invoke<void>("ws_send", { id: connection, text }),
+      close: () => invoke<void>("ws_close", { id: connection }),
+    };
+  },
   flowUsage: (root) => invoke<Record<string, string[]>>("flow_usage", { root }),
   runFlow: (root, id, environmentId) =>
     invoke<FlowReport>("run_flow", { root, id, environmentId: environmentId || null }),
@@ -1221,6 +1265,50 @@ function memoryBackend(): WorkspaceBackend {
         report.error = asSendError(e);
       }
       return report;
+    },
+    async wsConnect(_root, entry, environmentId, onFrame) {
+      const vars = environmentId ? this.browserVariables!(environmentId) : {};
+      const missing = new Set<string>();
+      const url = resolveText(entry.request.url, vars, missing);
+      if (missing.size) throw `unresolved variables: ${[...missing].sort().join(", ")}`;
+      const started = performance.now();
+      const at = () => Math.round(performance.now() - started);
+      const auth = entry.request.auth ?? inheritedAuth(workspace, entry.id).auth;
+      const headers = effectiveHeaders(workspace, entry).filter((h) => h.enabled && h.name.trim());
+      const socket = new WebSocket(url);
+      await new Promise<void>((resolve, reject) => {
+        socket.onopen = () => resolve();
+        socket.onerror = () => reject(`could not connect to ${url}`);
+      });
+      onFrame({ direction: "info", text: `Connected to ${url}`, atMs: at() });
+      if (headers.length || (auth && auth.type !== "none")) {
+        onFrame({
+          direction: "info",
+          text: "The browser preview cannot send headers or auth in the handshake; the desktop app does.",
+          atMs: at(),
+        });
+      }
+      socket.onmessage = (event) =>
+        onFrame(
+          typeof event.data === "string"
+            ? { direction: "received", text: event.data, atMs: at() }
+            : { direction: "received", text: "binary message", binary: true, atMs: at() },
+        );
+      socket.onclose = (event) =>
+        onFrame({ direction: "info", text: event.code === 1000 || event.code === 1005 ? "Closed" : `Closed: ${event.code} ${event.reason}`, atMs: at() });
+      return {
+        async send(text) {
+          const missingNow = new Set<string>();
+          const resolved = resolveText(text, vars, missingNow);
+          if (missingNow.size) throw `unresolved variables: ${[...missingNow].sort().join(", ")}`;
+          if (socket.readyState !== WebSocket.OPEN) throw "the connection is closed";
+          socket.send(resolved);
+          onFrame({ direction: "sent", text: resolved, atMs: at() });
+        },
+        async close() {
+          socket.close(1000);
+        },
+      };
     },
     async graphqlSchema(root, entry, environmentId, refresh) {
       const key = entry.request.url.trim();

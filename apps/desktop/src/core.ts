@@ -347,6 +347,18 @@ export interface HttpRequest {
   cookies?: boolean;
   /** A GraphQL operation, sent as `{query, variables, operationName}`; wins over `body`. */
   graphql?: Graphql | null;
+  /** WebSocket requests (`ws://`, `wss://`): saved messages, in order. */
+  messages?: WsMessage[];
+}
+
+export interface WsMessage {
+  name: string;
+  body: string;
+}
+
+/** `ws://` and `wss://` URLs are WebSocket requests. */
+export function isWebSocketUrl(url: string): boolean {
+  return /^\s*wss?:\/\//i.test(url);
 }
 
 export interface Graphql {

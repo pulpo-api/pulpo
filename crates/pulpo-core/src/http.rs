@@ -300,6 +300,9 @@ pub struct HttpRequest {
     /// A GraphQL operation; sent as `{query, variables, operationName}` (wins over `body`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub graphql: Option<Graphql>,
+    /// WebSocket requests (`ws://`, `wss://`): the saved messages, in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub messages: Vec<crate::websocket::WsMessage>,
 }
 
 /// A GraphQL operation as it is edited: the query and its variables (JSON text).
@@ -418,6 +421,7 @@ impl HttpRequest {
             auth: None,
             cookies: true,
             graphql: None,
+            messages: Vec::new(),
         }
     }
 }
