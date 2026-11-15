@@ -150,34 +150,35 @@ const paletteItems = computed<PaletteItem[]>(() => {
   for (const env of environments.value) {
     items.push({ id: `env:${env.id}`, label: t("Use {0}", { 0: env.name }), group: "Environment", run: () => (activeEnvId.value = env.id) });
   }
-  const action = (id: string, label: string, run: () => void, hint = "") =>
-    items.push({ id: `action:${id}`, label, group: "Action", hint, run });
+  // English text in, shown translated and still found by its English words.
+  const action = (id: string, text: string, run: () => void, hint = "") =>
+    items.push({ id: `action:${id}`, label: t(text), keywords: text, group: "Action", hint, run });
   if (selected.value) {
-    action("send", t("Send the request"), () => void send(), "Ctrl+Enter");
-    action("save", t("Save the request"), () => void save(), "Ctrl+S");
-    action("close", t("Close the tab"), () => closeTab(selectedId.value), "Ctrl+W");
-    action("code", t("Show the request as code"), () => (showCode.value = true));
-    action("curl", t("Copy as curl"), () => void copyCurl(selectedId.value));
+    action("send", "Send the request", () => void send(), "Ctrl+Enter");
+    action("save", "Save the request", () => void save(), "Ctrl+S");
+    action("close", "Close the tab", () => closeTab(selectedId.value), "Ctrl+W");
+    action("code", "Show the request as code", () => (showCode.value = true));
+    action("curl", "Copy as curl", () => void copyCurl(selectedId.value));
   }
-  action("new-request", t("New request"), () => void newRequest(t("New request")));
-  action("new-folder", t("New folder"), () => void newFolder(t("New folder")));
-  action("import", t("Import…"), () => (showImport.value = true), t("Postman, OpenAPI, curl…"));
-  action("export", t("Export…"), () => (exporting.value = ""), t("Postman, OpenAPI, .http, HTML"));
-  action("run", t("Run the collection"), () => openRunner(""));
-  action("envs", t("Manage environments"), () => (showEnvironments.value = true));
+  action("new-request", "New request", () => void newRequest(t("New request")));
+  action("new-folder", "New folder", () => void newFolder(t("New folder")));
+  action("import", "Import…", () => (showImport.value = true), t("Postman, OpenAPI, curl…"));
+  action("export", "Export…", () => (exporting.value = ""), t("Postman, OpenAPI, .http, HTML"));
+  action("run", "Run the collection", () => openRunner(""));
+  action("envs", "Manage environments", () => (showEnvironments.value = true));
   action("cookies", "Cookies", () => (showCookies.value = true));
   action("tokens", "OAuth 2.0 tokens", () => (showTokens.value = true));
   if (backend.persistent) {
-    action("git", t("Git: changes and commit"), () => (showGit.value = true));
+    action("git", "Git: changes and commit", () => (showGit.value = true));
     action("contracts", "API contracts", () => (showContracts.value = true), "OpenAPI, .proto, WSDL, GraphQL");
-    action("mock", t("Mock server"), () => (showMock.value = true));
-    action("open", t("Open another folder"), () => void openFolder());
+    action("mock", "Mock server", () => (showMock.value = true));
+    action("open", "Open another folder", () => void openFolder());
   }
-  action("theme", theme.value === "dark" ? t("Switch to light theme") : t("Switch to dark theme"), () => {
-    theme.value = theme.value === "dark" ? "light" : "dark";
-  });
-  action("shortcuts", t("Keyboard shortcuts"), () => (showShortcuts.value = true), "Ctrl+/");
-  action("about", t("About Pulpo"), () => (showAbout.value = true));
+  const toggleTheme = () => (theme.value = theme.value === "dark" ? "light" : "dark");
+  if (theme.value === "dark") action("theme", "Switch to light theme", toggleTheme);
+  else action("theme", "Switch to dark theme", toggleTheme);
+  action("shortcuts", "Keyboard shortcuts", () => (showShortcuts.value = true), "Ctrl+/");
+  action("about", "About Pulpo", () => (showAbout.value = true));
   for (const l of LOCALES) {
     if (l.code !== locale.value) {
       // "Language" in English too, for whoever lands in a language they cannot read.
@@ -1141,6 +1142,15 @@ onBeforeUnmount(() => {
           <span class="close" :title="$t('Close (Ctrl+W)')" @click.stop="closeTab(tab.id)">✕</span>
         </button>
         <span class="spacer"></span>
+        <select
+          class="lang"
+          :value="locale"
+          :title="$t('Language')"
+          :aria-label="$t('Language')"
+          @change="setLocale(($event.target as HTMLSelectElement).value as Locale)"
+        >
+          <option v-for="l in LOCALES" :key="l.code" :value="l.code">{{ l.name }}</option>
+        </select>
         <button class="ghost small" :title="$t('Keyboard shortcuts (Ctrl+/)')" @click="showShortcuts = true">⌨</button>
         <button class="ghost small" :title="$t('About Pulpo')" @click="showAbout = true">ⓘ</button>
       </nav>
@@ -1177,20 +1187,11 @@ onBeforeUnmount(() => {
           </button>
           <button
             class="ghost"
-            :title="`Switch to ${theme === $t('dark') ? $t('light') : $t('dark')} theme`"
+            :title="$t(theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme')"
             @click="theme = theme === 'dark' ? 'light' : 'dark'"
           >
             {{ theme === "dark" ? "☀" : "☾" }}
           </button>
-          <select
-            class="env lang"
-            :value="locale"
-            :title="$t('Language')"
-            :aria-label="$t('Language')"
-            @change="setLocale(($event.target as HTMLSelectElement).value as Locale)"
-          >
-            <option v-for="l in LOCALES" :key="l.code" :value="l.code">{{ l.name }}</option>
-          </select>
         </div>
       </header>
 
@@ -1502,6 +1503,11 @@ main {
 }
 .topbar {
   justify-content: space-between;
+  flex-wrap: wrap;
+}
+.actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 .muted {
   color: var(--muted);
@@ -1641,6 +1647,8 @@ main {
 }
 .lang {
   max-width: 120px;
+  padding: 3px 6px;
+  font-size: 12px;
 }
 .about-lang {
   display: flex;

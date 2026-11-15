@@ -10,7 +10,7 @@ const TERNARY = /(?<![\w.])\$?t\([^"'()]*\?\s*("(?:[^"\\]|\\.)*")\s*:\s*("(?:[^"
 const CALL =/(?<![\w.])\$?t\(\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')/g;
 // Fixed lists shown through $t(variable).
 const LISTS = {
-  "App.vue": [/\["[^"]+",\s*"([^"]+)"\]/g],
+  "App.vue": [/\["[^"]+",\s*"([^"]+)"\]/g, /action\("[\w-]+",\s*"([^"]+)"/g],
   "components/ExportDialog.vue": [/label:\s*"([^"]+)"/g, /hint:\s*\n?\s*"([^"]+)"/g],
   "components/BodyEditor.vue": [/label:\s*"([^"]+)"/g],
   "components/ResponseViewer.vue": [/label:\s*"([^"]+)"/g, /^\s+\w+:\s*"([A-Z][^"]+)",$/gm],

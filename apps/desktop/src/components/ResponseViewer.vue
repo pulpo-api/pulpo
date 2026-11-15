@@ -14,6 +14,12 @@ export interface HistoryItem {
   response?: HttpResponse | null;
 }
 
+// One sentence around the bold Send, so each language can order it its own way.
+const sendHint = computed(() => {
+  const [before, after = ""] = t("Hit {0} to see the response here.").split("{0}");
+  return [before, after];
+});
+
 const props = defineProps<{
   response: HttpResponse | null;
   error: SendError | null;
@@ -557,7 +563,7 @@ const errorTitle: Record<SendError["kind"], string> = {
 
     <div v-else class="placeholder">
       <img src="/pulpo.svg" width="56" height="56" alt="" />
-      <p>{{ $t("Hit") }} <strong>{{ $t("Send") }}</strong> {{ $t("to see the response here.") }}</p>
+      <p>{{ sendHint[0] }}<strong>{{ $t("Send") }}</strong>{{ sendHint[1] }}</p>
     </div>
   </section>
 </template>

@@ -4,6 +4,8 @@ import { computed, nextTick, onMounted, ref, watch } from "vue";
 export interface PaletteItem {
   id: string;
   label: string;
+  /** Other words that find it, such as the English text of a translated label. */
+  keywords?: string;
   /** Group shown on the right: Request, Flow, Environment, Action… */
   group: string;
   /** Folder path, shortcut or other context, in grey. */
@@ -46,7 +48,7 @@ const shown = computed(() => {
   const q = (actionsOnly ? raw.slice(1) : raw).replace(/\s+/g, " ").trim();
   return props.items
     .filter((i) => !actionsOnly || i.id.startsWith("action:"))
-    .map((item) => ({ item, s: Math.max(score(item.label, q), score(`${item.hint ?? ""} ${item.label}`, q) * 0.8) }))
+    .map((item) => ({ item, s: Math.max(score(item.label, q), score(`${item.hint ?? ""} ${item.label}`, q) * 0.8, score(item.keywords ?? "", q) * 0.7) }))
     .filter((x) => x.s > 0)
     .sort((a, b) => b.s - a.s)
     .slice(0, 60)
