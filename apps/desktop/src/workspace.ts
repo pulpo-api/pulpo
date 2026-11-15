@@ -3,6 +3,7 @@ import {
   insideTauri,
   sendHttp,
   INTROSPECTION_QUERY,
+  SseParser,
   asSendError,
   type Auth,
   type Header,
@@ -455,6 +456,18 @@ export interface WsFrame {
   atMs: number;
 }
 
+/** One event of a Server-Sent Events stream; `info`/`error` are Pulpo's own lines. */
+export interface SseEvent {
+  event: string;
+  data: string;
+  id?: string | null;
+  atMs: number;
+}
+
+export interface SseStream {
+  stop(): Promise<void>;
+}
+
 export interface WsConnection {
   send(text: string): Promise<void>;
   close(): Promise<void>;
@@ -685,6 +698,8 @@ export interface WorkspaceBackend {
   deleteFlow?(root: string, id: string): Promise<void>;
   addFlowStep?(root: string, flowId: string, requestId: string): Promise<Flow>;
   moveFlowStep?(root: string, flowId: string, from: number, to: number): Promise<Flow>;
+  /** Listens to a request's event stream (SSE); every event goes to `onEvent`. */
+  sseListen?(root: string, entry: RequestEntry, environmentId: string, onEvent: (event: SseEvent) => void): Promise<SseStream>;
   /** Opens a WebSocket for a request; every frame (sent, received, closed) goes to `onFrame`. */
   wsConnect?(root: string, entry: RequestEntry, environmentId: string, onFrame: (frame: WsFrame) => void): Promise<WsConnection>;
   /** The schema of a GraphQL endpoint: cached (`refresh` false) or asked again. */
@@ -830,6 +845,28 @@ const tauriBackend: WorkspaceBackend = {
   moveFlowStep: (root, flowId, from, to) => invoke<Flow>("move_flow_step", { root, flowId, from, to }),
   graphqlSchema: (root, entry, environmentId, refresh) =>
     invoke<GraphqlSchema | null>("graphql_schema", { root, entry, environmentId: environmentId || null, refresh }),
+  async sseListen(root, entry, environmentId, onEvent) {
+    const { listen } = await import("@tauri-apps/api/event");
+    let id: string | null = null;
+    const early: { id: string; event: SseEvent }[] = [];
+    const deliver = (event: SseEvent) => {
+      onEvent(event);
+      if (event.event === "error" || (event.event === "info" && !event.data.startsWith("Listening"))) unlisten();
+    };
+    const unlisten = await listen<{ id: string; event: SseEvent }>("sse-event", (e) => {
+      if (id === null) early.push(e.payload);
+      else if (e.payload.id === id) deliver(e.payload.event);
+    });
+    try {
+      id = await invoke<string>("sse_listen", { root, entry, environmentId: environmentId || null });
+    } catch (e) {
+      unlisten();
+      throw e;
+    }
+    for (const e of early) if (e.id === id) deliver(e.event);
+    const stream = id;
+    return { stop: () => invoke<void>("sse_stop", { id: stream }) };
+  },
   async wsConnect(root, entry, environmentId, onFrame) {
     const { listen } = await import("@tauri-apps/api/event");
     // Frames can arrive before the id does: keep them until it is known.
@@ -1265,6 +1302,62 @@ function memoryBackend(): WorkspaceBackend {
         report.error = asSendError(e);
       }
       return report;
+    },
+    async sseListen(_root, entry, environmentId, onEvent) {
+      const vars = environmentId ? this.browserVariables!(environmentId) : {};
+      const missing = new Set<string>();
+      const url = resolveText(entry.request.url, vars, missing);
+      const headers = new Headers();
+      for (const h of effectiveHeaders(workspace, entry)) {
+        if (h.enabled && h.name.trim()) headers.append(h.name.trim(), resolveText(h.value, vars, missing));
+      }
+      const auth = entry.request.auth ?? inheritedAuth(workspace, entry.id).auth;
+      if (auth?.type === "bearer") headers.set("authorization", `Bearer ${resolveText(auth.token, vars, missing)}`);
+      const body = entry.request.body ? resolveText(entry.request.body, vars, missing) : undefined;
+      if (missing.size) throw `unresolved variables: ${[...missing].sort().join(", ")}`;
+      const controller = new AbortController();
+      const started = performance.now();
+      const at = () => Math.round(performance.now() - started);
+      let response: Response;
+      try {
+        response = await fetch(url, {
+          method: entry.request.method,
+          headers,
+          body: ["GET", "HEAD"].includes(entry.request.method) ? undefined : body,
+          signal: controller.signal,
+        });
+      } catch (e) {
+        throw `could not connect: ${e}. In the browser preview, CORS can block it; the desktop app has no such limit.`;
+      }
+      const kind = response.headers.get("content-type") ?? "";
+      if (!response.ok || !kind.includes("text/event-stream")) {
+        throw `${response.status} ${response.statusText}: not an event stream (${kind || "no Content-Type"})`;
+      }
+      onEvent({ event: "info", data: `Listening to ${url}`, atMs: at() });
+      const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
+      const parser = new SseParser();
+      let stopped = false;
+      void (async () => {
+        try {
+          for (;;) {
+            const { value, done } = await reader.read();
+            if (done) {
+              if (!stopped) onEvent({ event: "info", data: "The server ended the stream", atMs: at() });
+              break;
+            }
+            for (const e of parser.feed(value)) onEvent({ ...e, atMs: at() });
+          }
+        } catch (e) {
+          if (!stopped) onEvent({ event: "error", data: String(e), atMs: at() });
+        }
+      })();
+      return {
+        async stop() {
+          stopped = true;
+          controller.abort();
+          onEvent({ event: "info", data: "Stopped", atMs: at() });
+        },
+      };
     },
     async wsConnect(_root, entry, environmentId, onFrame) {
       const vars = environmentId ? this.browserVariables!(environmentId) : {};

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import { HTTP_METHODS, bodyMode, isWebSocketUrl, type HttpRequest } from "../core";
+import { HTTP_METHODS, bodyMode, isEventStream, isWebSocketUrl, type HttpRequest } from "../core";
 import type { InheritedAuth, InheritedSettings, Scripts } from "../workspace";
 import type { Header } from "../core";
 import HeadersEditor from "./HeadersEditor.vue";
@@ -40,6 +40,18 @@ const tab = ref<"params" | "auth" | "body" | "headers" | "settings" | "pre" | "t
 );
 /** `ws://`/`wss://`: no method or Send; the Body tab holds the saved messages. */
 const websocket = computed(() => isWebSocketUrl(props.request.url));
+/** `Accept: text/event-stream`: listened to in the panel below instead of sent. */
+const stream = computed(() => isEventStream(props.request));
+function toggleStream() {
+  const r = props.request;
+  if (stream.value) {
+    r.headers = r.headers.filter(
+      (h) => !(h.name.trim().toLowerCase() === "accept" && h.value.toLowerCase().includes("text/event-stream")),
+    );
+  } else {
+    r.headers = [...r.headers.filter((h) => h.name.trim().toLowerCase() !== "accept"), { name: "Accept", value: "text/event-stream", enabled: true }];
+  }
+}
 const paramCount = computed(() => splitUrl(props.request.url).params.length + pathParamNames(props.request.url).length);
 const BODY_BADGES: Partial<Record<ReturnType<typeof bodyMode>, string>> = {
   urlencoded: "Form",
@@ -120,7 +132,16 @@ const inheritedCount = computed(
         @run="emit('send')"
         @save="emit('save')"
       />
-      <button v-if="!websocket" class="send" :disabled="sending || !supported" @click="emit('send')">
+      <button
+        v-if="!websocket"
+        class="stream"
+        :class="{ on: stream }"
+        :title="stream ? 'Listening to Server-Sent Events: click to send it as a normal request' : 'Listen to it as Server-Sent Events (Accept: text/event-stream)'"
+        @click="toggleStream"
+      >
+        SSE
+      </button>
+      <button v-if="!websocket && !stream" class="send" :disabled="sending || !supported" @click="emit('send')">
         {{ sending ? "Sending…" : "Send" }}
       </button>
     </div>
@@ -261,6 +282,19 @@ const inheritedCount = computed(
   padding: 0 10px;
   font: 600 12px var(--mono);
   cursor: pointer;
+}
+.stream {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--muted);
+  padding: 0 10px;
+  font: 600 12px var(--mono);
+  cursor: pointer;
+}
+.stream.on {
+  color: var(--p-sse, var(--accent));
+  border-color: var(--p-sse, var(--accent));
 }
 .method.ws {
   display: inline-flex;

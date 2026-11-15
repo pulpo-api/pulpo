@@ -234,6 +234,17 @@ messages:
       }
 ```
 
+## Server-Sent Events
+
+Press **SSE** next to the URL (it sets `Accept: text/event-stream`) and **Listen**: events arrive as they come, with their name, id and time; JSON opens formatted. Headers, auth, `{{variables}}` and a body work as in any request, so `POST` streams (like text generation APIs) work too.
+
+`pulpo run` and flows listen until the stream ends or goes quiet, and tests get the events:
+
+```js
+const events = pm.response.json();   // [{ "event": "tick", "data": { "n": 1 }, "id": "1" }, ...]
+pm.test("first tick", () => pm.expect(events[0].data.n).to.eql(1));
+```
+
 ## Run collections
 
 In the app, **▶** (or right-click a folder → Run folder…) opens the runner: pick requests, iterations, a CSV or JSON data file, delay, retries; watch the progress, re-run only the failed ones, export HTML or JUnit, and accept a changed snapshot with one click. From the terminal:

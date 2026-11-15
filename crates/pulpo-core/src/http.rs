@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 const MAX_REDIRECTS: usize = 10;
-const USER_AGENT: &str = concat!("Pulpo/", env!("CARGO_PKG_VERSION"));
+pub(crate) const USER_AGENT: &str = concat!("Pulpo/", env!("CARGO_PKG_VERSION"));
 
 /// A header as edited in the UI. Disabled headers are kept but not sent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

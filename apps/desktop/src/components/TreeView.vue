@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { nextTick, ref, watch } from "vue";
 import type { RequestEntry, TreeNode } from "../workspace";
+import { isEventStream } from "../core";
 import {
   draftName,
   dragging,
@@ -43,12 +44,14 @@ const WS_URL = /^\s*wss?:\/\//i;
 
 function badge(node: RequestEntry): string {
   if (node.protocol === "websocket" || WS_URL.test(node.request.url)) return "WS";
+  if (node.protocol === "sse" || isEventStream(node.request)) return "SSE";
   if (node.protocol === "graphql" || node.request.graphql) return "GQL";
   return node.protocol === "http" ? node.request.method : node.protocol.toUpperCase().slice(0, 4);
 }
 
 function badgeClass(node: RequestEntry): string {
   if (node.protocol === "websocket" || WS_URL.test(node.request.url)) return "p-websocket";
+  if (node.protocol === "sse" || isEventStream(node.request)) return "p-sse";
   if (node.protocol === "graphql" || node.request.graphql) return "p-graphql";
   return node.protocol === "http" ? `m-${node.request.method.toLowerCase()}` : `p-${node.protocol}`;
 }

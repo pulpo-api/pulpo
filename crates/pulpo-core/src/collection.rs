@@ -580,7 +580,7 @@ fn request_yaml(entry: &RequestEntry, body: Option<BodyKind>) -> String {
     out.push_str(&format!("name: {}\n", quote(&entry.name)));
     let protocol = protocol_of(entry);
     out.push_str(&format!("protocol: {}\n", quote(protocol.as_str())));
-    if matches!(protocol, Protocol::Http | Protocol::Graphql) {
+    if matches!(protocol, Protocol::Http | Protocol::Graphql | Protocol::Sse) {
         out.push_str(&format!(
             "method: {}\n",
             quote(&entry.request.method.to_string())
@@ -651,13 +651,18 @@ fn request_yaml(entry: &RequestEntry, body: Option<BodyKind>) -> String {
 /// operation makes it GraphQL, and back to HTTP when neither holds.
 pub(crate) fn protocol_of(entry: &RequestEntry) -> Protocol {
     let ws = crate::websocket::is_websocket_url(&entry.request.url);
+    let stream = crate::sse::is_event_stream(&entry.request);
+    let graphql = entry.request.graphql.is_some();
     match entry.protocol {
-        Protocol::Http | Protocol::Graphql | Protocol::Websocket if ws => Protocol::Websocket,
-        Protocol::Http | Protocol::Websocket if entry.request.graphql.is_some() => {
-            Protocol::Graphql
+        Protocol::Http | Protocol::Graphql | Protocol::Websocket | Protocol::Sse if ws => {
+            Protocol::Websocket
         }
-        Protocol::Graphql if entry.request.graphql.is_none() => Protocol::Http,
-        Protocol::Websocket => Protocol::Http,
+        Protocol::Http | Protocol::Graphql | Protocol::Websocket | Protocol::Sse if stream => {
+            Protocol::Sse
+        }
+        Protocol::Http | Protocol::Websocket | Protocol::Sse if graphql => Protocol::Graphql,
+        Protocol::Graphql if !graphql => Protocol::Http,
+        Protocol::Websocket | Protocol::Sse => Protocol::Http,
         p => p,
     }
 }
@@ -1130,6 +1135,7 @@ fn load_request_file(root: &Path, path: &Path) -> Result<RequestEntry, Collectio
             )))
         }
         (Protocol::Graphql, method) => method.unwrap_or(HttpMethod::Post),
+        (Protocol::Sse, method) => method.unwrap_or(HttpMethod::Get),
         (_, _) => HttpMethod::Get,
     };
     let invalid = |why: &str| CollectionError::InvalidFile(format!("{}: {why}", path.display()));

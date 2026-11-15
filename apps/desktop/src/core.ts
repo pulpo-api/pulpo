@@ -356,6 +356,52 @@ export interface WsMessage {
   body: string;
 }
 
+/** A request that asks for `Accept: text/event-stream` listens to Server-Sent Events. */
+export function isEventStream(request: Pick<HttpRequest, "headers">): boolean {
+  return request.headers.some(
+    (h) => h.enabled && h.name.trim().toLowerCase() === "accept" && h.value.toLowerCase().includes("text/event-stream"),
+  );
+}
+
+/** Reads the `text/event-stream` format, as pulpo-core's `sse::Parser`. */
+export class SseParser {
+  private buffer = "";
+  private event = "";
+  private data: string[] = [];
+  private id: string | null = null;
+
+  feed(text: string): { event: string; data: string; id: string | null }[] {
+    this.buffer += text;
+    const out: { event: string; data: string; id: string | null }[] = [];
+    for (;;) {
+      const end = this.buffer.search(/[\r\n]/);
+      if (end < 0) break;
+      let skip = end + 1;
+      if (this.buffer.startsWith("\r\n", end)) skip = end + 2;
+      else if (this.buffer[end] === "\r" && skip === this.buffer.length) break;
+      const line = this.buffer.slice(0, end);
+      this.buffer = this.buffer.slice(skip);
+      if (!line) {
+        if (this.data.length || this.event) {
+          out.push({ event: this.event || "message", data: this.data.join("\n"), id: this.id });
+          this.event = "";
+          this.data = [];
+        }
+        continue;
+      }
+      if (line.startsWith(":")) continue;
+      const colon = line.indexOf(":");
+      const field = colon < 0 ? line : line.slice(0, colon);
+      let value = colon < 0 ? "" : line.slice(colon + 1);
+      if (value.startsWith(" ")) value = value.slice(1);
+      if (field === "event") this.event = value;
+      else if (field === "data") this.data.push(value);
+      else if (field === "id") this.id = value;
+    }
+    return out;
+  }
+}
+
 /** `ws://` and `wss://` URLs are WebSocket requests. */
 export function isWebSocketUrl(url: string): boolean {
   return /^\s*wss?:\/\//i.test(url);

@@ -186,6 +186,58 @@ fn ws_close(sockets: tauri::State<'_, Sockets>, id: String) -> Result<(), String
     Ok(())
 }
 
+/// Live event streams (SSE) by id.
+#[derive(Default)]
+struct Streams(std::sync::Mutex<std::collections::HashMap<String, pulpo_core::sse::Live>>);
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StreamEvent {
+    id: String,
+    event: pulpo_core::sse::Event,
+}
+
+/// Listens to a request's event stream; events arrive as `sse-event` with this id.
+#[tauri::command]
+async fn sse_listen(
+    app: tauri::AppHandle,
+    streams: tauri::State<'_, Streams>,
+    root: String,
+    entry: RequestEntry,
+    environment_id: Option<String>,
+) -> Result<String, String> {
+    let root = PathBuf::from(root);
+    let (request, _) = run::prepare(&root, &entry, environment_id.as_deref(), &Keychain).await?;
+    let id = format!("{}-{}", entry.id, uuid_like());
+    let event_id = id.clone();
+    let live = pulpo_core::sse::open(&request, move |event| {
+        let _ = app.emit(
+            "sse-event",
+            StreamEvent {
+                id: event_id.clone(),
+                event,
+            },
+        );
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    streams
+        .0
+        .lock()
+        .map_err(|e| e.to_string())?
+        .insert(id.clone(), live);
+    Ok(id)
+}
+
+/// Stops listening (a `Stopped` line follows).
+#[tauri::command]
+fn sse_stop(streams: tauri::State<'_, Streams>, id: String) -> Result<(), String> {
+    if let Some(mut live) = streams.0.lock().map_err(|e| e.to_string())?.remove(&id) {
+        live.stop();
+    }
+    Ok(())
+}
+
 /// Runs a load test, emitting `load-progress` about once a second.
 #[tauri::command]
 async fn load_test(
@@ -976,6 +1028,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(LoadStop::default())
         .manage(Sockets::default())
+        .manage(Streams::default())
         .manage(StartupLinks(std::sync::Mutex::new(links_in(
             std::env::args().skip(1),
         ))))
@@ -1075,6 +1128,8 @@ pub fn run() {
             ws_connect,
             ws_send,
             ws_close,
+            sse_listen,
+            sse_stop,
             flow_usage,
             run_flow,
             scan_contracts,
