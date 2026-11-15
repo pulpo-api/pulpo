@@ -219,7 +219,8 @@ pub fn prepare(request: &HttpRequest) -> Prepared {
         }
         Body::File(file.to_string())
     } else {
-        match request.body.as_deref().filter(|b| !b.is_empty()) {
+        let wire = request.wire_body();
+        match wire.as_deref().filter(|b| !b.is_empty()) {
             Some(body) => {
                 // Pulpo sends the detected type when none is set; so does the code.
                 let stopped = request

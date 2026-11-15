@@ -28,6 +28,7 @@ fn request_suffixes() -> Vec<String> {
     for kind in BodyKind::ALL {
         suffixes.push(format!(".body.{}", kind.extension()));
     }
+    suffixes.push(crate::collection::VARIABLES_SUFFIX.into());
     suffixes.push(".pre.js".into());
     suffixes.push(".test.js".into());
     // The examples folder moves with its request (fs::rename works on folders too).

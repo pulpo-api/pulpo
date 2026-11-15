@@ -82,6 +82,9 @@ fn yes() -> bool {
 /// The raw body kind to store in a sidecar, or None when the request has no raw body
 /// (or sends a form or a file instead, which win over it).
 fn raw_body_kind(request: &HttpRequest) -> Option<BodyKind> {
+    if request.graphql.is_some() {
+        return Some(BodyKind::Graphql);
+    }
     if request.form.is_some() || request.body_file.as_deref().is_some_and(|f| !f.is_empty()) {
         return None;
     }
@@ -320,6 +323,16 @@ struct RequestFileV1 {
     disabled_params: Vec<Param>,
     #[serde(default)]
     auth: Option<Auth>,
+    /// GraphQL: which operation of the query to run.
+    #[serde(default)]
+    operation_name: Option<String>,
+}
+
+/// GraphQL variables of a request live next to it, as JSON.
+pub const VARIABLES_SUFFIX: &str = ".variables.json";
+
+pub(crate) fn variables_path(request_file: &Path) -> PathBuf {
+    request_file.with_file_name(format!("{}{VARIABLES_SUFFIX}", stem_of(request_file)))
 }
 
 pub(crate) fn check_version(version: u32, path: &Path) -> Result<(), CollectionError> {
@@ -562,8 +575,14 @@ fn request_yaml(entry: &RequestEntry, body: Option<BodyKind>) -> String {
     let mut out = format!("# yaml-language-server: $schema={REQUEST_SCHEMA_URL}\n");
     out.push_str(&format!("version: {FORMAT_VERSION}\n"));
     out.push_str(&format!("name: {}\n", quote(&entry.name)));
-    out.push_str(&format!("protocol: {}\n", quote(entry.protocol.as_str())));
-    if entry.protocol == Protocol::Http {
+    // An HTTP request with a GraphQL operation is a GraphQL request, and back.
+    let protocol = match (entry.protocol, entry.request.graphql.is_some()) {
+        (Protocol::Http, true) => Protocol::Graphql,
+        (Protocol::Graphql, false) => Protocol::Http,
+        (p, _) => p,
+    };
+    out.push_str(&format!("protocol: {}\n", quote(protocol.as_str())));
+    if matches!(protocol, Protocol::Http | Protocol::Graphql) {
         out.push_str(&format!(
             "method: {}\n",
             quote(&entry.request.method.to_string())
@@ -606,6 +625,15 @@ fn request_yaml(entry: &RequestEntry, body: Option<BodyKind>) -> String {
         out.push_str(&format!("bodyFile: {}\n", quote(file)));
     } else if let Some(kind) = body {
         out.push_str(&format!("body: {}\n", quote(kind.as_str())));
+        if let Some(name) = entry
+            .request
+            .graphql
+            .as_ref()
+            .and_then(|g| g.operation_name.as_deref())
+            .filter(|n| !n.is_empty())
+        {
+            out.push_str(&format!("operationName: {}\n", quote(name)));
+        }
     }
     out.push_str(&settings_yaml(&entry.request.settings));
     if !entry.request.cookies {
@@ -1053,6 +1081,7 @@ fn load_request_file(root: &Path, path: &Path) -> Result<RequestEntry, Collectio
                 path.display()
             )))
         }
+        (Protocol::Graphql, method) => method.unwrap_or(HttpMethod::Post),
         (_, _) => HttpMethod::Get,
     };
     let invalid = |why: &str| CollectionError::InvalidFile(format!("{}: {why}", path.display()));
@@ -1071,6 +1100,21 @@ fn load_request_file(root: &Path, path: &Path) -> Result<RequestEntry, Collectio
             Some(fs::read_to_string(&sidecar).map_err(|e| io_error(&sidecar, e))?)
         }
         None => None,
+    };
+    // `body: graphql` is an operation: the query, its variables and the operation name.
+    let (body, graphql) = match (raw_kind, body) {
+        (Some(BodyKind::Graphql), Some(query)) => {
+            let variables = fs::read_to_string(variables_path(path)).unwrap_or_default();
+            (
+                None,
+                Some(crate::http::Graphql {
+                    query,
+                    variables,
+                    operation_name: file.operation_name.clone(),
+                }),
+            )
+        }
+        (_, body) => (body, None),
     };
     let form_kind = match file.body {
         Some(BodyModeV1::Urlencoded) => Some(FormKind::Urlencoded),
@@ -1132,6 +1176,7 @@ fn load_request_file(root: &Path, path: &Path) -> Result<RequestEntry, Collectio
             disabled_params: file.disabled_params,
             path_params: file.path_params,
             auth: file.auth,
+            graphql,
         },
         scripts: read_scripts(path, &stem_of(path))?,
     })
@@ -1159,7 +1204,24 @@ pub fn save_request(root: &Path, entry: &RequestEntry) -> Result<(), CollectionE
         fs::create_dir_all(parent).map_err(|e| io_error(parent, e))?;
     }
     let kind = raw_body_kind(&entry.request);
-    let body = entry.request.body.as_deref();
+    let body = match &entry.request.graphql {
+        Some(g) => Some(g.query.as_str()),
+        None => entry.request.body.as_deref(),
+    };
+    let variables = variables_path(&path);
+    match entry
+        .request
+        .graphql
+        .as_ref()
+        .map(|g| g.variables.as_str())
+        .filter(|v| !v.trim().is_empty())
+    {
+        Some(text) => fs::write(&variables, text).map_err(|e| io_error(&variables, e))?,
+        None if variables.exists() => {
+            fs::remove_file(&variables).map_err(|e| io_error(&variables, e))?
+        }
+        None => {}
+    }
 
     for other in BodyKind::ALL {
         let sidecar = body_path(&path, other);
@@ -1222,6 +1284,10 @@ pub fn delete_request(root: &Path, id: &str) -> Result<(), CollectionError> {
         if sidecar.exists() {
             fs::remove_file(&sidecar).map_err(|e| io_error(&sidecar, e))?;
         }
+    }
+    let variables = variables_path(&path);
+    if variables.exists() {
+        fs::remove_file(&variables).map_err(|e| io_error(&variables, e))?;
     }
     write_scripts(&path, &stem_of(&path), &Scripts::default())?;
     let examples = crate::examples::examples_dir(&path);
@@ -1357,6 +1423,7 @@ mod tests {
                     ..Default::default()
                 },
                 cookies: false,
+                graphql: None,
                 disabled_params: vec![Param::new("debug", "true")],
                 path_params: vec![Param::new("tenant", "{{tenantId}}")],
                 auth: Some(Auth::Bearer {
@@ -1540,8 +1607,12 @@ mod tests {
                 [format!("01-page.body.{extension}")],
                 "only one body file"
             );
+            // A `.graphql` body reads back as an operation; it still goes out as is.
             assert_eq!(
-                load_request(ws.path(), &entry.id).unwrap().request.body,
+                load_request(ws.path(), &entry.id)
+                    .unwrap()
+                    .request
+                    .wire_body(),
                 entry.request.body
             );
         }

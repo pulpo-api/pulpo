@@ -40,7 +40,7 @@ function toggle(id: string) {
 }
 
 function badge(node: RequestEntry): string {
-  return node.protocol === "http" ? node.request.method : node.protocol.toUpperCase().slice(0, 4);
+  return node.protocol === "http" ? node.request.method : node.protocol === "graphql" ? "GQL" : node.protocol.toUpperCase().slice(0, 4);
 }
 
 function badgeClass(node: RequestEntry): string {

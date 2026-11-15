@@ -848,7 +848,7 @@ function remember(id: string, result: Result) {
 
 async function send() {
   const node = selected.value;
-  if (!node || node.protocol !== "http" || sending.has(node.id)) return;
+  if (!node || !["http", "graphql"].includes(node.protocol) || sending.has(node.id)) return;
   // Sending a request keeps its tab.
   pinTab(node.id);
   sending.add(node.id);
@@ -1007,7 +1007,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
           @auxclick.middle.prevent="closeTab(tab.id)"
         >
           <span class="badge" :class="`m-${tab.request.method.toLowerCase()}`">{{
-            tab.protocol === "http" ? tab.request.method : tab.protocol.toUpperCase().slice(0, 4)
+            tab.protocol === "http" ? tab.request.method : tab.protocol === "graphql" ? "GQL" : tab.protocol.toUpperCase().slice(0, 4)
           }}</span>
           <span class="tab-name">{{ tab.name }}</span>
           <span v-if="dirty.has(tab.id)" class="dirty" title="Unsaved changes"></span>
@@ -1065,7 +1065,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         :request="selected.request"
         :scripts="selected.scripts"
         :sending="result.sending"
-        :supported="selected.protocol === 'http'"
+        :supported="['http', 'graphql'].includes(selected.protocol)"
         :preview="preview"
         :inherited-auth="selectedInheritedAuth"
         :inherited-settings="selectedInheritedSettings"

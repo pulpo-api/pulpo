@@ -341,13 +341,19 @@ fn write_nodes(
                 scripts,
             } => {
                 let created = collection::create_request(root, folder_id, name)?;
+                let mut request = request.clone();
+                let protocol = if request.promote_graphql() {
+                    Protocol::Graphql
+                } else {
+                    Protocol::Http
+                };
                 collection::save_request(
                     root,
                     &RequestEntry {
                         id: created.id,
                         name: name.clone(),
-                        protocol: Protocol::Http,
-                        request: request.clone(),
+                        protocol,
+                        request,
                         scripts: scripts.clone(),
                     },
                 )?;

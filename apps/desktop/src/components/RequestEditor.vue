@@ -35,13 +35,14 @@ const props = defineProps<{
 const emit = defineEmits<{ send: []; save: [] }>();
 
 const tab = ref<"params" | "auth" | "body" | "headers" | "settings" | "pre" | "test" | "examples">(
-  props.request.method === "GET" || splitUrl(props.request.url).params.length ? "params" : "body",
+  props.request.graphql || !(props.request.method === "GET" || splitUrl(props.request.url).params.length) ? "body" : "params",
 );
 const paramCount = computed(() => splitUrl(props.request.url).params.length + pathParamNames(props.request.url).length);
 const BODY_BADGES: Partial<Record<ReturnType<typeof bodyMode>, string>> = {
   urlencoded: "Form",
   multipart: "Form",
   file: "File",
+  graphql: "GraphQL",
 };
 const examplesNew = ref(false);
 const examplesEditor = ref<InstanceType<typeof ExamplesEditor> | null>(null);
@@ -119,7 +120,7 @@ const inheritedCount = computed(
         {{ sending ? "Sending…" : "Send" }}
       </button>
     </div>
-    <p v-if="!supported" class="hint">This protocol arrives in phase 4. HTTP works today.</p>
+    <p v-if="!supported" class="hint">This protocol is not supported yet. HTTP and GraphQL work today.</p>
     <p v-else-if="preview && (preview.changed || preview.missing.length)" class="resolved">
       <span v-if="preview.changed" class="url" :title="preview.url">→ {{ preview.url }}</span>
       <span v-if="preview.missing.length" class="missing">
@@ -182,7 +183,16 @@ const inheritedCount = computed(
       :resolved-url="preview?.url ?? request.url"
     />
 
-    <BodyEditor v-else-if="tab === 'body'" :request="request" :root="root" @send="emit('send')" @save="emit('save')" />
+    <BodyEditor
+      v-else-if="tab === 'body'"
+      :request="request"
+      :root="root"
+      :request-id="requestId"
+      :scripts="scripts"
+      :environment-id="environmentId"
+      @send="emit('send')"
+      @save="emit('save')"
+    />
 
     <template v-else-if="tab === 'pre' || tab === 'test'">
       <CodeEditor

@@ -317,9 +317,10 @@ export interface Form {
 }
 
 /** How the body is sent; derived from which of `form`, `bodyFile` and `body` is set. */
-export type BodyMode = "none" | "raw" | FormKind | "file";
+export type BodyMode = "none" | "raw" | "graphql" | FormKind | "file";
 
 export function bodyMode(request: HttpRequest): BodyMode {
+  if (request.graphql) return "graphql";
   if (request.form) return request.form.kind;
   if (request.bodyFile != null) return "file";
   return request.body != null ? "raw" : "none";
@@ -344,6 +345,15 @@ export interface HttpRequest {
   bodyFile?: string | null;
   /** Send and store cookies with the environment's jar (default true). */
   cookies?: boolean;
+  /** A GraphQL operation, sent as `{query, variables, operationName}`; wins over `body`. */
+  graphql?: Graphql | null;
+}
+
+export interface Graphql {
+  query: string;
+  /** JSON text. */
+  variables: string;
+  operationName?: string | null;
 }
 
 export interface HttpResponse {

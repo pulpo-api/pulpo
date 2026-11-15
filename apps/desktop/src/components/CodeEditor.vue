@@ -18,7 +18,7 @@ import { openSearchPanel } from "@codemirror/search";
 import { refreshVariables, variables as variablesExt } from "../cmVariables";
 import { varContext } from "../varContext";
 
-export type Language = "json" | "javascript" | "xml" | "text";
+export type Language = "json" | "javascript" | "xml" | "graphql" | "text";
 
 const props = withDefaults(
   defineProps<{
@@ -28,6 +28,8 @@ const props = withDefaults(
     placeholder?: string;
     /** Highlight and complete `{{variables}}` (request data, not scripts). */
     variables?: boolean;
+    /** A GraphQLSchema (graphql-js) for completion and checks in `graphql`. */
+    graphqlSchema?: unknown;
   }>(),
   { language: "text", readonly: false, placeholder: "", variables: false },
 );
@@ -43,6 +45,23 @@ const host = ref<HTMLDivElement | null>(null);
 let view: EditorView | null = null;
 const languageSlot = new Compartment();
 const readonlySlot = new Compartment();
+
+// GraphQL support (and graphql-js) loads only when a GraphQL editor opens.
+let graphqlModule: Promise<typeof import("cm6-graphql")> | null = null;
+
+function applyLanguage() {
+  if (props.language !== "graphql") {
+    view?.dispatch({ effects: languageSlot.reconfigure(languageExtension(props.language)) });
+    return;
+  }
+  graphqlModule ??= import("cm6-graphql");
+  void graphqlModule.then((m) => {
+    if (props.language !== "graphql") return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const ext = m.graphql((props.graphqlSchema ?? undefined) as any);
+    view?.dispatch({ effects: languageSlot.reconfigure(ext) });
+  });
+}
 
 function languageExtension(language: Language) {
   switch (language) {
@@ -119,6 +138,7 @@ onMounted(() => {
       ],
     }),
   });
+  if (props.language === "graphql") applyLanguage();
 });
 
 watch(
@@ -130,10 +150,7 @@ watch(
   },
 );
 
-watch(
-  () => props.language,
-  (language) => view?.dispatch({ effects: languageSlot.reconfigure(languageExtension(language)) }),
-);
+watch(() => [props.language, props.graphqlSchema], applyLanguage);
 
 watch(
   () => props.readonly,

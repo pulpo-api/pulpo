@@ -297,9 +297,113 @@ pub struct HttpRequest {
     /// Send and store cookies with the environment's jar.
     #[serde(default = "enabled_by_default")]
     pub cookies: bool,
+    /// A GraphQL operation; sent as `{query, variables, operationName}` (wins over `body`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graphql: Option<Graphql>,
+}
+
+/// A GraphQL operation as it is edited: the query and its variables (JSON text).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Graphql {
+    pub query: String,
+    #[serde(default)]
+    pub variables: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_name: Option<String>,
+}
+
+impl Graphql {
+    /// The JSON body GraphQL servers expect. Variables that are not valid JSON are sent
+    /// as they are written, so the server says what is wrong.
+    pub fn payload(&self) -> String {
+        let mut out = serde_json::Map::new();
+        out.insert(
+            "query".into(),
+            serde_json::Value::String(self.query.clone()),
+        );
+        let variables = self.variables.trim();
+        if !variables.is_empty() {
+            let value = serde_json::from_str(variables)
+                .unwrap_or_else(|_| serde_json::Value::String(variables.to_string()));
+            out.insert("variables".into(), value);
+        }
+        if let Some(name) = self
+            .operation_name
+            .as_deref()
+            .filter(|n| !n.trim().is_empty())
+        {
+            out.insert(
+                "operationName".into(),
+                serde_json::Value::String(name.to_string()),
+            );
+        }
+        serde_json::Value::Object(out).to_string()
+    }
 }
 
 impl HttpRequest {
+    /// The raw body to send: the GraphQL operation as JSON (or the bare query when the
+    /// request says `Content-Type: application/graphql`), else `body`.
+    pub fn wire_body(&self) -> Option<String> {
+        match &self.graphql {
+            Some(g) => {
+                let raw = self.headers.iter().any(|h| {
+                    h.enabled
+                        && h.name.eq_ignore_ascii_case("content-type")
+                        && h.value.to_ascii_lowercase().contains("graphql")
+                });
+                Some(if raw { g.query.clone() } else { g.payload() })
+            }
+            None => self.body.clone(),
+        }
+    }
+
+    /// A JSON body `{"query": "...", "variables": {...}}` (how Postman, Insomnia, Bruno,
+    /// curl and HAR carry GraphQL) becomes a GraphQL operation. Returns whether it did.
+    pub fn promote_graphql(&mut self) -> bool {
+        if self.graphql.is_some() || self.form.is_some() {
+            return self.graphql.is_some();
+        }
+        let Some(serde_json::Value::Object(map)) = self
+            .body
+            .as_deref()
+            .and_then(|b| serde_json::from_str::<serde_json::Value>(b).ok())
+        else {
+            return false;
+        };
+        let Some(query) = map.get("query").and_then(|q| q.as_str()) else {
+            return false;
+        };
+        let start = query.trim_start();
+        let looks_like_graphql = ["query", "mutation", "subscription", "fragment", "{"]
+            .iter()
+            .any(|w| start.starts_with(w));
+        if !looks_like_graphql
+            || map
+                .keys()
+                .any(|k| !["query", "variables", "operationName"].contains(&k.as_str()))
+        {
+            return false;
+        }
+        let variables = match map.get("variables") {
+            None | Some(serde_json::Value::Null) => String::new(),
+            Some(serde_json::Value::Object(o)) if o.is_empty() => String::new(),
+            Some(serde_json::Value::String(s)) => s.clone(),
+            Some(v) => serde_json::to_string_pretty(v).unwrap_or_default(),
+        };
+        self.graphql = Some(Graphql {
+            query: query.to_string(),
+            variables,
+            operation_name: map
+                .get("operationName")
+                .and_then(|n| n.as_str())
+                .map(str::to_string),
+        });
+        self.body = None;
+        true
+    }
+
     pub fn new(method: HttpMethod, url: impl Into<String>) -> Self {
         HttpRequest {
             method,
@@ -313,6 +417,7 @@ impl HttpRequest {
             path_params: Vec::new(),
             auth: None,
             cookies: true,
+            graphql: None,
         }
     }
 }
@@ -873,7 +978,7 @@ pub async fn send_with(
             builder = builder.header(reqwest::header::CONTENT_TYPE, mime_for(file));
         }
         builder = builder.body(bytes);
-    } else if let Some(body) = &request.body {
+    } else if let Some(body) = &request.wire_body() {
         if !body.is_empty() && !has_header("content-type") && !stopped("content-type") {
             builder = builder.header(reqwest::header::CONTENT_TYPE, sniff_content_type(body));
         }

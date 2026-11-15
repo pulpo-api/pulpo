@@ -121,6 +121,11 @@ pub fn resolve_request(
             .body
             .as_ref()
             .map(|b| resolve_text(b, vars, &mut missing)),
+        graphql: request.graphql.as_ref().map(|g| crate::http::Graphql {
+            query: resolve_text(&g.query, vars, &mut missing),
+            variables: resolve_text(&g.variables, vars, &mut missing),
+            operation_name: g.operation_name.clone(),
+        }),
         form: request.form.as_ref().map(|form| Form {
             kind: form.kind,
             fields: form

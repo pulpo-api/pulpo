@@ -436,6 +436,11 @@ fn postman_request(
         });
     } else if let Some(file) = &r.body_file {
         request["body"] = json!({ "mode": "file", "file": { "src": file } });
+    } else if let Some(g) = &r.graphql {
+        request["body"] = json!({
+            "mode": "graphql",
+            "graphql": { "query": g.query, "variables": g.variables }
+        });
     } else if let Some(body) = r.body.as_ref().filter(|b| !b.is_empty()) {
         let language = match content_type(&headers).as_str() {
             ct if ct.contains("json") => "json",
@@ -959,7 +964,7 @@ fn http_file(
                     }
                 } else if let Some(file) = &r.body_file {
                     out.push_str(&format!("\n< ./{file}\n"));
-                } else if let Some(body) = r.body.as_ref().filter(|b| !b.is_empty()) {
+                } else if let Some(body) = r.wire_body().filter(|b| !b.is_empty()) {
                     out.push_str(&format!("\n{}\n", body.trim_end()));
                 }
                 if !entry.scripts.is_empty() {

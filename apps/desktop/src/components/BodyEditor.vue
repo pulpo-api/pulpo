@@ -1,16 +1,25 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { bodyMode, type BodyMode, type FormField, type HttpRequest } from "../core";
-import { backend, toWorkspacePath } from "../workspace";
+import { backend, toWorkspacePath, type Scripts } from "../workspace";
 import CodeEditor, { type Language } from "./CodeEditor.vue";
+import GraphqlEditor from "./GraphqlEditor.vue";
 import VarInput from "./VarInput.vue";
 
-const props = defineProps<{ request: HttpRequest; root: string }>();
+const props = defineProps<{
+  request: HttpRequest;
+  root: string;
+  /** For GraphQL: reading the schema sends the request as it is. */
+  requestId?: string;
+  scripts?: Scripts;
+  environmentId?: string;
+}>();
 const emit = defineEmits<{ send: []; save: [] }>();
 
 const MODES: { mode: BodyMode; label: string }[] = [
   { mode: "none", label: "None" },
   { mode: "raw", label: "Raw" },
+  { mode: "graphql", label: "GraphQL" },
   { mode: "urlencoded", label: "URL encoded" },
   { mode: "multipart", label: "Form data" },
   { mode: "file", label: "File" },
@@ -20,7 +29,8 @@ const mode = computed(() => bodyMode(props.request));
 const hasBody = computed(() => !["GET", "HEAD"].includes(props.request.method));
 
 // What each mode had, so switching back and forth does not lose it before saving.
-const kept: { raw: string | null; fields: FormField[]; file: string } = {
+const kept: { raw: string | null; fields: FormField[]; file: string; graphql: HttpRequest["graphql"] } = {
+  graphql: props.request.graphql ?? null,
   raw: props.request.body ?? null,
   fields: props.request.form?.fields ?? [],
   file: props.request.bodyFile ?? "",
@@ -53,6 +63,10 @@ function setMode(next: BodyMode) {
   if (r.body != null) kept.raw = r.body;
   if (r.form) kept.fields = r.form.fields;
   if (r.bodyFile != null) kept.file = r.bodyFile;
+  if (r.graphql) kept.graphql = r.graphql;
+  r.graphql = next === "graphql" ? (kept.graphql ?? { query: "", variables: "" }) : null;
+  // GraphQL goes as a JSON body; over GET it would need the query in the URL.
+  if (next === "graphql" && (r.method === "GET" || r.method === "HEAD")) r.method = "POST";
   r.body = next === "raw" ? (kept.raw ?? "") : null;
   r.bodyFile = next === "file" ? kept.file : null;
   if (next === "urlencoded" || next === "multipart") {
@@ -72,7 +86,7 @@ const raw = computed({
     props.request.body = value;
   },
 });
-type RawKind = "text" | "json" | "xml" | "html" | "javascript" | "graphql";
+type RawKind = "text" | "json" | "xml" | "html" | "javascript";
 
 /** The raw types, as in Postman; choosing one sets the Content-Type header. */
 const RAW_KINDS: { kind: RawKind; label: string; mime: string }[] = [
@@ -81,7 +95,6 @@ const RAW_KINDS: { kind: RawKind; label: string; mime: string }[] = [
   { kind: "xml", label: "XML", mime: "application/xml" },
   { kind: "html", label: "HTML", mime: "text/html" },
   { kind: "javascript", label: "JavaScript", mime: "application/javascript" },
-  { kind: "graphql", label: "GraphQL", mime: "application/graphql" },
 ];
 
 const contentTypeHeader = computed(() =>
@@ -96,7 +109,6 @@ const rawKind = computed<RawKind>(() => {
   if (contentType.includes("html")) return "html";
   if (contentType.includes("xml")) return "xml";
   if (contentType.includes("javascript") || contentType.includes("ecmascript")) return "javascript";
-  if (contentType.includes("graphql")) return "graphql";
   if (contentType) return "text";
   const start = (props.request.body ?? "").trimStart();
   const head = start.slice(0, 15).toLowerCase();
@@ -206,9 +218,20 @@ async function pick(apply: (path: string) => void) {
       <button v-if="mode === 'raw' && rawKind === 'json'" class="link" @click="formatJson">Format JSON</button>
     </div>
 
-    <p v-if="!hasBody && mode !== 'none'" class="warn">{{ request.method }} requests usually have no body; servers may ignore it.</p>
+    <p v-if="!hasBody && mode !== 'none' && mode !== 'graphql'" class="warn">{{ request.method }} requests usually have no body; servers may ignore it.</p>
 
     <p v-if="mode === 'none'" class="empty">This request sends no body.</p>
+
+    <GraphqlEditor
+      v-else-if="mode === 'graphql'"
+      :request="request"
+      :root="root"
+      :request-id="requestId ?? ''"
+      :scripts="scripts ?? { pre: '', test: '' }"
+      :environment-id="environmentId ?? ''"
+      @send="emit('send')"
+      @save="emit('save')"
+    />
 
     <CodeEditor
       v-else-if="mode === 'raw'"

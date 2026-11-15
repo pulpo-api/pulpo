@@ -524,7 +524,7 @@ pub async fn run_in(
         iteration: options.iteration,
         ..Default::default()
     };
-    if entry.protocol != Protocol::Http {
+    if !matches!(entry.protocol, Protocol::Http | Protocol::Graphql) {
         report.error = Some(SendError::Other(format!(
             "{} requests arrive in phase 4",
             entry.protocol.as_str()

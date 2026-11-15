@@ -180,6 +180,8 @@ fn request_changes(old: &RequestEntry, new: &RequestEntry) -> Vec<String> {
         let kind = |r: &HttpRequest| {
             if r.form.is_some() {
                 "form"
+            } else if r.graphql.is_some() {
+                "graphql"
             } else if r.body_file.is_some() {
                 "file"
             } else if r.body.as_deref().is_some_and(|b| !b.is_empty()) {

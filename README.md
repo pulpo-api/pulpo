@@ -191,6 +191,22 @@ pm.test("matches the schema", () => pm.response.to.have.jsonSchema(orderSchema))
 pm.response.to.matchSnapshot({ ignore: ["$.updatedAt", "$..id"] });   // kept in <request>.snapshot.json
 ```
 
+## GraphQL
+
+Pick **GraphQL** as the body of a request: the query and its variables get their own editors, and **Load schema** reads the endpoint's schema by introspection (with the request's auth, headers and environment).
+
+- Completion (Ctrl+Space), error marks and a **Docs** explorer come from that schema; search any type or field and click through types.
+- The schema is cached in `.pulpo/graphql/`, so it is there offline; reading it again tells you what changed (`+User.email`, `−Order.total`).
+- It goes out as JSON `{query, variables, operationName}` with `{{variables}}` filled in; a query with several operations lets you pick one.
+- On disk the query is a `.graphql` file and the variables a `.variables.json` file next to the request, so reviews read like code. GraphQL requests imported from Postman, Insomnia, Bruno, curl or HAR become GraphQL requests.
+
+```
+orders/
+  01-order.pulpo.yaml          protocol: graphql, url, auth...
+  01-order.body.graphql        query Order($id: ID!) { order(id: $id) { id total } }
+  01-order.variables.json      { "id": "{{orderId}}" }
+```
+
 ## Run collections
 
 In the app, **▶** (or right-click a folder → Run folder…) opens the runner: pick requests, iterations, a CSV or JSON data file, delay, retries; watch the progress, re-run only the failed ones, export HTML or JUnit, and accept a changed snapshot with one click. From the terminal:

@@ -434,6 +434,16 @@ export interface Flow {
   steps: unknown[];
 }
 
+export interface GraphqlSchema {
+  /** `{"__schema": …}` as JSON text. */
+  introspection: string;
+  added: string[];
+  removed: string[];
+  compared: boolean;
+  fetchedAt: number;
+  cached: boolean;
+}
+
 export interface FlowPlanNode {
   path: string;
   depth: number;
@@ -655,6 +665,8 @@ export interface WorkspaceBackend {
   deleteFlow?(root: string, id: string): Promise<void>;
   addFlowStep?(root: string, flowId: string, requestId: string): Promise<Flow>;
   moveFlowStep?(root: string, flowId: string, from: number, to: number): Promise<Flow>;
+  /** The schema of a GraphQL endpoint: cached (`refresh` false) or asked again. */
+  graphqlSchema?(root: string, entry: RequestEntry, environmentId: string, refresh: boolean): Promise<GraphqlSchema | null>;
   flowUsage?(root: string): Promise<Record<string, string[]>>;
   runFlow?(root: string, id: string, environmentId: string): Promise<FlowReport>;
   onFlowStep?(handler: (event: FlowStepEvent) => void): Promise<() => void>;
@@ -794,6 +806,8 @@ const tauriBackend: WorkspaceBackend = {
   deleteFlow: (root, id) => invoke<void>("delete_flow", { root, id }),
   addFlowStep: (root, flowId, requestId) => invoke<Flow>("add_flow_step", { root, flowId, requestId }),
   moveFlowStep: (root, flowId, from, to) => invoke<Flow>("move_flow_step", { root, flowId, from, to }),
+  graphqlSchema: (root, entry, environmentId, refresh) =>
+    invoke<GraphqlSchema | null>("graphql_schema", { root, entry, environmentId: environmentId || null, refresh }),
   flowUsage: (root) => invoke<Record<string, string[]>>("flow_usage", { root }),
   runFlow: (root, id, environmentId) =>
     invoke<FlowReport>("run_flow", { root, id, environmentId: environmentId || null }),

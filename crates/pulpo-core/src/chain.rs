@@ -97,6 +97,10 @@ fn uses(entry: &RequestEntry) -> Vec<String> {
     if let Some(body) = &r.body {
         variables_in(body, &mut out);
     }
+    if let Some(g) = &r.graphql {
+        variables_in(&g.query, &mut out);
+        variables_in(&g.variables, &mut out);
+    }
     if let Some(form) = &r.form {
         for f in form.fields.iter().filter(|f| f.enabled) {
             variables_in(&f.value, &mut out);

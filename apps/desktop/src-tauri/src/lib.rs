@@ -609,6 +609,23 @@ async fn delete_flow(root: String, id: String) -> Result<(), String> {
     flow::delete_flow(Path::new(&root), &id).map_err(|e| e.to_string())
 }
 
+/// The schema of a GraphQL endpoint: the cached one, or (with `refresh`) asked again.
+#[tauri::command]
+async fn graphql_schema(
+    root: String,
+    entry: RequestEntry,
+    environment_id: Option<String>,
+    refresh: bool,
+) -> Result<Option<pulpo_core::graphql::Schema>, String> {
+    let root = Path::new(&root);
+    if !refresh {
+        return Ok(pulpo_core::graphql::cached_schema(root, &entry));
+    }
+    pulpo_core::graphql::fetch_schema(root, &entry, environment_id.as_deref(), &Keychain)
+        .await
+        .map(Some)
+}
+
 /// Moves a step of a flow to another position (drag and drop in the diagram).
 #[tauri::command]
 async fn move_flow_step(
@@ -964,6 +981,7 @@ pub fn run() {
             delete_flow,
             add_flow_step,
             move_flow_step,
+            graphql_schema,
             flow_usage,
             run_flow,
             scan_contracts,
