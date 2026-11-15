@@ -167,7 +167,7 @@ function prettyBody(body: string): string {
         <h2>{{ flow?.name ?? flowId }}</h2>
         <p v-if="flow?.description" class="muted">{{ flow.description }}</p>
         <p class="muted small">
-          {{ requestCount }} requests · <code>flows/{{ flowId }}.flow.yaml</code>
+          {{ requestCount }} {{ requestCount === 1 ? "step" : "steps" }} · <code>flows/{{ flowId }}.flow.yaml</code>
         </p>
       </div>
       <div class="actions">
@@ -519,7 +519,7 @@ h3 {
   color: var(--m-put);
 }
 .chip.loop {
-  color: var(--accent);
+  color: var(--m-patch);
 }
 .node[draggable="true"] .card {
   cursor: grab;
