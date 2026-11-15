@@ -8,7 +8,7 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/pulpo-api/pulpo"
 homepage = "https://pulpo-api.github.io"
-authors = ["Pulpo contributors"]
+authors = ["Alejandro Hernández Rodríguez"]
 rust-version = "1.85"
 
 [workspace.dependencies]

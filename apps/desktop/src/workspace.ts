@@ -796,6 +796,8 @@ export interface WorkspaceBackend {
   /** Desktop only: API contracts of the repository and the folders made from them. */
   scanContracts?(root: string): Promise<Contract[]>;
   syncStatus?(root: string): Promise<({ Ok: Drift } | { Err: string })[]>;
+  /** Opens a GitHub or Pulpo page in the system browser. */
+  openLink?(url: string): Promise<void>;
   /** Desktop only: the OpenAPI editor (checks against the official schema, reads and saves the file). */
   openapiCheck?(text: string): Promise<OpenApiCheck>;
   contractRead?(root: string, contract: string): Promise<string>;
@@ -962,6 +964,7 @@ const tauriBackend: WorkspaceBackend = {
     invoke<[string, string]>("chain_to_flow", { root, folderId, environmentId: environmentId || null, run, name }),
   scanContracts: (root) => invoke<Contract[]>("scan_contracts", { root }),
   openapiCheck: (text) => invoke<OpenApiCheck>("openapi_check", { text }),
+  openLink: (url) => invoke<void>("open_link", { url }),
   contractRead: (root, contract) => invoke<string>("contract_read", { root, contract }),
   contractSave: (root, contract, text) => invoke<void>("contract_save", { root, contract, text }),
   syncStatus: (root) => invoke<({ Ok: Drift } | { Err: string })[]>("sync_status", { root }),

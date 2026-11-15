@@ -1,0 +1,6 @@
+Pulpo
+Copyright (c) 2026 Alejandro Hernández Rodríguez
+
+This product is licensed under the Apache License, Version 2.0 or the MIT
+license, at your option. The OpenAPI JSON Schemas in crates/pulpo-core/schemas
+are copyright the OpenAPI Initiative and licensed under Apache-2.0.

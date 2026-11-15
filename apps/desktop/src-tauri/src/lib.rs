@@ -764,6 +764,16 @@ async fn chain_to_flow(
     .await
 }
 
+/// Opens a Pulpo or GitHub page in the browser (About dialog).
+#[tauri::command]
+async fn open_link(url: String) -> Result<(), String> {
+    const ALLOWED: [&str; 2] = ["https://github.com/", "https://pulpo-api.github.io/"];
+    if !ALLOWED.iter().any(|prefix| url.starts_with(prefix)) {
+        return Err(format!("{url} is not a Pulpo page"));
+    }
+    pulpo_core::oauth::open_browser(&url)
+}
+
 /// API contracts in the workspace's repository.
 #[tauri::command]
 async fn scan_contracts(root: String) -> Result<Vec<pulpo_core::sync::Contract>, String> {
@@ -1351,6 +1361,7 @@ pub fn run() {
             flow_usage,
             run_flow,
             scan_contracts,
+            open_link,
             openapi_check,
             contract_read,
             contract_save,

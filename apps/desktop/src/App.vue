@@ -20,6 +20,7 @@ import FlowView from "./components/FlowView.vue";
 import ContractsPanel from "./components/ContractsPanel.vue";
 import MockPanel from "./components/MockPanel.vue";
 import OpenApiEditor from "./components/OpenApiEditor.vue";
+import { AUTHOR, AUTHOR_URL, ISSUES_URL, REPO_URL } from "./about";
 import { resolveText } from "./variables";
 import { applyPathParams } from "./params";
 import { applyAuth, asSendError, coreInfo, isEventStream, isMqtt, isWebSocketUrl, resolveAuth, type CoreInfo, type HttpResponse, type SendError } from "./core";
@@ -104,6 +105,12 @@ const showGit = ref(false);
 // ---- API contracts
 const showContracts = ref(false);
 const showMock = ref(false);
+const showAbout = ref(false);
+
+function openLink(url: string) {
+  if (backend.openLink) void backend.openLink(url);
+  else window.open(url, "_blank", "noopener");
+}
 /** The OpenAPI file open in the editor (relative to the workspace). */
 const editingContract = ref<string | null>(null);
 /** Folders out of step with their contract (checked in the background on open). */
@@ -1032,6 +1039,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         </button>
         <span class="spacer"></span>
         <button class="ghost small" title="Keyboard shortcuts (Ctrl+/)" @click="showShortcuts = true">⌨</button>
+        <button class="ghost small" title="About Pulpo" @click="showAbout = true">ⓘ</button>
       </nav>
 
       <header class="topbar">
@@ -1146,10 +1154,30 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       />
 
       <footer class="statusbar">
-        <span>pulpo-core {{ info?.version ?? "…" }}</span>
+        <button class="link-plain" title="About Pulpo" @click="showAbout = true">
+          Pulpo {{ info?.version ?? "…" }} · by {{ AUTHOR }}
+        </button>
         <span class="muted">{{ selected.id }}</span>
       </footer>
     </main>
+
+    <div v-if="showAbout" class="backdrop" @click.self="showAbout = false" @keydown.esc="showAbout = false">
+      <section class="card about" role="dialog" aria-label="About Pulpo">
+        <h2>Pulpo <span class="muted small">{{ info?.version ?? "" }}</span></h2>
+        <p>The API client that follows your code. Free and open source.</p>
+        <p>
+          Made by <button class="link" @click="openLink(AUTHOR_URL)">{{ AUTHOR }}</button>
+        </p>
+        <p class="muted small">
+          Found a bug or missing something? <button class="link" @click="openLink(ISSUES_URL)">Tell me on GitHub</button>
+          and I will fix it.
+        </p>
+        <p class="muted small">
+          MIT or Apache-2.0 · <button class="link" @click="openLink(REPO_URL)">Source code</button>
+        </p>
+        <footer><button class="primary" @click="showAbout = false">Close</button></footer>
+      </section>
+    </div>
 
     <div v-if="showShortcuts" class="backdrop" @click.self="showShortcuts = false">
       <section class="card shortcuts" role="dialog" aria-label="Keyboard shortcuts">
@@ -1477,6 +1505,38 @@ main {
 }
 .shortcuts {
   min-width: 380px;
+}
+.about {
+  width: min(420px, 92vw);
+}
+.about h2 {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+.about p {
+  margin: 6px 0;
+}
+.about footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+.about .link,
+.link-plain {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+.about .link {
+  color: var(--accent);
+}
+.link-plain {
+  color: inherit;
+}
+.link-plain:hover {
+  color: var(--accent);
 }
 .shortcuts h2 {
   margin: 0 0 12px;

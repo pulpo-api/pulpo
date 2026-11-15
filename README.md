@@ -599,9 +599,13 @@ docker compose -f docker/compose.yml run --rm dev bash -c "cd apps/desktop && np
 
 Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md). Every commit needs a `Signed-off-by` line (`git commit -s`).
 
+## Author
+
+Pulpo is made by **Alejandro Hernández Rodríguez** ([@ahrodriguez1163](https://github.com/ahrodriguez1163)). Found a bug or want something? [Open an issue](https://github.com/pulpo-api/pulpo/issues): I read and fix what you report.
+
 ## License
 
-Licensed under either of
+Copyright (c) 2026 Alejandro Hernández Rodríguez. Licensed under either of
 
 - Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
 - MIT license ([LICENSE-MIT](LICENSE-MIT))
