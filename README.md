@@ -420,6 +420,21 @@ jobs:
       - uses: actions/deploy-pages@v4
 ```
 
+## Edit the OpenAPI file
+
+In **⟲**, **Edit** opens an OpenAPI file of the repository next to a live check and a preview of its operations:
+
+- It is validated against the official OpenAPI 3.0 and 3.1 JSON Schemas (bundled, no network), plus what the schema cannot see: path parameters that are not declared (or declared but not in the path), repeated `operationId`s, `$ref`s that point nowhere and components nobody uses. Each problem is underlined on its line; click it to jump there.
+- The preview lists the operations by tag with their parameters, body and responses.
+- After saving, it tells you whether the folders linked to the file are now out of step, ready to apply in **⟲**.
+
+The same checks run in CI:
+
+```bash
+pulpo lint api/openapi.yaml          # FILE:LINE: problems, exit 1 on errors (--warnings: also on warnings)
+pulpo lint api/openapi.yaml --json   # the full result, with the operations
+```
+
 ## Mock server
 
 Your saved examples answer as a fake API, so the front end works before (or without) the back end, locally and in CI:

@@ -13,12 +13,21 @@ import {
 import { json } from "@codemirror/lang-json";
 import { javascript } from "@codemirror/lang-javascript";
 import { xml } from "@codemirror/lang-xml";
+import { yaml } from "@codemirror/lang-yaml";
+import { setDiagnostics, type Diagnostic } from "@codemirror/lint";
 import { tags } from "@lezer/highlight";
 import { openSearchPanel } from "@codemirror/search";
 import { refreshVariables, variables as variablesExt } from "../cmVariables";
 import { varContext } from "../varContext";
 
-export type Language = "json" | "javascript" | "xml" | "graphql" | "text";
+export type Language = "json" | "javascript" | "xml" | "yaml" | "graphql" | "text";
+
+/** A problem to underline: 1-based line. */
+export interface LineProblem {
+  line: number | null;
+  severity: "error" | "warning";
+  message: string;
+}
 
 const props = withDefaults(
   defineProps<{
@@ -30,6 +39,8 @@ const props = withDefaults(
     variables?: boolean;
     /** A GraphQLSchema (graphql-js) for completion and checks in `graphql`. */
     graphqlSchema?: unknown;
+    /** Problems shown in the gutter and underlined on their line. */
+    diagnostics?: LineProblem[];
   }>(),
   { language: "text", readonly: false, placeholder: "", variables: false },
 );
@@ -71,6 +82,8 @@ function languageExtension(language: Language) {
       return javascript();
     case "xml":
       return xml();
+    case "yaml":
+      return yaml();
     default:
       return [];
   }
@@ -139,7 +152,29 @@ onMounted(() => {
     }),
   });
   if (props.language === "graphql") applyLanguage();
+  showDiagnostics();
 });
+
+function showDiagnostics() {
+  if (!view || !props.diagnostics) return;
+  const doc = view.state.doc;
+  const list: Diagnostic[] = props.diagnostics.map((p) => {
+    const line = doc.line(Math.min(Math.max(p.line ?? 1, 1), doc.lines));
+    const indent = line.text.length - line.text.trimStart().length;
+    return { from: line.from + indent, to: line.to, severity: p.severity, message: p.message };
+  });
+  view.dispatch(setDiagnostics(view.state, list));
+}
+
+watch(() => props.diagnostics, showDiagnostics);
+
+/** Puts the cursor on a 1-based line and scrolls it into the middle. */
+function goToLine(n: number) {
+  if (!view) return;
+  const line = view.state.doc.line(Math.min(Math.max(n, 1), view.state.doc.lines));
+  view.dispatch({ selection: { anchor: line.from }, effects: EditorView.scrollIntoView(line.from, { y: "center" }) });
+  view.focus();
+}
 
 watch(
   () => props.modelValue,
@@ -194,6 +229,7 @@ defineExpose({
   foldAt,
   foldOnly,
   unfoldAll: () => view && unfoldAll(view),
+  goToLine,
 });
 </script>
 

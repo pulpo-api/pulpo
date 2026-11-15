@@ -429,6 +429,36 @@ export interface Drift {
   warnings: string[];
 }
 
+export interface OpenApiProblem {
+  severity: "error" | "warning";
+  line: number | null;
+  pointer: string;
+  message: string;
+}
+
+export interface OpenApiOperation {
+  method: string;
+  path: string;
+  summary: string;
+  operationId: string;
+  tags: string[];
+  deprecated: boolean;
+  parameters: { name: string; location: string; required: boolean }[];
+  body: string[];
+  bodyRequired: boolean;
+  responses: { status: string; description: string }[];
+  line: number | null;
+}
+
+export interface OpenApiCheck {
+  openapi: string;
+  title: string;
+  version: string;
+  servers: string[];
+  problems: OpenApiProblem[];
+  operations: OpenApiOperation[];
+}
+
 export interface Flow {
   id: string;
   version: number;
@@ -766,6 +796,10 @@ export interface WorkspaceBackend {
   /** Desktop only: API contracts of the repository and the folders made from them. */
   scanContracts?(root: string): Promise<Contract[]>;
   syncStatus?(root: string): Promise<({ Ok: Drift } | { Err: string })[]>;
+  /** Desktop only: the OpenAPI editor (checks against the official schema, reads and saves the file). */
+  openapiCheck?(text: string): Promise<OpenApiCheck>;
+  contractRead?(root: string, contract: string): Promise<string>;
+  contractSave?(root: string, contract: string, text: string): Promise<void>;
   syncLink?(root: string, folderId: string, contract: string): Promise<Drift>;
   syncImport?(root: string, contract: string): Promise<ImportSummary>;
   syncApply?(root: string, folderId: string, selection: { add: string[]; update: string[]; remove: string[] }): Promise<{
@@ -927,6 +961,9 @@ const tauriBackend: WorkspaceBackend = {
   chainToFlow: (root, folderId, environmentId, run, name) =>
     invoke<[string, string]>("chain_to_flow", { root, folderId, environmentId: environmentId || null, run, name }),
   scanContracts: (root) => invoke<Contract[]>("scan_contracts", { root }),
+  openapiCheck: (text) => invoke<OpenApiCheck>("openapi_check", { text }),
+  contractRead: (root, contract) => invoke<string>("contract_read", { root, contract }),
+  contractSave: (root, contract, text) => invoke<void>("contract_save", { root, contract, text }),
   syncStatus: (root) => invoke<({ Ok: Drift } | { Err: string })[]>("sync_status", { root }),
   syncLink: (root, folderId, contract) => invoke<Drift>("sync_link", { root, folderId, contract }),
   syncImport: (root, contract) => invoke<ImportSummary>("sync_import", { root, contract }),

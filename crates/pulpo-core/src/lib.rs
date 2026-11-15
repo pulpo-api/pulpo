@@ -39,6 +39,7 @@ pub mod mcp;
 pub mod mock;
 pub mod mqtt;
 pub mod oauth;
+pub mod openapi_check;
 pub mod organize;
 pub mod query;
 pub mod report;

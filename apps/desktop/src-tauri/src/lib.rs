@@ -770,6 +770,42 @@ async fn scan_contracts(root: String) -> Result<Vec<pulpo_core::sync::Contract>,
     blocking(move || pulpo_core::sync::scan(Path::new(&root)).map_err(|e| e.to_string())).await
 }
 
+/// Problems and operations of an OpenAPI document being edited.
+#[tauri::command]
+async fn openapi_check(text: String) -> Result<pulpo_core::openapi_check::Check, String> {
+    blocking(move || Ok(pulpo_core::openapi_check::check(&text))).await
+}
+
+/// An existing contract file (relative to the workspace, as `scan` lists it).
+fn contract_file(root: &str, contract: &str) -> Result<PathBuf, String> {
+    let file = Path::new(root).join(contract);
+    let editable = matches!(
+        file.extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("yaml" | "yml" | "json")
+    );
+    if !editable || !file.is_file() {
+        return Err(format!(
+            "{contract} is not an OpenAPI file of this repository"
+        ));
+    }
+    Ok(file)
+}
+
+#[tauri::command]
+async fn contract_read(root: String, contract: String) -> Result<String, String> {
+    let file = contract_file(&root, &contract)?;
+    std::fs::read_to_string(&file).map_err(|e| format!("{contract}: {e}"))
+}
+
+#[tauri::command]
+async fn contract_save(root: String, contract: String, text: String) -> Result<(), String> {
+    let file = contract_file(&root, &contract)?;
+    std::fs::write(&file, text).map_err(|e| format!("{contract}: {e}"))
+}
+
 /// Drift of every folder linked to a contract (errors are reported per folder).
 #[tauri::command]
 async fn sync_status(root: String) -> Result<Vec<Result<pulpo_core::sync::Drift, String>>, String> {
@@ -1315,6 +1351,9 @@ pub fn run() {
             flow_usage,
             run_flow,
             scan_contracts,
+            openapi_check,
+            contract_read,
+            contract_save,
             chain_to_flow,
             sync_status,
             sync_link,

@@ -3976,6 +3976,7 @@ name = "pulpo-api-cli"
 version = "0.0.1"
 dependencies = [
  "pulpo-core",
+ "serde_json",
  "tokio",
 ]
 

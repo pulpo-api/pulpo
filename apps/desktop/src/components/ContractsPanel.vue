@@ -3,7 +3,7 @@ import { computed, onMounted, ref } from "vue";
 import { backend, type Contract, type Drift, type TreeNode, type Workspace } from "../workspace";
 
 const props = defineProps<{ workspace: Workspace }>();
-const emit = defineEmits<{ close: []; changed: []; open: [id: string] }>();
+const emit = defineEmits<{ close: []; changed: []; open: [id: string]; edit: [contract: string] }>();
 
 const contracts = ref<Contract[]>([]);
 const drifts = ref<Drift[]>([]);
@@ -183,8 +183,12 @@ async function link(c: Contract) {
             <div class="muted small"><code>{{ c.path }}</code><template v-if="c.note"> · {{ c.kind }} code</template></div>
             <div v-if="c.folder !== null && c.folder !== undefined" class="small">→ {{ folderName(c.folder) }}</div>
           </div>
-          <div v-if="c.folder === null || c.folder === undefined" class="actions">
-            <template v-if="linking === c.path">
+          <div class="actions">
+            <button v-if="c.kind === 'openapi'" class="ghost" title="Edit with checks against the OpenAPI schema" @click="emit('edit', c.path)">
+              Edit
+            </button>
+            <template v-if="c.folder !== null && c.folder !== undefined" />
+            <template v-else-if="linking === c.path">
               <select v-model="linkFolder" aria-label="Folder to link">
                 <option v-for="f in folders" :key="f.id" :value="f.id">{{ f.label }}</option>
               </select>

@@ -19,6 +19,7 @@ import GitPanel from "./components/GitPanel.vue";
 import FlowView from "./components/FlowView.vue";
 import ContractsPanel from "./components/ContractsPanel.vue";
 import MockPanel from "./components/MockPanel.vue";
+import OpenApiEditor from "./components/OpenApiEditor.vue";
 import { resolveText } from "./variables";
 import { applyPathParams } from "./params";
 import { applyAuth, asSendError, coreInfo, isEventStream, isMqtt, isWebSocketUrl, resolveAuth, type CoreInfo, type HttpResponse, type SendError } from "./core";
@@ -103,6 +104,8 @@ const showGit = ref(false);
 // ---- API contracts
 const showContracts = ref(false);
 const showMock = ref(false);
+/** The OpenAPI file open in the editor (relative to the workspace). */
+const editingContract = ref<string | null>(null);
 /** Folders out of step with their contract (checked in the background on open). */
 const driftCount = ref(0);
 async function checkDrift() {
@@ -1258,7 +1261,16 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       :workspace="workspace"
       @changed="afterContracts"
       @open="(id) => { showContracts = false; openRequestFromFlow(id); }"
+      @edit="(path) => { showContracts = false; editingContract = path; }"
       @close="showContracts = false"
+    />
+
+    <OpenApiEditor
+      v-if="editingContract && workspace"
+      :workspace="workspace"
+      :contract="editingContract"
+      @contracts="editingContract = null; showContracts = true"
+      @close="editingContract = null"
     />
 
     <GitPanel

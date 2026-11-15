@@ -71,6 +71,12 @@ COMMANDS:
                Pick an answer with the header Prefer: code=404 (or
                example=NAME) or ?__example=NAME. CORS is open; edits apply
                without a restart.
+    lint <OPENAPI FILE|-> [--warnings] [--json]
+               Check an OpenAPI 3.0/3.1 document against the official schema,
+               plus path parameters that are not declared, repeated
+               operationIds and $refs that point nowhere. Prints FILE:LINE:
+               problems (--json: the full result, with the operations); exits
+               with 1 on errors (--warnings: also on warnings).
     scan [-w DIR]
                Find the API contracts of the workspace's repository (OpenAPI,
                .proto, WSDL, GraphQL) and the folders made from them
@@ -165,6 +171,7 @@ fn main() -> ExitCode {
         Some("mcp") => run_mcp(&args[1..]),
         Some("flow") => run_flow_command(&args[1..]),
         Some("scan") => run_scan(&args[1..]),
+        Some("lint") => run_lint(&args[1..]),
         Some("mock") => run_mock(&args[1..]),
         Some("chain") => run_chain(&args[1..]),
         Some("sync") => run_sync(&args[1..]),
@@ -540,6 +547,70 @@ fn run_mock(args: &[String]) -> ExitCode {
         drop(mock);
         ExitCode::SUCCESS
     })
+}
+
+fn run_lint(args: &[String]) -> ExitCode {
+    use pulpo_core::openapi_check::{check, Severity};
+    const USAGE: &str = "lint: expected <OPENAPI FILE|-> [--warnings] [--json]";
+    let (mut file, mut strict, mut json) = (None, false, false);
+    for arg in args {
+        match arg.as_str() {
+            "--warnings" => strict = true,
+            "--json" => json = true,
+            _ if file.is_none() && (arg == "-" || !arg.starts_with('-')) => file = Some(arg),
+            _ => return usage_error(USAGE),
+        }
+    }
+    let Some(file) = file else {
+        return usage_error(USAGE);
+    };
+    let read = if file == "-" {
+        std::io::read_to_string(std::io::stdin())
+    } else {
+        std::fs::read_to_string(file)
+    };
+    let text = match read {
+        Ok(text) => text,
+        Err(e) => return fail(format!("{file}: {e}")),
+    };
+    let result = check(&text);
+    let errors = result.errors();
+    let warnings = result.problems.len() - errors;
+    let failed = errors > 0 || (strict && warnings > 0);
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&result).unwrap_or_default()
+        );
+        return if failed {
+            ExitCode::FAILURE
+        } else {
+            ExitCode::SUCCESS
+        };
+    }
+    for p in &result.problems {
+        let kind = match p.severity {
+            Severity::Error => "error",
+            Severity::Warning => "warning",
+        };
+        let line = p.line.map(|l| format!(":{l}")).unwrap_or_default();
+        println!("{file}{line}: {kind}: {}", p.message);
+    }
+    println!(
+        "{} {} · {} operations · {errors} errors, {warnings} warnings",
+        if result.title.is_empty() {
+            "?"
+        } else {
+            &result.title
+        },
+        result.openapi,
+        result.operations.len()
+    );
+    if failed {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
 }
 
 fn run_scan(args: &[String]) -> ExitCode {
