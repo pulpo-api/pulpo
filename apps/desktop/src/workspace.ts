@@ -573,6 +573,9 @@ export function canonicalRequest(r: HttpRequest): HttpRequest {
     auth: r.auth ?? null,
     cookies: r.cookies ?? true,
     settings,
+    graphql: r.graphql
+      ? { query: r.graphql.query, variables: r.graphql.variables ?? "", operationName: r.graphql.operationName ?? null }
+      : null,
   };
 }
 
