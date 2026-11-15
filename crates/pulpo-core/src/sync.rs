@@ -678,6 +678,59 @@ fn add_missing(request: &mut HttpRequest, operation: &HttpRequest) {
     }
 }
 
+/// The start of a request's URL that comes before the operation's path: the server
+/// (`{{distributionV2}}`, `https://api.shop`) plus any extra path segments.
+fn base_of(url: &str, extra_segments: usize) -> String {
+    let url = url.split(['?', '#']).next().unwrap_or_default();
+    let (origin, rest) = if let Some(i) = url.find("://") {
+        match url[i + 3..].find('/') {
+            Some(j) => (&url[..i + 3 + j], &url[i + 3 + j..]),
+            None => (url, ""),
+        }
+    } else if url.starts_with("{{") {
+        match url.find("}}") {
+            Some(j) => (&url[..j + 2], &url[j + 2..]),
+            None => ("", url),
+        }
+    } else {
+        ("", url)
+    };
+    let segments: Vec<&str> = rest
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .take(extra_segments)
+        .collect();
+    if segments.is_empty() {
+        origin.to_string()
+    } else {
+        format!("{origin}/{}", segments.join("/"))
+    }
+}
+
+/// The base most requests of the folder use for this contract, if they agree on one.
+fn common_base(requests: &[RequestEntry], operations: &[Operation]) -> Option<String> {
+    let mut counts: Vec<(String, usize)> = Vec::new();
+    for r in requests {
+        let key = key_of(&r.request);
+        if let Some(op) = operations
+            .iter()
+            .filter(|o| matches(&key, &o.key))
+            .max_by_key(|o| o.key.1.len())
+        {
+            let base = base_of(&r.request.url, key.1.len() - op.key.1.len());
+            match counts.iter_mut().find(|(b, _)| *b == base) {
+                Some((_, n)) => *n += 1,
+                None => counts.push((base, 1)),
+            }
+        }
+    }
+    counts
+        .into_iter()
+        .max_by_key(|(_, n)| *n)
+        .map(|(b, _)| b)
+        .filter(|b| !b.is_empty())
+}
+
 /// Applies the selected parts of the drift. Updates only add what is missing: nothing a
 /// person wrote in a request is changed or lost.
 pub fn apply(root: &Path, folder_id: &str, selection: &Selection) -> Result<Applied, String> {
@@ -708,7 +761,12 @@ pub fn apply(root: &Path, folder_id: &str, selection: &Selection) -> Result<Appl
             })
             .collect()
     };
+    let own_name = collection::folder_meta(root, folder_id)
+        .map(|m| m.name.to_lowercase())
+        .unwrap_or_default();
     let mut created: Vec<(String, String)> = Vec::new();
+    // New requests use the base the folder already uses, not the contract's {{baseUrl}}.
+    let base = common_base(&requests_in(root, folder_id)?, &operations);
     for item in current
         .added
         .iter()
@@ -719,6 +777,8 @@ pub fn apply(root: &Path, folder_id: &str, selection: &Selection) -> Result<Appl
         };
         let target = match &op.folder {
             None => folder_id.to_string(),
+            // A tag named like the linked folder itself: straight into it.
+            Some(name) if name.to_lowercase() == own_name => folder_id.to_string(),
             Some(name) => {
                 let lower = name.to_lowercase();
                 match children
@@ -738,10 +798,16 @@ pub fn apply(root: &Path, folder_id: &str, selection: &Selection) -> Result<Appl
         };
         let entry =
             collection::create_request(root, &target, &op.name).map_err(|e| e.to_string())?;
+        let mut request = op.request.clone();
+        if let Some(base) = &base {
+            if let Some(rest) = request.url.strip_prefix("{{baseUrl}}") {
+                request.url = format!("{base}{rest}");
+            }
+        }
         collection::save_request(
             root,
             &RequestEntry {
-                request: op.request.clone(),
+                request,
                 scripts: op.scripts.clone(),
                 ..entry.clone()
             },
@@ -1015,12 +1081,33 @@ paths:
         assert_eq!(list.name, "Mis pedidos");
         assert_eq!(list.request.url, "{{host}}/api/v1/orders?status={{status}}");
         let created = collection::load_request(&ws, &applied.added[0]).unwrap();
+        assert_eq!(
+            created.request.url, "{{host}}/api/v1/orders",
+            "uses the folder's base"
+        );
         assert!(created.request.body.unwrap().contains("item"));
+        assert_eq!(
+            base_of("https://x.io/api/v1/orders/1?a=1", 2),
+            "https://x.io/api/v1"
+        );
+        assert_eq!(
+            base_of("{{distributionV2}}/api/v2/x", 0),
+            "{{distributionV2}}"
+        );
         let after = drift(&ws, &folder, None).unwrap();
         assert!(
             after.added.is_empty() && after.changed.is_empty() && after.removed.len() == 1,
             "{after:#?}"
         );
+
+        // Directories that are not part of the collection stay out of the tree.
+        fs::create_dir_all(ws.join("docs")).unwrap();
+        fs::write(ws.join("docs/readme.md"), "notes").unwrap();
+        assert!(!collection::load_workspace(&ws)
+            .unwrap()
+            .tree
+            .iter()
+            .any(|n| matches!(n, TreeNode::Folder { name, .. } if name == "docs")));
 
         // Deleting is a separate, explicit choice.
         let removed = apply(

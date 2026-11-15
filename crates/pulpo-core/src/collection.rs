@@ -1014,6 +1014,12 @@ fn load_dir(root: &Path, dir: &Path) -> Result<Vec<TreeNode>, CollectionError> {
                 continue;
             }
             let folder_file = path.join(FOLDER_FILE);
+            let children = load_dir(root, &path)?;
+            // A directory with no `_folder.yaml` and no requests is not part of the
+            // collection (an `api/` with the contracts, `docs/`…).
+            if !folder_file.is_file() && children.is_empty() {
+                continue;
+            }
             let (name, auth, settings, headers) = if folder_file.is_file() {
                 let folder: FolderFileV1 = parse_yaml(&folder_file)?;
                 check_version(folder.version, &folder_file)?;
@@ -1024,7 +1030,7 @@ fn load_dir(root: &Path, dir: &Path) -> Result<Vec<TreeNode>, CollectionError> {
             nodes.push(TreeNode::Folder {
                 id: relative_id(root, &path),
                 name,
-                children: load_dir(root, &path)?,
+                children,
                 auth,
                 settings,
                 headers,
