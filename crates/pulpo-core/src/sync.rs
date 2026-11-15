@@ -189,42 +189,24 @@ fn inspect(path: &Path) -> Option<(String, String, usize, Option<String>)> {
                 .lines()
                 .filter(|l| l.trim_start().starts_with("rpc "))
                 .count();
-            Some((
-                "proto".into(),
-                stem,
-                rpcs,
-                Some("gRPC comes with B5.4".into()),
-            ))
+            Some(("proto".into(), stem, rpcs, None))
         }
         "wsdl" => {
             let text = fs::read_to_string(path).ok()?;
-            let ops = text
-                .matches("<wsdl:operation")
-                .count()
-                .max(text.matches("<operation").count())
-                / 2;
-            Some((
-                "wsdl".into(),
-                stem,
-                ops,
-                Some("SOAP comes with B5.6".into()),
-            ))
+            let ops: std::collections::BTreeSet<String> = crate::soap::operations(&text)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|o| format!("{}/{}", o.service, o.name))
+                .collect();
+            Some(("wsdl".into(), stem, ops.len(), None))
         }
         "graphql" | "graphqls" => {
             let text = fs::read_to_string(path).ok()?;
-            let types = text
-                .lines()
-                .filter(|l| {
-                    let t = l.trim_start();
-                    t.starts_with("type ") || t.starts_with("input ") || t.starts_with("enum ")
-                })
-                .count();
-            Some((
-                "graphql".into(),
-                stem,
-                types,
-                Some("GraphQL comes with B5.1".into()),
-            ))
+            if !crate::graphql_sdl::is_sdl(&text) {
+                return None;
+            }
+            let fields = crate::graphql_sdl::parse(&text).root_fields().len();
+            Some(("graphql".into(), stem, fields, None))
         }
         _ => None,
     }
@@ -273,7 +255,8 @@ pub fn scan(root: &Path) -> Result<Vec<Contract>, CollectionError> {
                 .map(|(id, _)| id.clone());
             Some(Contract {
                 path: relative_path(root, file),
-                supported: kind == "openapi" && operations > 0,
+                supported: matches!(kind.as_str(), "openapi" | "proto" | "wsdl" | "graphql")
+                    && operations > 0,
                 kind,
                 title,
                 operations,
@@ -311,7 +294,37 @@ pub fn scan(root: &Path) -> Result<Vec<Contract>, CollectionError> {
 // --------------------------------------------------------------------- drift
 
 /// Method and path segments, path parameters as `{}` (`GET orders/{}`).
+/// The root field of a GraphQL operation: `query X($a: T) { order(id: $a) { … } }` → `order`.
+fn graphql_root(query: &str) -> String {
+    let body = query.find('{').map(|i| &query[i + 1..]).unwrap_or("");
+    body.trim_start()
+        .chars()
+        .take_while(|c| c.is_alphanumeric() || *c == '_')
+        .collect()
+}
+
 pub(crate) fn key_of(request: &HttpRequest) -> (String, Vec<String>) {
+    // Protocols with one address for every operation are told apart by the operation.
+    if let Some(g) = request.grpc.as_ref().filter(|g| !g.method.is_empty()) {
+        return (
+            "GRPC".into(),
+            vec![g.method.trim_start_matches('/').to_string()],
+        );
+    }
+    if let Some(s) = request.soap.as_ref().filter(|s| !s.operation.is_empty()) {
+        let op = s.operation.rsplit('/').next().unwrap_or(&s.operation);
+        return ("SOAP".into(), vec![op.to_string()]);
+    }
+    if let Some(g) = &request.graphql {
+        let kind = ["mutation", "subscription"]
+            .into_iter()
+            .find(|k| g.query.trim_start().starts_with(k))
+            .unwrap_or("query");
+        return (
+            "GRAPHQL".into(),
+            vec![kind.to_string(), graphql_root(&g.query)],
+        );
+    }
     let url = request
         .url
         .split(['?', '#'])
@@ -414,7 +427,14 @@ struct Operation {
 
 fn operations_of(spec: &Path) -> Result<(String, Vec<Operation>, Vec<String>), String> {
     let plan = import::parse_file(spec).map_err(|e| e.to_string())?;
-    if plan.format != ImportFormat::OpenApi && plan.format != ImportFormat::Code {
+    if !matches!(
+        plan.format,
+        ImportFormat::OpenApi
+            | ImportFormat::Code
+            | ImportFormat::Wsdl
+            | ImportFormat::Proto
+            | ImportFormat::GraphqlSchema
+    ) {
         return Err(format!(
             "{} is a {}, not an OpenAPI document",
             spec.display(),
@@ -863,7 +883,14 @@ pub fn apply(root: &Path, folder_id: &str, selection: &Selection) -> Result<Appl
 /// After importing an OpenAPI file, links the new folder to it so `pulpo sync` can
 /// follow the contract from then on.
 pub fn remember(root: &Path, folder_id: &str, format: ImportFormat, file: &Path) {
-    if format == ImportFormat::OpenApi || format == ImportFormat::Code {
+    if matches!(
+        format,
+        ImportFormat::OpenApi
+            | ImportFormat::Code
+            | ImportFormat::Wsdl
+            | ImportFormat::Proto
+            | ImportFormat::GraphqlSchema
+    ) {
         let _ = collection::set_folder_source(root, folder_id, Some(&relative_path(root, file)));
     }
 }
@@ -1145,5 +1172,83 @@ paths:
             .source
             .is_some());
         assert!(drift(&ws, "", None).unwrap_err().contains("not linked"));
+    }
+
+    /// Imports a contract, changes it (one more operation) and syncs.
+    fn round_trip(file: &str, before: &str, after: &str, expect_added: &str) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        crate::collection::init_workspace(root, "Api").unwrap();
+        let path = root.join("contracts").join(file);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, before).unwrap();
+        let plan = crate::import::parse_file(&path).unwrap();
+        let format = plan.format;
+        let summary =
+            crate::import::apply(root, "", &plan, &crate::environment::MemoryStore::default())
+                .unwrap();
+        remember(root, &summary.folder_id, format, &path);
+        let clean = drift(root, &summary.folder_id, None).unwrap();
+        assert!(
+            clean.added.is_empty() && clean.removed.is_empty(),
+            "{file}: {clean:#?}"
+        );
+        assert!(clean.unchanged > 0, "{file}");
+        fs::write(&path, after).unwrap();
+        let changed = drift(root, &summary.folder_id, None).unwrap();
+        let keys: Vec<&str> = changed.added.iter().map(|i| i.key.as_str()).collect();
+        assert_eq!(keys, [expect_added], "{file}: {changed:#?}");
+        assert!(changed.removed.is_empty(), "{file}: {changed:#?}");
+        apply(
+            root,
+            &summary.folder_id,
+            &Selection {
+                add: vec![expect_added.to_string()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let again = drift(root, &summary.folder_id, None).unwrap();
+        assert!(again.added.is_empty(), "{file}: {again:#?}");
+    }
+
+    #[test]
+    fn syncs_proto_wsdl_and_graphql_contracts_by_operation() {
+        let proto = "syntax = \"proto3\";\npackage shop;\nmessage R { string id = 1; }\nservice Orders {\n  rpc Get(R) returns (R);\n}\n";
+        round_trip(
+            "orders.proto",
+            proto,
+            &proto.replace(
+                "rpc Get(R) returns (R);",
+                "rpc Get(R) returns (R);\n  rpc Cancel(R) returns (R);",
+            ),
+            "GRPC /shop.Orders/Cancel",
+        );
+        let sdl = "type Order { id: ID! }\ntype Query {\n  order(id: ID!): Order\n}\n";
+        round_trip(
+            "shop.graphql",
+            sdl,
+            &sdl.replace(
+                "order(id: ID!): Order",
+                "order(id: ID!): Order\n  orders: [Order!]!",
+            ),
+            "GRAPHQL /query/orders",
+        );
+        let wsdl = r#"<wsdl:definitions xmlns:wsdl="http://schemas.xmlsoap.org/wsdl/" xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/" xmlns:s="http://www.w3.org/2001/XMLSchema" xmlns:tns="urn:t" targetNamespace="urn:t">
+  <wsdl:types><s:schema targetNamespace="urn:t" elementFormDefault="qualified"><s:element name="A"><s:complexType><s:sequence><s:element name="x" type="s:int"/></s:sequence></s:complexType></s:element></s:schema></wsdl:types>
+  <wsdl:message name="In"><wsdl:part name="p" element="tns:A"/></wsdl:message>
+  <wsdl:portType name="P"><wsdl:operation name="Add"><wsdl:input message="tns:In"/></wsdl:operation><!--MORE--></wsdl:portType>
+  <wsdl:binding name="B" type="tns:P"><soap:binding transport="http://schemas.xmlsoap.org/soap/http"/>
+    <wsdl:operation name="Add"><soap:operation soapAction="urn:t/Add"/><wsdl:input><soap:body use="literal"/></wsdl:input></wsdl:operation><!--BIND-->
+  </wsdl:binding>
+  <wsdl:service name="Calc"><wsdl:port name="Port" binding="tns:B"><soap:address location="http://localhost/calc"/></wsdl:port></wsdl:service>
+</wsdl:definitions>"#;
+        let more = wsdl
+            .replace("<!--MORE-->", r#"<wsdl:operation name="Sub"><wsdl:input message="tns:In"/></wsdl:operation>"#)
+            .replace(
+                "<!--BIND-->",
+                r#"<wsdl:operation name="Sub"><soap:operation soapAction="urn:t/Sub"/><wsdl:input><soap:body use="literal"/></wsdl:input></wsdl:operation>"#,
+            );
+        round_trip("calc.wsdl", wsdl, &more, "SOAP /Sub");
     }
 }

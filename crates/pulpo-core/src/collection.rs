@@ -1527,6 +1527,38 @@ fn rewrite(
     Ok(())
 }
 
+/// A workspace file by its path, else by its file name anywhere in the workspace
+/// (contracts imported from elsewhere remember only their name).
+pub(crate) fn find_in_workspace(root: &Path, location: &str) -> Option<PathBuf> {
+    if let Ok(p) = crate::collection::resolve(root, location) {
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    let name = Path::new(location).file_name()?.to_os_string();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for e in entries.flatten() {
+            let p = e.path();
+            let file = e.file_name();
+            if p.is_dir() {
+                if !file.to_string_lossy().starts_with('.')
+                    && file != "node_modules"
+                    && file != "target"
+                {
+                    stack.push(p);
+                }
+            } else if file == name {
+                return Some(p);
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

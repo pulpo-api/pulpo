@@ -73,6 +73,10 @@ pub enum ImportFormat {
     Code,
     /// SOAP operations of a WSDL.
     Wsdl,
+    /// gRPC services of a `.proto` file.
+    Proto,
+    /// Root fields of a GraphQL schema (SDL).
+    GraphqlSchema,
 }
 
 impl ImportFormat {
@@ -89,6 +93,8 @@ impl ImportFormat {
             ImportFormat::HttpFile => ".http file",
             ImportFormat::Code => "source code",
             ImportFormat::Wsdl => "WSDL",
+            ImportFormat::Proto => ".proto file",
+            ImportFormat::GraphqlSchema => "GraphQL schema",
         }
     }
 }
@@ -164,6 +170,25 @@ pub fn parse_file(path: &Path) -> Result<ImportPlan, ImportError> {
     let text = std::fs::read_to_string(path)
         .map_err(|e| ImportError::Invalid(format!("{}: {e}", path.display())))?;
     let trimmed = text.trim_start_matches('\u{feff}').trim();
+    let ext = path
+        .extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    if ext == "proto" {
+        return crate::grpc::proto_plan(path).map_err(ImportError::Invalid);
+    }
+    if crate::graphql_sdl::is_sdl(trimmed) {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        return crate::graphql_sdl::plan(trimmed, &name).ok_or_else(|| {
+            ImportError::Invalid(format!(
+                "{}: a GraphQL schema with no Query, Mutation or Subscription fields",
+                path.display()
+            ))
+        });
+    }
     if trimmed.starts_with('<') && crate::soap::is_wsdl(trimmed) {
         let name = path
             .file_name()
@@ -356,6 +381,8 @@ fn write_nodes(
                     Protocol::Graphql
                 } else if request.soap.is_some() {
                     Protocol::Soap
+                } else if request.grpc.is_some() {
+                    Protocol::Grpc
                 } else {
                     Protocol::Http
                 };

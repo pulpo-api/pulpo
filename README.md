@@ -375,7 +375,7 @@ In the desktop app, **⑂** next to the collection name opens the git panel: the
 Your repository already describes its API. Pulpo finds those contracts and keeps the collection in step with them.
 
 ```bash
-pulpo scan                                   # OpenAPI, .proto, WSDL and GraphQL files, and services in code
+pulpo scan                                   # OpenAPI, .proto, WSDL and GraphQL schemas, and services in code
 pulpo import services/orders/openapi.yaml    # the new folder stays linked to the file
 pulpo import services/orders                 # no contract? read the controllers and routes
 pulpo sync                                   # after a git pull: what changed in each contract
@@ -392,7 +392,7 @@ Orders vs ../api/orders.yaml (Orders API): 2 new, 1 gone, 3 to update, 18 in ste
 ~ POST    Create proposal  misses required header Idempotency-Key
 ```
 
-- Requests are matched by method and path, whatever the server variable or parameter style (`{id}`, `:id`, `{{id}}`), so hand-made collections link too. Calling an endpoint twice (a lifecycle folder) is fine.
+- Requests are matched by method and path, whatever the server variable or parameter style (`{id}`, `:id`, `{{id}}`), so hand-made collections link too. gRPC, SOAP and GraphQL requests are matched by their operation instead (`shop.Orders/Get`, `Add`, `query orders`): `.proto` files, WSDLs and GraphQL schemas import and sync like OpenAPI. Calling an endpoint twice (a lifecycle folder) is fine.
 - Applying only adds: new operations land in a folder per tag, and existing requests get the required query params, headers or body they miss. Names, scripts and values you wrote are never changed. Gone requests are deleted only when you tick them (or `--remove`).
 - No OpenAPI file? Pulpo reads the code itself: Spring (`@RequestMapping`, `@Tag`, `@Operation`, required params, headers and body), NestJS, Express and Fastify (following `app.use('/prefix', router)` across files), FastAPI (`APIRouter` prefixes and tags), Next.js and Nuxt route files. Requests are grouped in a folder per tag or controller, and `{{baseUrl}}` comes from the port and context path in the config (`application.yml`, `.env`…). The folder stays linked to the service, so `pulpo sync` tells you when a developer adds an endpoint.
 - In the app, **⟲** next to the collection name lists the contracts of the repository and shows a badge when a linked folder is out of step (checked on opening and after a pull).

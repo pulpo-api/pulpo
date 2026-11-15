@@ -25,6 +25,7 @@ pub mod export;
 pub mod flow;
 pub mod git;
 pub mod graphql;
+pub mod graphql_sdl;
 pub mod grpc;
 pub mod http;
 pub mod import;

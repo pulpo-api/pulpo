@@ -6,7 +6,7 @@
 use roxmltree::{Document, Node};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 const WSDL: &str = "http://schemas.xmlsoap.org/wsdl/";
 const SOAP11: &str = "http://schemas.xmlsoap.org/wsdl/soap/";
@@ -524,39 +524,9 @@ pub async fn load(root: &Path, location: &str) -> Result<String, String> {
         }
         return response.text().await.map_err(|e| e.to_string());
     }
-    let path =
-        find(root, location).ok_or_else(|| format!("no WSDL {location} in the workspace"))?;
+    let path = crate::collection::find_in_workspace(root, location)
+        .ok_or_else(|| format!("no WSDL {location} in the workspace"))?;
     std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))
-}
-
-fn find(root: &Path, location: &str) -> Option<PathBuf> {
-    if let Ok(p) = crate::collection::resolve(root, location) {
-        if p.is_file() {
-            return Some(p);
-        }
-    }
-    let name = Path::new(location).file_name()?.to_os_string();
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for e in entries.flatten() {
-            let p = e.path();
-            let file = e.file_name();
-            if p.is_dir() {
-                if !file.to_string_lossy().starts_with('.')
-                    && file != "node_modules"
-                    && file != "target"
-                {
-                    stack.push(p);
-                }
-            } else if file == name {
-                return Some(p);
-            }
-        }
-    }
-    None
 }
 
 /// An import plan: a folder per service, a request per operation (SOAP 1.1 ports first;

@@ -121,10 +121,8 @@ pub fn pool_from_protos(root: &Path, files: &[String]) -> Result<DescriptorPool,
     let mut includes: Vec<std::path::PathBuf> = vec![root.to_path_buf()];
     let mut names = Vec::new();
     for f in files {
-        let path = crate::collection::resolve(root, f).map_err(|e| e.to_string())?;
-        if !path.is_file() {
-            return Err(format!("no .proto file {f} in the workspace"));
-        }
+        let path = crate::collection::find_in_workspace(root, f)
+            .ok_or_else(|| format!("no .proto file {f} in the workspace"))?;
         if let Some(dir) = path.parent() {
             if !includes.contains(&dir.to_path_buf()) {
                 includes.insert(0, dir.to_path_buf());
@@ -336,6 +334,78 @@ async fn load_pool(
             "proto files".into(),
         ))
     }
+}
+
+/// An import plan for a `.proto` file: a folder per service, a request per method with
+/// an example message, sent to `{{baseUrl}}` (an environment with
+/// `grpc://localhost:50051`).
+pub fn proto_plan(path: &Path) -> Result<crate::import::ImportPlan, String> {
+    use crate::import::{ImportFormat, ImportNode, ImportPlan};
+    let dir = path.parent().unwrap_or(Path::new("."));
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let mut compiler = protox::Compiler::new([dir]).map_err(|e| e.to_string())?;
+    compiler.include_imports(true);
+    compiler.open_files([&name]).map_err(|e| e.to_string())?;
+    let all = methods(&compiler.descriptor_pool());
+    if all.is_empty() {
+        return Err(format!("{name} has no services"));
+    }
+    let mut folders: Vec<(String, Vec<ImportNode>)> = Vec::new();
+    for m in all {
+        let mut request = HttpRequest::new(crate::HttpMethod::Post, "{{baseUrl}}");
+        request.body = Some(m.example.clone());
+        request.grpc = Some(GrpcTarget {
+            method: m.path.clone(),
+            proto_files: vec![name.clone()],
+        });
+        let node = ImportNode::Request {
+            name: m.name.clone(),
+            request,
+            scripts: Default::default(),
+        };
+        match folders.iter_mut().find(|(s, _)| *s == m.service) {
+            Some((_, list)) => list.push(node),
+            None => folders.push((m.service.clone(), vec![node])),
+        }
+    }
+    let stem = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "gRPC".into());
+    let nodes = if folders.len() == 1 {
+        folders.pop().map(|(_, n)| n).unwrap_or_default()
+    } else {
+        folders
+            .into_iter()
+            .map(|(name, children)| ImportNode::Folder {
+                name,
+                children,
+                scripts: Default::default(),
+                auth: None,
+            })
+            .collect()
+    };
+    Ok(ImportPlan {
+        format: ImportFormat::Proto,
+        folder: Some(stem.clone()),
+        folder_scripts: Default::default(),
+        folder_auth: None,
+        nodes,
+        environments: vec![crate::environment::Environment {
+            id: String::new(),
+            name: format!("{stem} local"),
+            variables: vec![crate::environment::Variable {
+                name: "baseUrl".into(),
+                value: "grpc://localhost:50051".into(),
+                secret: false,
+                has_value: true,
+            }],
+        }],
+        warnings: Vec::new(),
+    })
 }
 
 // ------------------------------------------------------------------- calling

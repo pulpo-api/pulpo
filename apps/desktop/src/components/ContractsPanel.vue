@@ -175,7 +175,7 @@ async function link(c: Contract) {
 
         <h3 class="section">Contracts in this repository</h3>
         <p v-if="!contracts.length" class="note">
-          No OpenAPI, .proto, WSDL or GraphQL files, nor Spring, NestJS, Express, FastAPI, Next.js or Nuxt routes, found in the repository of this workspace.
+          No OpenAPI, .proto, WSDL or GraphQL schema files, nor Spring, NestJS, Express, FastAPI, Next.js or Nuxt routes, found in the repository of this workspace.
         </p>
         <div v-for="c in openapi" :key="c.path" class="contract">
           <div>
