@@ -16,6 +16,8 @@ use tokio_tungstenite::tungstenite::Message;
 
 /// How long `exchange` waits for more messages after the last one.
 const QUIET: Duration = Duration::from_millis(1500);
+/// The most `exchange` listens after sending, even if the server keeps talking (tickers).
+const LISTEN: Duration = Duration::from_secs(5);
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A saved message of a WebSocket request.
@@ -45,11 +47,16 @@ pub fn is_websocket_url(url: &str) -> bool {
     u.starts_with("ws://") || u.starts_with("wss://")
 }
 
-type Socket =
+pub(crate) type Socket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
 /// Opens the connection with the (resolved) request's headers; returns the socket, the
 /// handshake's response headers and a line saying how it went.
+/// The open socket and the handshake's headers (for protocols on top, like Socket.IO).
+pub(crate) async fn connect_raw(request: &HttpRequest) -> Result<(Socket, Vec<Header>), SendError> {
+    connect(request).await.map(|(s, h, _)| (s, h))
+}
+
 async fn connect(request: &HttpRequest) -> Result<(Socket, Vec<Header>, String), SendError> {
     if request.settings.verify_ssl == Some(false) {
         return Err(SendError::Other(
@@ -227,8 +234,11 @@ pub async fn exchange(request: &HttpRequest) -> Result<HttpResponse, SendError> 
     }
     let mut got: Vec<serde_json::Value> = Vec::new();
     let mut size = 0usize;
+    let listening = Instant::now();
     loop {
-        let left = limit.saturating_sub(started.elapsed());
+        let left = limit
+            .saturating_sub(started.elapsed())
+            .min(LISTEN.saturating_sub(listening.elapsed()));
         if left.is_zero() {
             break;
         }

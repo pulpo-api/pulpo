@@ -354,6 +354,8 @@ export interface HttpRequest {
   grpc?: GrpcTarget | null;
   /** SOAP requests: the WSDL and the operation; the envelope is the (XML) body. */
   soap?: SoapTarget | null;
+  /** Socket.IO requests: namespace, path and auth; the saved messages are events. */
+  socketio?: { namespace: string; path: string; auth?: string } | null;
 }
 
 export interface SoapTarget {

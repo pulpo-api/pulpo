@@ -44,6 +44,7 @@ const WS_URL = /^\s*wss?:\/\//i;
 const GRPC_URL = /^\s*grpcs?:\/\//i;
 
 function badge(node: RequestEntry): string {
+  if (node.protocol === "socketio" || node.request.socketio) return "SIO";
   if (node.protocol === "websocket" || WS_URL.test(node.request.url)) return "WS";
   if (node.protocol === "grpc" || GRPC_URL.test(node.request.url)) return "gRPC";
   if (node.protocol === "sse" || isEventStream(node.request)) return "SSE";
@@ -54,6 +55,7 @@ function badge(node: RequestEntry): string {
 }
 
 function badgeClass(node: RequestEntry): string {
+  if (node.protocol === "socketio" || node.request.socketio) return "p-websocket";
   if (node.protocol === "websocket" || WS_URL.test(node.request.url)) return "p-websocket";
   if (node.protocol === "grpc" || GRPC_URL.test(node.request.url)) return "p-grpc";
   if (node.protocol === "sse" || isEventStream(node.request)) return "p-sse";

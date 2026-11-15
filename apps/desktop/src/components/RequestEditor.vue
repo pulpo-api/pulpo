@@ -41,6 +41,11 @@ const tab = ref<"params" | "auth" | "body" | "headers" | "settings" | "pre" | "t
 );
 /** `ws://`/`wss://`: no method or Send; the Body tab holds the saved messages. */
 const websocket = computed(() => isWebSocketUrl(props.request.url));
+/** Socket.IO: a WebSocket with its own protocol; the saved messages are events. */
+const socketio = computed(() => !!props.request.socketio);
+function toggleSocketIo() {
+  props.request.socketio = props.request.socketio ? null : { namespace: "/", path: "/socket.io", auth: "" };
+}
 /** `grpc://`/`grpcs://`: the Body tab picks the method and holds the message. */
 const grpc = computed(() => isGrpcUrl(props.request.url));
 /** `Accept: text/event-stream`: listened to in the panel below instead of sent. */
@@ -123,7 +128,8 @@ const inheritedCount = computed(
 <template>
   <section class="card editor">
     <div class="urlbar">
-      <span v-if="websocket" class="method ws" title="WebSocket: connect below">WS</span>
+      <span v-if="socketio" class="method ws" title="Socket.IO: connect below">SIO</span>
+      <span v-else-if="websocket" class="method ws" title="WebSocket: connect below">WS</span>
       <span v-else-if="grpc" class="method grpc" title="gRPC: pick the method in Message">gRPC</span>
       <select v-else v-model="request.method" class="method" :class="`m-${request.method.toLowerCase()}`">
         <option v-for="m in HTTP_METHODS" :key="m" :value="m">{{ m }}</option>
@@ -138,7 +144,16 @@ const inheritedCount = computed(
         @save="emit('save')"
       />
       <button
-        v-if="!websocket && !grpc"
+        v-if="!grpc"
+        class="stream"
+        :class="{ on: socketio }"
+        :title="socketio ? 'Socket.IO: click to go back to a plain request' : 'Talk Socket.IO (v4) to this server'"
+        @click="toggleSocketIo"
+      >
+        SIO
+      </button>
+      <button
+        v-if="!websocket && !grpc && !socketio"
         class="stream"
         :class="{ on: stream }"
         :title="stream ? 'Listening to Server-Sent Events: click to send it as a normal request' : 'Listen to it as Server-Sent Events (Accept: text/event-stream)'"
@@ -146,11 +161,11 @@ const inheritedCount = computed(
       >
         SSE
       </button>
-      <button v-if="!websocket && !stream" class="send" :disabled="sending || !supported" @click="emit('send')">
+      <button v-if="!websocket && !stream && !socketio" class="send" :disabled="sending || !supported" @click="emit('send')">
         {{ sending ? "Sending…" : "Send" }}
       </button>
     </div>
-    <p v-if="!supported" class="hint">This protocol is not supported yet. HTTP, GraphQL, WebSocket, SSE and gRPC work today.</p>
+    <p v-if="!supported" class="hint">This protocol is not supported yet.</p>
     <p v-else-if="preview && (preview.changed || preview.missing.length)" class="resolved">
       <span v-if="preview.changed" class="url" :title="preview.url">→ {{ preview.url }}</span>
       <span v-if="preview.missing.length" class="missing">
@@ -167,6 +182,9 @@ const inheritedCount = computed(
       </button>
       <button v-if="grpc" :class="{ on: tab === 'body' }" @click="tab = 'body'">
         Message <span v-if="request.grpc?.method" class="count">{{ request.grpc.method.split("/").pop() }}</span>
+      </button>
+      <button v-else-if="socketio" :class="{ on: tab === 'body' }" @click="tab = 'body'">
+        Events <span v-if="request.messages?.length" class="count">{{ request.messages.length }}</span>
       </button>
       <button v-else-if="websocket" :class="{ on: tab === 'body' }" @click="tab = 'body'">
         Messages <span v-if="request.messages?.length" class="count">{{ request.messages.length }}</span>
@@ -229,6 +247,18 @@ const inheritedCount = computed(
       @send="emit('send')"
       @save="emit('save')"
     />
+
+    <div v-else-if="tab === 'body' && socketio && request.socketio" class="sio">
+      <div class="sio-row">
+        <label>Namespace <input v-model="request.socketio.namespace" placeholder="/" spellcheck="false" /></label>
+        <label>Path <input v-model="request.socketio.path" placeholder="/socket.io" spellcheck="false" /></label>
+        <label class="grow">
+          Auth (JSON) <input v-model="request.socketio.auth" placeholder='{ "token": "{{token}}" }' spellcheck="false" />
+        </label>
+      </div>
+      <p class="hint">Saved events: the name is the event, the body its data. <code>pulpo run</code> emits them in order.</p>
+      <WsMessagesEditor :request="request" @save="emit('save')" />
+    </div>
 
     <WsMessagesEditor v-else-if="tab === 'body' && websocket" :request="request" @save="emit('save')" />
 
@@ -314,6 +344,27 @@ const inheritedCount = computed(
 .stream.on {
   color: var(--p-sse, var(--accent));
   border-color: var(--p-sse, var(--accent));
+}
+.sio {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.sio-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.sio-row label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.sio-row .grow {
+  flex: 1;
+  min-width: 200px;
 }
 .method.grpc {
   display: inline-flex;

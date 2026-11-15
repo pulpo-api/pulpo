@@ -16,7 +16,7 @@ import { sampleEnvironments, sampleWorkspace } from "./sample";
 import { resolveText } from "./variables";
 import { base64ToBytes } from "./responseFiles";
 
-export type Protocol = "http" | "graphql" | "grpc" | "websocket" | "soap" | "sse";
+export type Protocol = "http" | "graphql" | "grpc" | "websocket" | "soap" | "sse" | "socketio";
 
 export interface Scripts {
   pre: string;
@@ -643,6 +643,9 @@ export function canonicalRequest(r: HttpRequest): HttpRequest {
     messages: (r.messages ?? []).map((m) => ({ name: m.name, body: m.body })),
     grpc: r.grpc ? { method: r.grpc.method ?? "", protoFiles: [...(r.grpc.protoFiles ?? [])] } : null,
     soap: r.soap ? { wsdl: r.soap.wsdl ?? "", operation: r.soap.operation ?? "" } : null,
+    socketio: r.socketio
+      ? { namespace: r.socketio.namespace ?? "/", path: r.socketio.path ?? "/socket.io", auth: r.socketio.auth ?? "" }
+      : null,
   };
 }
 

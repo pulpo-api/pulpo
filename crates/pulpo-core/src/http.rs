@@ -310,6 +310,9 @@ pub struct HttpRequest {
     /// SOAP requests: the WSDL and the operation (the envelope is the body).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub soap: Option<crate::soap::SoapTarget>,
+    /// Socket.IO requests: namespace, path and auth; the saved messages are events.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub socketio: Option<crate::socketio::SocketIoTarget>,
 }
 
 /// A GraphQL operation as it is edited: the query and its variables (JSON text).
@@ -431,6 +434,7 @@ impl HttpRequest {
             messages: Vec::new(),
             grpc: None,
             soap: None,
+            socketio: None,
         }
     }
 }

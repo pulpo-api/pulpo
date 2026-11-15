@@ -335,6 +335,9 @@ struct RequestFileV1 {
     /// SOAP: WSDL and operation.
     #[serde(default)]
     soap: Option<crate::soap::SoapTarget>,
+    /// Socket.IO: namespace, path and auth.
+    #[serde(default)]
+    socketio: Option<crate::socketio::SocketIoTarget>,
 }
 
 /// GraphQL variables of a request live next to it, as JSON.
@@ -642,6 +645,16 @@ fn request_yaml(entry: &RequestEntry, body: Option<BodyKind>) -> String {
             out.push_str(&format!("operationName: {}\n", quote(name)));
         }
     }
+    if let Some(t) = &entry.request.socketio {
+        out.push_str("socketio:\n");
+        out.push_str(&format!("  namespace: {}\n", quote(&t.namespace)));
+        if t.path != "/socket.io" {
+            out.push_str(&format!("  path: {}\n", quote(&t.path)));
+        }
+        if !t.auth.is_empty() {
+            out.push_str(&format!("  auth: {}\n", quote(&t.auth)));
+        }
+    }
     if let Some(s) = &entry.request.soap {
         out.push_str("soap:\n");
         out.push_str(&format!("  wsdl: {}\n", quote(&s.wsdl)));
@@ -677,6 +690,9 @@ pub(crate) fn protocol_of(entry: &RequestEntry) -> Protocol {
     if crate::grpc::is_grpc_url(&entry.request.url) {
         return Protocol::Grpc;
     }
+    if entry.request.socketio.is_some() {
+        return Protocol::Socketio;
+    }
     if entry.request.soap.is_some() {
         return Protocol::Soap;
     }
@@ -692,7 +708,11 @@ pub(crate) fn protocol_of(entry: &RequestEntry) -> Protocol {
         }
         Protocol::Http | Protocol::Websocket | Protocol::Sse if graphql => Protocol::Graphql,
         Protocol::Graphql if !graphql => Protocol::Http,
-        Protocol::Websocket | Protocol::Sse | Protocol::Grpc | Protocol::Soap => Protocol::Http,
+        Protocol::Websocket
+        | Protocol::Sse
+        | Protocol::Grpc
+        | Protocol::Soap
+        | Protocol::Socketio => Protocol::Http,
         p => p,
     }
 }
@@ -1265,6 +1285,7 @@ fn load_request_file(root: &Path, path: &Path) -> Result<RequestEntry, Collectio
             messages: file.messages,
             grpc: file.grpc,
             soap: file.soap,
+            socketio: file.socketio,
         },
         scripts: read_scripts(path, &stem_of(path))?,
     })
@@ -1515,6 +1536,7 @@ mod tests {
                 messages: Vec::new(),
                 grpc: None,
                 soap: None,
+                socketio: None,
                 disabled_params: vec![Param::new("debug", "true")],
                 path_params: vec![Param::new("tenant", "{{tenantId}}")],
                 auth: Some(Auth::Bearer {

@@ -234,6 +234,17 @@ messages:
       }
 ```
 
+## Socket.IO
+
+Press **SIO** next to the URL (`http://host:port`) to talk Socket.IO v4: **Connect** joins the namespace with your `auth` JSON (`{"token": "{{token}}"}`), the log shows events by name, and **Emit** sends one (an event name and its data). Saved events are one click away; `pulpo run` and flows emit them in order and give the tests what came back:
+
+```js
+const got = pm.response.json();   // [{ "event": "welcome", "args": [{ "rooms": 2 }] }, ...]
+pm.test("welcomed", () => pm.expect(got[0].event).to.eql("welcome"));
+```
+
+Runs listen at most 5 seconds after sending (WebSocket, Socket.IO and SSE alike), so chatty servers do not hold them up.
+
 ## Server-Sent Events
 
 Press **SSE** next to the URL (it sets `Accept: text/event-stream`) and **Listen**: events arrive as they come, with their name, id and time; JSON opens formatted. Headers, auth, `{{variables}}` and a body work as in any request, so `POST` streams (like text generation APIs) work too.

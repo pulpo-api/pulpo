@@ -1009,7 +1009,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
           @auxclick.middle.prevent="closeTab(tab.id)"
         >
           <span class="badge" :class="`m-${tab.request.method.toLowerCase()}`">{{
-            isWebSocketUrl(tab.request.url) ? "WS" : /^\s*grpcs?:\/\//i.test(tab.request.url) ? "gRPC" : isEventStream(tab.request) ? "SSE" : tab.request.soap ? "SOAP" : tab.request.graphql ? "GQL" : tab.protocol === "http" ? tab.request.method : tab.protocol.toUpperCase().slice(0, 4)
+            tab.request.socketio ? "SIO" : isWebSocketUrl(tab.request.url) ? "WS" : /^\s*grpcs?:\/\//i.test(tab.request.url) ? "gRPC" : isEventStream(tab.request) ? "SSE" : tab.request.soap ? "SOAP" : tab.request.graphql ? "GQL" : tab.protocol === "http" ? tab.request.method : tab.protocol.toUpperCase().slice(0, 4)
           }}</span>
           <span class="tab-name">{{ tab.name }}</span>
           <span v-if="dirty.has(tab.id)" class="dirty" title="Unsaved changes"></span>
@@ -1067,7 +1067,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         :request="selected.request"
         :scripts="selected.scripts"
         :sending="result.sending"
-        :supported="['http', 'graphql', 'websocket', 'sse', 'grpc', 'soap'].includes(selected.protocol) || isWebSocketUrl(selected.request.url)"
+        :supported="['http', 'graphql', 'websocket', 'sse', 'grpc', 'soap', 'socketio'].includes(selected.protocol) || isWebSocketUrl(selected.request.url)"
         :preview="preview"
         :inherited-auth="selectedInheritedAuth"
         :inherited-settings="selectedInheritedSettings"
@@ -1082,8 +1082,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       />
 
       <WebSocketPanel
-        v-if="isWebSocketUrl(selected.request.url)"
-        :key="`ws-${selected.id}`"
+        v-if="isWebSocketUrl(selected.request.url) || selected.request.socketio"
+        :key="`ws-${selected.id}-${!!selected.request.socketio}`"
         :request="selected.request"
         :scripts="selected.scripts"
         :request-id="selected.id"

@@ -127,6 +127,13 @@ pub fn resolve_request(
             operation_name: g.operation_name.clone(),
         }),
         soap: request.soap.clone(),
+        socketio: request
+            .socketio
+            .as_ref()
+            .map(|t| crate::socketio::SocketIoTarget {
+                auth: resolve_text(&t.auth, vars, &mut missing),
+                ..t.clone()
+            }),
         grpc: request.grpc.as_ref().map(|g| crate::grpc::GrpcTarget {
             method: g.method.clone(),
             proto_files: g.proto_files.clone(),

@@ -11,6 +11,8 @@ use tokio::sync::oneshot;
 
 /// How long `collect` waits for another event before it stops listening.
 const QUIET: Duration = Duration::from_millis(2000);
+/// The most `exchange` listens after it opens, even if the server keeps talking (tickers).
+const LISTEN: Duration = Duration::from_secs(5);
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// One event of the stream.
@@ -258,8 +260,11 @@ pub async fn collect(request: &HttpRequest) -> Result<HttpResponse, SendError> {
     let mut parser = Parser::default();
     let mut events: Vec<serde_json::Value> = Vec::new();
     let mut size = 0usize;
+    let listening = Instant::now();
     loop {
-        let left = limit.saturating_sub(started.elapsed());
+        let left = limit
+            .saturating_sub(started.elapsed())
+            .min(LISTEN.saturating_sub(listening.elapsed()));
         if left.is_zero() {
             break;
         }

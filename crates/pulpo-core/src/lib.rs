@@ -43,6 +43,7 @@ pub mod script;
 pub mod signing;
 pub mod snapshot;
 pub mod soap;
+pub mod socketio;
 pub mod sse;
 pub mod sync;
 mod timing;
@@ -62,17 +63,19 @@ pub enum Protocol {
     Websocket,
     Soap,
     Sse,
+    Socketio,
 }
 
 impl Protocol {
     /// All protocols, in the order shown in the UI.
-    pub const ALL: [Protocol; 6] = [
+    pub const ALL: [Protocol; 7] = [
         Protocol::Http,
         Protocol::Graphql,
         Protocol::Grpc,
         Protocol::Websocket,
         Protocol::Soap,
         Protocol::Sse,
+        Protocol::Socketio,
     ];
 
     /// Short label used in the UI and in files.
@@ -84,6 +87,7 @@ impl Protocol {
             Protocol::Websocket => "websocket",
             Protocol::Soap => "soap",
             Protocol::Sse => "sse",
+            Protocol::Socketio => "socketio",
         }
     }
 }
@@ -170,7 +174,15 @@ mod tests {
         let labels: Vec<_> = Protocol::ALL.iter().map(|p| p.as_str()).collect();
         assert_eq!(
             labels,
-            ["http", "graphql", "grpc", "websocket", "soap", "sse"]
+            [
+                "http",
+                "graphql",
+                "grpc",
+                "websocket",
+                "soap",
+                "sse",
+                "socketio"
+            ]
         );
     }
 }

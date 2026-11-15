@@ -571,6 +571,7 @@ pub async fn run_in(
             | Protocol::Sse
             | Protocol::Grpc
             | Protocol::Soap
+            | Protocol::Socketio
     ) {
         report.error = Some(SendError::Other(format!(
             "{} requests arrive in phase 4",
@@ -674,7 +675,10 @@ pub async fn run_in(
             let websocket = crate::websocket::is_websocket_url(&resolved.url);
             let stream = crate::sse::is_event_stream(&resolved);
             let grpc = crate::grpc::is_grpc_url(&resolved.url);
-            let mut sent = if grpc {
+            let socketio = resolved.socketio.clone();
+            let mut sent = if let Some(target) = &socketio {
+                crate::socketio::exchange(&with_auth(&resolved), target).await
+            } else if grpc {
                 crate::grpc::invoke(root, &with_auth(&resolved)).await
             } else if websocket {
                 crate::websocket::exchange(&with_auth(&resolved)).await
@@ -687,6 +691,7 @@ pub async fn run_in(
             while !websocket
                 && !stream
                 && !grpc
+                && socketio.is_none()
                 && retryable(&sent)
                 && report.attempts <= options.retries
             {

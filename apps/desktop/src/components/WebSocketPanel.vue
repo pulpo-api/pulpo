@@ -3,6 +3,7 @@ import { computed, nextTick, onUnmounted, ref } from "vue";
 import type { HttpRequest } from "../core";
 import { backend, type Scripts, type WsConnection, type WsFrame } from "../workspace";
 import CodeEditor from "./CodeEditor.vue";
+import { connectPacket, emitPacket, parsePacket, socketUrl } from "../socketio";
 
 const props = defineProps<{
   request: HttpRequest;
@@ -13,7 +14,13 @@ const props = defineProps<{
   environmentId: string;
 }>();
 
-const frames = ref<WsFrame[]>([]);
+/** A line of the log; Socket.IO events carry their name. */
+type Line = WsFrame & { event?: string };
+const frames = ref<Line[]>([]);
+/** Socket.IO mode: the WebSocket carries Engine.IO/Socket.IO packets. */
+const sio = computed(() => props.request.socketio ?? null);
+const draftEvent = ref("message");
+let earlyPackets: string[] = [];
 const state = ref<"closed" | "connecting" | "open" | "closing">("closed");
 const problem = ref("");
 const draft = ref("");
@@ -31,7 +38,51 @@ const counts = computed(() => ({
   received: frames.value.filter((f) => f.direction === "received").length,
 }));
 
-function onFrame(frame: WsFrame) {
+/** Socket.IO: answers the protocol (connect, pong) and shows events, not raw packets. */
+function onSocketIo(frame: WsFrame) {
+  const target = sio.value!;
+  const reply = (text: string) => {
+    if (connection) void connection.send(text);
+    else earlyPackets.push(text);
+  };
+  if (frame.direction === "info" || frame.direction === "error") return onFrame(frame);
+  const packet = parsePacket(frame.text);
+  if (frame.direction === "sent") {
+    if (packet.kind === "event") {
+      onFrame({ ...frame, event: packet.event, text: packet.args.length === 1 ? JSON.stringify(packet.args[0]) : JSON.stringify(packet.args) });
+    }
+    return;
+  }
+  switch (packet.kind) {
+    case "open":
+      reply(connectPacket(target));
+      break;
+    case "ping":
+      reply("3");
+      break;
+    case "connected":
+      onFrame({ direction: "info", text: `Joined namespace ${target.namespace || "/"}`, atMs: frame.atMs });
+      break;
+    case "connectError":
+      onFrame({ direction: "error", text: `The server refused the connection: ${packet.message}`, atMs: frame.atMs });
+      void connection?.close();
+      break;
+    case "disconnected":
+      onFrame({ direction: "info", text: "The server left the namespace", atMs: frame.atMs });
+      break;
+    case "event":
+      onFrame({
+        ...frame,
+        event: packet.event,
+        text: packet.args.length === 1 ? JSON.stringify(packet.args[0]) : JSON.stringify(packet.args),
+      });
+      break;
+    default:
+      break;
+  }
+}
+
+function onFrame(frame: Line) {
   frames.value.push(frame);
   if (frame.direction === "error" || (frame.direction === "info" && frame.text.startsWith("Closed"))) {
     state.value = "closed";
@@ -45,12 +96,19 @@ async function connect() {
   problem.value = "";
   state.value = "connecting";
   try {
+    earlyPackets = [];
+    const request = sio.value
+      ? { ...props.request, url: socketUrl(props.request.url, sio.value.path || "/socket.io"), socketio: null, messages: [] }
+      : props.request;
     connection = await backend.wsConnect(
       props.root,
-      { id: props.requestId, name: props.name, protocol: "websocket", request: props.request, scripts: props.scripts },
+      { id: props.requestId, name: props.name, protocol: "websocket", request, scripts: props.scripts },
       props.environmentId,
-      onFrame,
+      sio.value ? onSocketIo : onFrame,
     );
+    // Packets the protocol asked for before the connection was ready.
+    for (const text of earlyPackets) await connection.send(text);
+    earlyPackets = [];
     state.value = "open";
   } catch (e) {
     problem.value = String(e);
@@ -75,7 +133,11 @@ async function send(text: string) {
 }
 
 async function sendDraft() {
-  await send(draft.value);
+  await send(sio.value ? emitPacket(sio.value.namespace, draftEvent.value.trim() || "message", draft.value) : draft.value);
+}
+
+function sendSaved(name: string, body: string) {
+  void send(sio.value ? emitPacket(sio.value.namespace, name, body) : body);
 }
 
 function pretty(text: string) {
@@ -123,7 +185,7 @@ onUnmounted(() => void connection?.close());
         class="chip"
         :disabled="state !== 'open'"
         :title="m.body"
-        @click="send(m.body)"
+        @click="sendSaved(m.name, m.body)"
       >
         ↑ {{ m.name }}
       </button>
@@ -136,21 +198,22 @@ onUnmounted(() => void connection?.close());
       <li v-for="(f, i) in shown" :key="i" class="frame" :class="f.direction" @click="toggle(i)">
         <span class="arrow">{{ f.direction === "sent" ? "↑" : f.direction === "received" ? "↓" : f.direction === "error" ? "!" : "·" }}</span>
         <span class="time">{{ (f.atMs / 1000).toFixed(2) }}s</span>
-        <pre v-if="expanded.has(i)" class="text">{{ pretty(f.text) }}</pre>
-        <span v-else class="text one">{{ f.text }}</span>
+        <pre v-if="expanded.has(i)" class="text"><b v-if="f.event" class="event">{{ f.event }} </b>{{ pretty(f.text) }}</pre>
+        <span v-else class="text one"><b v-if="f.event" class="event">{{ f.event }} </b>{{ f.text }}</span>
       </li>
     </ol>
 
-    <div class="composer">
+    <div class="composer" :class="{ sio }">
+      <input v-if="sio" v-model="draftEvent" class="event-name" placeholder="event" spellcheck="false" aria-label="Event name" />
       <CodeEditor
         v-model="draft"
         variables
         class="code-area"
         :language="/^\s*[[{]/.test(draft) ? 'json' : 'text'"
-        placeholder="Message to send ({{variables}} work). Ctrl+Enter sends."
+        :placeholder="sio ? 'Event data: JSON or text ({{variables}} work). Ctrl+Enter emits.' : 'Message to send ({{variables}} work). Ctrl+Enter sends.'"
         @run="sendDraft"
       />
-      <button class="primary" :disabled="state !== 'open' || !draft.trim()" @click="sendDraft">Send</button>
+      <button class="primary" :disabled="state !== 'open' || (!sio && !draft.trim())" @click="sendDraft">{{ sio ? "Emit" : "Send" }}</button>
     </div>
   </section>
 </template>
@@ -254,6 +317,16 @@ onUnmounted(() => void connection?.close());
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.composer.sio {
+  grid-template-columns: 140px minmax(0, 1fr) auto;
+}
+.event-name {
+  align-self: stretch;
+}
+.event {
+  color: var(--p-websocket, var(--accent));
+  margin-right: 8px;
 }
 .composer {
   display: grid;
