@@ -210,7 +210,14 @@ async fn grpc_schema(
 
 /// Live MQTT sessions by id.
 #[derive(Default)]
-struct Brokers(std::sync::Mutex<std::collections::HashMap<String, pulpo_core::mqtt::Live>>);
+struct Brokers(
+    std::sync::Mutex<
+        std::collections::HashMap<
+            String,
+            (pulpo_core::mqtt::Live, pulpo_core::variables::Variables),
+        >,
+    >,
+);
 
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -229,7 +236,7 @@ async fn mqtt_connect(
     environment_id: Option<String>,
 ) -> Result<String, String> {
     let root = PathBuf::from(root);
-    let (request, _) = run::prepare(&root, &entry, environment_id.as_deref(), &Keychain).await?;
+    let (request, vars) = run::prepare(&root, &entry, environment_id.as_deref(), &Keychain).await?;
     let target = request.mqtt.clone().unwrap_or_default();
     let id = format!("{}-{}", entry.id, uuid_like());
     let message_id = id.clone();
@@ -248,11 +255,11 @@ async fn mqtt_connect(
         .0
         .lock()
         .map_err(|e| e.to_string())?
-        .insert(id.clone(), live);
+        .insert(id.clone(), (live, vars));
     Ok(id)
 }
 
-/// Publishes on a live MQTT session.
+/// Publishes on a live MQTT session; `{{variables}}` in the topic and payload are filled in.
 #[tauri::command]
 fn mqtt_publish(
     brokers: tauri::State<'_, Brokers>,
@@ -263,7 +270,16 @@ fn mqtt_publish(
     retain: bool,
 ) -> Result<(), String> {
     let map = brokers.0.lock().map_err(|e| e.to_string())?;
-    let live = map.get(&id).ok_or("the connection is closed")?;
+    let (live, vars) = map.get(&id).ok_or("the connection is closed")?;
+    let mut missing = std::collections::BTreeSet::new();
+    let topic = pulpo_core::variables::resolve_text(&topic, vars, &mut missing);
+    let payload = pulpo_core::variables::resolve_text(&payload, vars, &mut missing);
+    if !missing.is_empty() {
+        return Err(format!(
+            "unresolved variables: {}",
+            missing.into_iter().collect::<Vec<_>>().join(", ")
+        ));
+    }
     if live.publish(topic, payload, qos, retain) {
         Ok(())
     } else {
@@ -274,7 +290,7 @@ fn mqtt_publish(
 /// Disconnects a live MQTT session.
 #[tauri::command]
 fn mqtt_close(brokers: tauri::State<'_, Brokers>, id: String) -> Result<(), String> {
-    if let Some(live) = brokers.0.lock().map_err(|e| e.to_string())?.remove(&id) {
+    if let Some((live, _)) = brokers.0.lock().map_err(|e| e.to_string())?.remove(&id) {
         live.close();
     }
     Ok(())

@@ -851,7 +851,15 @@ function remember(id: string, result: Result) {
 
 async function send() {
   const node = selected.value;
-  if (!node || !["http", "graphql"].includes(node.protocol) || sending.has(node.id)) return;
+  if (!node || sending.has(node.id)) return;
+  // Live protocols (WebSocket, SSE, Socket.IO, MQTT) connect from their panel, not Send.
+  const live =
+    ["websocket", "sse", "socketio", "mqtt"].includes(node.protocol) ||
+    isWebSocketUrl(node.request.url) ||
+    isEventStream(node.request) ||
+    !!node.request.socketio ||
+    isMqtt(node.request);
+  if (live) return;
   // Sending a request keeps its tab.
   pinTab(node.id);
   sending.add(node.id);
