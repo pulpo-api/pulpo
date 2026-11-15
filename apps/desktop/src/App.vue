@@ -174,6 +174,32 @@ async function addToFlow(flowId: string, name?: string) {
   }
 }
 const newFlowForStep = ref("");
+
+/** "Make a flow from this folder": the folder waiting for confirmation, and the result. */
+const chaining = ref<{ folder: string; name: string; run: boolean; busy: boolean; result: string } | null>(null);
+function startChain(folderId: string) {
+  let name = "";
+  walk(workspace.value?.tree ?? [], (n) => {
+    if (n.type === "folder" && n.id === folderId) name = n.name;
+  });
+  chaining.value = { folder: folderId, name: name || "Flow", run: false, busy: false, result: "" };
+}
+async function confirmChain() {
+  const c = chaining.value;
+  const ws = workspace.value;
+  if (!c || !ws || !backend.chainToFlow) return;
+  c.busy = true;
+  try {
+    const [id, text] = await backend.chainToFlow(ws.root, c.folder, activeEnvId.value, c.run, c.name);
+    c.result = text;
+    await loadFlows();
+    openFlow(id);
+    flowKey.value++;
+  } catch (e) {
+    c.result = String(e);
+  }
+  c.busy = false;
+}
 /** Bumped to reload the open flow after it changes elsewhere. */
 const flowKey = ref(0);
 
@@ -916,6 +942,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       @open-flow="openFlow"
       @new-flow="newFlow"
       @add-to-flow="(id) => { addingToFlow = id; newFlowForStep = ''; }"
+      @chain-folder="startChain"
       @rename="renameNode"
       @duplicate="duplicateNode"
       @delete="deleteNode"
@@ -1134,6 +1161,29 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       <div class="link-actions">
         <button class="ghost" @click="pendingLink = null">Cancel</button>
         <button class="primary" @click="pickLinkFolder">Choose folder…</button>
+      </div>
+    </div>
+
+    <div v-if="chaining" class="link-ask card" role="dialog" aria-label="Make a flow">
+      <p>
+        Pulpo finds which response feeds which request (<code v-pre>{{orderId}}</code> ← <code>id</code> of
+        <code>POST /orders</code>) from saved examples and the folder's OpenAPI contract, and makes a flow that passes
+        those values.
+      </p>
+      <form class="flow-pick" @submit.prevent="confirmChain">
+        <input v-model="chaining.name" placeholder="Flow name" spellcheck="false" aria-label="Flow name" />
+        <button class="ghost" :disabled="chaining.busy || !chaining.name.trim()">
+          {{ chaining.busy ? "Working…" : "Make flow" }}
+        </button>
+      </form>
+      <label class="check">
+        <input v-model="chaining.run" type="checkbox" />
+        Also call the API in order to learn from real responses
+        ({{ environments.find((e) => e.id === activeEnvId)?.name || "no environment" }})
+      </label>
+      <pre v-if="chaining.result" class="chain-result">{{ chaining.result }}</pre>
+      <div class="link-actions">
+        <button class="ghost" @click="chaining = null">Close</button>
       </div>
     </div>
 
@@ -1471,5 +1521,15 @@ main > :deep(.viewer) {
 .flows-chip {
   white-space: nowrap;
   color: var(--accent);
+}
+.chain-result {
+  margin: 0;
+  max-height: 220px;
+  overflow: auto;
+  font: 11px/1.45 var(--mono);
+  background: var(--surface-2);
+  border-radius: 6px;
+  padding: 8px;
+  white-space: pre-wrap;
 }
 </style>

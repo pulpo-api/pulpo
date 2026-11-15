@@ -629,6 +629,8 @@ export interface WorkspaceBackend {
   exportCollection?(root: string, folderId: string, format: ExportFormat): Promise<Exported>;
   /** Desktop only: an environment as a Postman environment. */
   exportEnvironment?(root: string, environmentId: string): Promise<Exported>;
+  /** Desktop only: finds which response feeds which request and saves it as a flow. */
+  chainToFlow?(root: string, folderId: string, environmentId: string, run: boolean, name: string): Promise<[string, string]>;
   /** Desktop only: API contracts of the repository and the folders made from them. */
   scanContracts?(root: string): Promise<Contract[]>;
   syncStatus?(root: string): Promise<({ Ok: Drift } | { Err: string })[]>;
@@ -771,6 +773,8 @@ const tauriBackend: WorkspaceBackend = {
   },
   stopLoadTest: () => invoke<void>("stop_load_test"),
   importInto: (root, folderId, source) => invoke<ImportSummary>("import_into", { root, folderId, ...source }),
+  chainToFlow: (root, folderId, environmentId, run, name) =>
+    invoke<[string, string]>("chain_to_flow", { root, folderId, environmentId: environmentId || null, run, name }),
   scanContracts: (root) => invoke<Contract[]>("scan_contracts", { root }),
   syncStatus: (root) => invoke<({ Ok: Drift } | { Err: string })[]>("sync_status", { root }),
   syncLink: (root, folderId, contract) => invoke<Drift>("sync_link", { root, folderId, contract }),

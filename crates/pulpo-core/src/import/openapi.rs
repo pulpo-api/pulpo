@@ -69,6 +69,11 @@ fn contract_script(doc: &Value, operation: &Value) -> String {
 
 /// Builds an example value from a schema: example, default, enum, then a placeholder by type.
 fn example(doc: &Value, schema: &Value, depth: usize) -> Value {
+    example_of(doc, schema, depth, false)
+}
+
+/// Like [`example`]; for a response, read-only properties (ids) are kept.
+fn example_of(doc: &Value, schema: &Value, depth: usize, response: bool) -> Value {
     let schema = deref(doc, schema);
     if let Some(v) = schema.get("example") {
         return v.clone();
@@ -91,14 +96,14 @@ fn example(doc: &Value, schema: &Value, depth: usize) -> Value {
             if combinator == "allOf" {
                 let mut merged = Map::new();
                 for part in parts {
-                    if let Value::Object(o) = example(doc, part, depth + 1) {
+                    if let Value::Object(o) = example_of(doc, part, depth + 1, response) {
                         merged.extend(o);
                     }
                 }
                 return Value::Object(merged);
             }
             if let Some(first) = parts.first() {
-                return example(doc, first, depth + 1);
+                return example_of(doc, first, depth + 1, response);
             }
         }
     }
@@ -117,16 +122,18 @@ fn example(doc: &Value, schema: &Value, depth: usize) -> Value {
             let mut out = Map::new();
             if let Some(props) = schema.get("properties").and_then(|p| p.as_object()) {
                 for (name, prop) in props {
-                    if deref(doc, prop).get("readOnly").and_then(|r| r.as_bool()) == Some(true) {
+                    if !response
+                        && deref(doc, prop).get("readOnly").and_then(|r| r.as_bool()) == Some(true)
+                    {
                         continue;
                     }
-                    out.insert(name.clone(), example(doc, prop, depth + 1));
+                    out.insert(name.clone(), example_of(doc, prop, depth + 1, response));
                 }
             }
             Value::Object(out)
         }
         "array" => match schema.get("items") {
-            Some(items) => json!([example(doc, items, depth + 1)]),
+            Some(items) => json!([example_of(doc, items, depth + 1, response)]),
             None => json!([]),
         },
         "integer" => json!(0),
@@ -284,6 +291,58 @@ fn path_template(path: &str) -> String {
         }
     }
     out.push_str(rest);
+    out
+}
+
+/// A sample body of the successful JSON response of every operation (the documented
+/// example, else one built from the schema): `(method, path, body)`.
+pub(crate) fn response_samples(doc: &Value) -> Vec<(String, String, Value)> {
+    let mut out = Vec::new();
+    let Some(paths) = doc.get("paths").and_then(|p| p.as_object()) else {
+        return out;
+    };
+    for (path, item) in paths {
+        let item = deref(doc, item);
+        for (key, method) in METHODS {
+            let Some(responses) = item
+                .get(key)
+                .and_then(|o| o.get("responses"))
+                .and_then(|r| r.as_object())
+            else {
+                continue;
+            };
+            let success = responses
+                .iter()
+                .filter(|(code, _)| code.starts_with('2'))
+                .min_by_key(|(code, _)| code.to_string());
+            let Some((_, response)) = success else {
+                continue;
+            };
+            let media = deref(doc, response)
+                .get("content")
+                .and_then(|c| c.as_object())
+                .and_then(|c| {
+                    c.iter()
+                        .find(|(m, _)| m.contains("json"))
+                        .map(|(_, v)| v.clone())
+                });
+            let Some(media) = media else { continue };
+            let sample = media
+                .get("example")
+                .cloned()
+                .or_else(|| {
+                    media
+                        .get("examples")
+                        .and_then(|e| e.as_object())
+                        .and_then(|e| e.values().next())
+                        .map(|e| deref(doc, e).get("value").cloned().unwrap_or(Value::Null))
+                })
+                .or_else(|| media.get("schema").map(|s| example_of(doc, s, 0, true)));
+            if let Some(sample) = sample.filter(|v| !v.is_null()) {
+                out.push((method.to_string(), path.clone(), sample));
+            }
+        }
+    }
     out
 }
 

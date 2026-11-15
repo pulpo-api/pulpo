@@ -49,6 +49,7 @@ const emit = defineEmits<{
   openFlow: [id: string];
   newFlow: [name: string];
   addToFlow: [requestId: string];
+  chainFolder: [folderId: string];
 }>();
 
 const query = ref("");
@@ -171,7 +172,8 @@ function act(
     | "example"
     | "run"
     | "export"
-    | "flow",
+    | "flow"
+    | "chain",
 ) {
   const node = menu.value?.node;
   if (!node) return;
@@ -188,6 +190,7 @@ function act(
   else if (action === "run") emit("runFolder", node.id);
   else if (action === "export") emit("export", node.id);
   else if (action === "flow") emit("addToFlow", node.id);
+  else if (action === "chain") emit("chainFolder", node.id);
   else if (action === "duplicate") emit("duplicate", node.id);
   else if (action === "delete") emit("delete", node);
   else {
@@ -331,6 +334,7 @@ function confirm() {
           <button role="menuitem" @click="act('run')">Run folder…</button>
           <button role="menuitem" @click="act('edit')">Headers, auth, settings…</button>
           <button role="menuitem" @click="act('export')">Export folder…</button>
+          <button v-if="persistent" role="menuitem" @click="act('chain')">Make a flow from this folder…</button>
           <button role="menuitem" @click="act('newRequest')">New request here</button>
           <button role="menuitem" @click="act('newFolder')">New folder here</button>
         </template>

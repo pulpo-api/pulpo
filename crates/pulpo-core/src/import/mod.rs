@@ -179,6 +179,32 @@ pub fn parse_file(path: &Path) -> Result<ImportPlan, ImportError> {
     }
 }
 
+/// Sample successful responses of an OpenAPI file (with `$ref`s to sibling files):
+/// `(method, path, body)`.
+pub(crate) fn openapi_responses(
+    path: &Path,
+) -> Result<Vec<(String, String, serde_json::Value)>, ImportError> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| ImportError::Invalid(format!("{}: {e}", path.display())))?;
+    let trimmed = text.trim_start_matches('\u{feff}').trim();
+    let mut value: serde_json::Value = if trimmed.starts_with('{') {
+        serde_json::from_str(trimmed).map_err(|e| ImportError::Invalid(e.to_string()))?
+    } else {
+        serde_norway::from_str(trimmed).map_err(|e| ImportError::Invalid(e.to_string()))?
+    };
+    let mut warnings = Vec::new();
+    let base = path.parent().unwrap_or_else(|| Path::new("."));
+    openapi::inline_external_refs(
+        &mut value,
+        base,
+        None,
+        &mut Default::default(),
+        &mut warnings,
+        0,
+    );
+    Ok(openapi::response_samples(&value))
+}
+
 fn parse_value(value: serde_json::Value) -> Result<ImportPlan, ImportError> {
     let schema = value
         .pointer("/info/schema")

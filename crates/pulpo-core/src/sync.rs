@@ -295,7 +295,7 @@ pub fn scan(root: &Path) -> Result<Vec<Contract>, CollectionError> {
 // --------------------------------------------------------------------- drift
 
 /// Method and path segments, path parameters as `{}` (`GET orders/{}`).
-fn key_of(request: &HttpRequest) -> (String, Vec<String>) {
+pub(crate) fn key_of(request: &HttpRequest) -> (String, Vec<String>) {
     let url = request
         .url
         .split(['?', '#'])
@@ -430,7 +430,7 @@ fn operations_of(spec: &Path) -> Result<(String, Vec<Operation>, Vec<String>), S
 
 /// A request matches an operation when the methods are equal and the request's path
 /// ends with the operation's (the server part of the URL may hold a prefix).
-fn matches(request: &(String, Vec<String>), operation: &(String, Vec<String>)) -> bool {
+pub(crate) fn matches(request: &(String, Vec<String>), operation: &(String, Vec<String>)) -> bool {
     request.0 == operation.0
         && !operation.1.is_empty()
         && request.1.len() >= operation.1.len()

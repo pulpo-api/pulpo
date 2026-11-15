@@ -75,6 +75,12 @@ COMMANDS:
                --apply adds and completes requests (never changes what you
                wrote); --remove also deletes the gone ones. --exit-code
                exits with 1 when something drifted (for CI).
+    chain [FOLDER] [-w DIR] [-e ENV] [--run] [--flow NAME]
+               Find which response feeds which request in a folder ({{orderId}}
+               ← id of POST /orders, {{token}} ← access_token) from saved
+               examples and the folder's OpenAPI contract; --run also calls
+               the API in order to learn from real responses. --flow saves
+               the result as a flow that passes those values.
     flow ls [-w DIR]
                List the flows of the workspace (flows/*.flow.yaml)
     flow show <FLOW> [-w DIR]
@@ -152,6 +158,7 @@ fn main() -> ExitCode {
         Some("mcp") => run_mcp(&args[1..]),
         Some("flow") => run_flow_command(&args[1..]),
         Some("scan") => run_scan(&args[1..]),
+        Some("chain") => run_chain(&args[1..]),
         Some("sync") => run_sync(&args[1..]),
         Some("run") => run_run(&args[1..]),
         Some("load") => run_load(&args[1..]),
@@ -383,6 +390,69 @@ fn run_secret(args: &[String]) -> ExitCode {
         }
         Err(e) => fail(e),
     }
+}
+
+fn run_chain(args: &[String]) -> ExitCode {
+    const USAGE: &str = "chain: expected [FOLDER] [-w DIR] [-e ENV] [--run] [--flow NAME]";
+    let mut folder = String::new();
+    let mut dir = PathBuf::from(".");
+    let mut env_name: Option<String> = None;
+    let mut run_requests = false;
+    let mut flow_name: Option<String> = None;
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        match arg.as_str() {
+            "-w" | "--workspace" => match rest.next() {
+                Some(d) => dir = PathBuf::from(d),
+                None => return usage_error("chain: -w needs a DIR"),
+            },
+            "-e" | "--env" => match rest.next() {
+                Some(e) => env_name = Some(e.clone()),
+                None => return usage_error("chain: -e needs an ENV"),
+            },
+            "--flow" => match rest.next() {
+                Some(n) => flow_name = Some(n.clone()),
+                None => return usage_error("chain: --flow needs a NAME"),
+            },
+            "--run" => run_requests = true,
+            other if !other.starts_with('-') && folder.is_empty() => {
+                folder = other.replace('\\', "/").trim_matches('/').to_string()
+            }
+            _ => return usage_error(USAGE),
+        }
+    }
+    let environment_id = match &env_name {
+        Some(name) => match find_environment(&dir, name, &Keychain) {
+            Ok(env) => Some(env.id),
+            Err(e) => return fail(e),
+        },
+        None => None,
+    };
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(e) => return fail(format!("could not start the runtime: {e}")),
+    };
+    let chain = match runtime.block_on(pulpo_core::chain::chain(
+        &dir,
+        &folder,
+        environment_id.as_deref(),
+        &Keychain,
+        run_requests,
+    )) {
+        Ok(c) => c,
+        Err(e) => return fail(e),
+    };
+    print!("{}", pulpo_core::chain::to_text(&chain));
+    if let Some(name) = flow_name {
+        match pulpo_core::flow::save_flow(&dir, &pulpo_core::chain::to_flow(&chain, &name)) {
+            Ok(f) => println!("Saved the flow {} in flows/{}.flow.yaml", f.name, f.id),
+            Err(e) => return fail(e),
+        }
+    }
+    ExitCode::SUCCESS
 }
 
 fn run_scan(args: &[String]) -> ExitCode {

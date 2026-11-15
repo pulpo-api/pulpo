@@ -422,6 +422,36 @@ async fn import_into(
     Ok(summary)
 }
 
+/// Finds the chain of a folder and saves it as a flow; returns the flow's id and what
+/// was found.
+#[tauri::command]
+async fn chain_to_flow(
+    root: String,
+    folder_id: String,
+    environment_id: Option<String>,
+    run: bool,
+    name: String,
+) -> Result<(String, String), String> {
+    blocking(move || {
+        let root = PathBuf::from(root);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| e.to_string())?;
+        let chain = runtime.block_on(pulpo_core::chain::chain(
+            &root,
+            &folder_id,
+            environment_id.as_deref().filter(|e| !e.is_empty()),
+            &Keychain,
+            run,
+        ))?;
+        let flow = flow::save_flow(&root, &pulpo_core::chain::to_flow(&chain, &name))
+            .map_err(|e| e.to_string())?;
+        Ok((flow.id, pulpo_core::chain::to_text(&chain)))
+    })
+    .await
+}
+
 /// API contracts in the workspace's repository.
 #[tauri::command]
 async fn scan_contracts(root: String) -> Result<Vec<pulpo_core::sync::Contract>, String> {
@@ -923,6 +953,7 @@ pub fn run() {
             flow_usage,
             run_flow,
             scan_contracts,
+            chain_to_flow,
             sync_status,
             sync_link,
             sync_import,

@@ -181,6 +181,16 @@ fn tools() -> Value {
             }, "required": ["name", "steps"] }
         },
         {
+            "name": "chain_folder",
+            "description": "Find which response feeds which request in a folder (orderId <- id of POST /orders, token <- access_token) from saved examples and the OpenAPI contract; run also calls the API in order (ask the person first). flowName saves the result as a flow.",
+            "inputSchema": { "type": "object", "properties": {
+                "folder": { "type": "string", "description": "Folder id; omit for the whole collection." },
+                "environment": env, "confirmProduction": confirm,
+                "run": { "type": "boolean" },
+                "flowName": { "type": "string" }
+            } }
+        },
+        {
             "name": "scan_contracts",
             "description": "Find the API contracts of the repository (OpenAPI, .proto, WSDL, GraphQL) and which collection folder each one feeds.",
             "inputSchema": { "type": "object", "properties": {} }
@@ -465,6 +475,38 @@ impl<'a> Server<'a> {
                     out.push_str(&format!("\n✗ {p}"));
                 }
                 Ok(out)
+            }
+            "chain_folder" => {
+                let run_requests = args.get("run").and_then(|r| r.as_bool()).unwrap_or(false);
+                let env = if run_requests {
+                    self.environment(args)?
+                } else {
+                    arg(args, "environment").and_then(|n| {
+                        environment::list_environments(&self.root, self.store)
+                            .ok()?
+                            .into_iter()
+                            .find(|e| e.name.eq_ignore_ascii_case(n))
+                            .map(|e| (e.id, e.name))
+                    })
+                };
+                let chain = self.runtime.block_on(crate::chain::chain(
+                    &self.root,
+                    arg(args, "folder").unwrap_or(""),
+                    env.as_ref().map(|(id, _)| id.as_str()),
+                    self.store,
+                    run_requests,
+                ))?;
+                let mut out = crate::chain::to_text(&chain);
+                if let Some(name) = arg(args, "flowName") {
+                    let flow =
+                        crate::flow::save_flow(&self.root, &crate::chain::to_flow(&chain, name))
+                            .map_err(|e| e.to_string())?;
+                    out.push_str(&format!(
+                        "Saved the flow {} (id: {}).\n",
+                        flow.name, flow.id
+                    ));
+                }
+                Ok(self.mask(&env, &out))
             }
             "scan_contracts" => {
                 let found = crate::sync::scan(&self.root).map_err(|e| e.to_string())?;
@@ -1010,7 +1052,7 @@ mod tests {
             .collect();
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0]["result"]["serverInfo"]["name"], "pulpo");
-        assert_eq!(lines[1]["result"]["tools"].as_array().unwrap().len(), 15);
+        assert_eq!(lines[1]["result"]["tools"].as_array().unwrap().len(), 16);
 
         // Create, list, read and run a request.
         let (text, error) = call(

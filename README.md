@@ -314,6 +314,7 @@ steps:
       status: 200
 ```
 
+- **Let Pulpo chain them.** `pulpo chain <folder> --flow "Order an item"` (or right-click a folder → *Make a flow from this folder…*) finds which response feeds which request: `{{orderId}}` ← `id` of `POST /orders`, `{{token}}` ← `access_token` of the login. The evidence comes from saved examples, the folder's OpenAPI contract and, with `--run`, real responses. Variables already set by request or folder scripts are left to them; the ones nothing provides are listed, with the request in another folder that sets them.
 - In the app, **Flows** in the sidebar shows each flow as a tree; ▶ Run lights each step green or red with its status and time, and a click shows its response and the values it saved. Right-click a request → *Add to flow…*; a request used by flows shows *In N flows*.
 - Values a flow saves live only while it runs; the environment is not touched. Request scripts keep working as usual. The flow stops at the first failing step.
 - `pulpo flow ls`, `pulpo flow show <flow>` and `pulpo flow run <flow> -e Local --junit report.xml` for CI. Through `pulpo mcp` your AI can list, create and run flows too.
