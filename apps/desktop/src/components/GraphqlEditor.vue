@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from "../i18n";
 import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from "vue";
 import type { HttpRequest } from "../core";
 import { backend, type GraphqlSchema, type Scripts } from "../workspace";
@@ -47,7 +48,7 @@ const variablesProblem = computed(() => {
     JSON.parse(text.replace(/"?\{\{[^}]+\}\}"?/g, '"x"'));
     return "";
   } catch (e) {
-    return `Variables are not valid JSON: ${(e as Error).message}`;
+    return t("Variables are not valid JSON: {0}", { 0: (e as Error).message });
   }
 });
 
@@ -119,7 +120,7 @@ async function useSchema(result: GraphqlSchema | null) {
   try {
     schema.value = buildClientSchema(JSON.parse(result.introspection));
   } catch (e) {
-    problem.value = `The schema could not be read: ${(e as Error).message}`;
+    problem.value = t("The schema could not be read: {0}", { 0: (e as Error).message });
   }
 }
 
@@ -217,20 +218,20 @@ const docs = computed(() => {
   const q = search.value.trim().toLowerCase();
   if (q) {
     const hits: { type: FullType; field: Field | null }[] = [];
-    for (const t of types.value) {
-      if (t.name.toLowerCase().includes(q)) hits.push({ type: t, field: null });
-      for (const f of membersOf(t)) {
+    for (const ty of types.value) {
+      if (ty.name.toLowerCase().includes(q)) hits.push({ type: ty, field: null });
+      for (const f of membersOf(ty)) {
         if (f.name.toLowerCase().includes(q) || (f.description ?? "").toLowerCase().includes(q)) {
-          hits.push({ type: t, field: f });
+          hits.push({ type: ty, field: f });
         }
       }
       if (hits.length > 80) break;
     }
-    return { title: `Matches for “${search.value.trim()}”`, hits };
+    return { title: t("Matches for “{0}”", { 0: search.value.trim() }), hits };
   }
   const name = current.value || roots.value[0] || "";
-  const t = types.value.find((x) => x.name === name);
-  return { title: name, type: t, hits: [] };
+  const found = types.value.find((x) => x.name === name);
+  return { title: name, type: found, hits: [] };
 });
 
 function open(name: string) {
@@ -253,25 +254,25 @@ function format() {
   <div class="gql">
     <div class="bar">
       <label v-if="operations.length > 1" class="op">
-        Operation
-        <select v-model="operationName" aria-label="Operation to run">
-          <option value="">(the only one)</option>
+        {{ $t("Operation") }}
+        <select v-model="operationName" :aria-label="$t('Operation to run')">
+          <option value="">{{ $t("(the only one)") }}</option>
           <option v-for="o in operations" :key="o" :value="o">{{ o }}</option>
         </select>
       </label>
       <span class="spacer"></span>
       <span v-if="fetched" class="muted small" :title="`Read ${fetchedWhen}`">
-        Schema {{ fetched.cached ? "from cache" : "read" }} · {{ types.length }} types
+        {{ $t("Schema {0} · {1} types", { 0: fetched.cached ? "from cache" : "read", 1: types.length }) }}
       </span>
       <button v-if="canFetch" class="ghost" :disabled="loading" @click="load(true)">
-        {{ loading ? "Reading schema…" : fetched ? "↻ Schema" : "Load schema" }}
+        {{ loading ? $t("Reading schema…") : fetched ? "↻ Schema" : $t("Load schema") }}
       </button>
-      <button v-if="fetched" class="ghost" :class="{ on: showDocs }" @click="showDocs = !showDocs">Docs</button>
+      <button v-if="fetched" class="ghost" :class="{ on: showDocs }" @click="showDocs = !showDocs">{{ $t("Docs") }}</button>
     </div>
 
     <p v-if="problem" class="warn">{{ problem }}</p>
     <p v-if="fetched && fetched.compared && (fetched.added.length || fetched.removed.length)" class="changes">
-      The schema changed since last time:
+      {{ $t("The schema changed since last time:") }}
       <span v-if="fetched.added.length" class="add">+{{ fetched.added.length }}</span>
       <span v-if="fetched.removed.length" class="del">−{{ fetched.removed.length }}</span>
       <span class="list">
@@ -279,24 +280,24 @@ function format() {
         <code v-for="n in fetched.removed.slice(0, 12)" :key="`r${n}`" class="del">−{{ n }}</code>
       </span>
     </p>
-    <p v-else-if="fetched && fetched.compared && !fetched.cached" class="muted small">The schema has not changed since last time.</p>
+    <p v-else-if="fetched && fetched.compared && !fetched.cached" class="muted small">{{ $t("The schema has not changed since last time.") }}</p>
 
     <div class="panes" :class="{ docs: showDocs && fetched }">
       <div class="pane query">
-        <span class="label">Query</span>
+        <span class="label">{{ $t("Query") }}</span>
         <CodeEditor
           v-model="query"
           class="code-area"
           language="graphql"
           :graphql-schema="schema"
-          placeholder="query { me { id name } }   (Ctrl+Space completes from the schema)"
+          :placeholder="$t('query { me { id name } } (Ctrl+Space completes from the schema)')"
           @run="emit('send')"
           @save="emit('save')"
         />
       </div>
       <div class="pane vars">
         <span class="label">
-          Variables <button class="link" @click="format">Format</button>
+          {{ $t("Variables") }} <button class="link" @click="format">{{ $t("Format") }}</button>
         </span>
         <CodeEditor
           v-model="variables"
@@ -309,8 +310,8 @@ function format() {
         />
         <p v-if="variablesProblem" class="warn small">{{ variablesProblem }}</p>
       </div>
-      <aside v-if="showDocs && fetched" class="pane explorer" aria-label="Schema docs">
-        <input v-model="search" class="search" placeholder="Search types and fields" spellcheck="false" />
+      <aside v-if="showDocs && fetched" class="pane explorer" :aria-label="$t('Schema docs')">
+        <input v-model="search" class="search" :placeholder="$t('Search types and fields')" spellcheck="false" />
         <div class="crumbs">
           <button v-for="r in roots" :key="r" class="link" :class="{ on: docs.title === r }" @click="open(r)">{{ r }}</button>
         </div>
@@ -338,11 +339,11 @@ function format() {
             >
             <div v-if="h.field?.description" class="muted small">{{ h.field.description }}</div>
           </li>
-          <li v-if="!docs.hits.length" class="muted small">Nothing matches.</li>
+          <li v-if="!docs.hits.length" class="muted small">{{ $t("Nothing matches.") }}</li>
         </ul>
       </aside>
     </div>
-    <section v-if="isSubscription" class="sub" aria-label="Subscription">
+    <section v-if="isSubscription" class="sub" :aria-label="$t('Subscription')">
       <div class="sub-bar">
         <button
           v-if="subState !== 'on'"
@@ -350,12 +351,11 @@ function format() {
           :disabled="subState === 'starting' || !backend.wsConnect"
           @click="startSubscription"
         >
-          {{ subState === "starting" ? "Connecting…" : "Subscribe" }}
+          {{ subState === "starting" ? $t("Connecting…") : $t("Subscribe") }}
         </button>
-        <button v-else class="ghost" @click="stopSubscription">Stop</button>
+        <button v-else class="ghost" @click="stopSubscription">{{ $t("Stop") }}</button>
         <span class="muted small">
-          Over WebSocket at <code>{{ toWsUrl(request.url) }}</code> (graphql-transport-ws or the older graphql-ws).
-          {{ events.filter((e) => e.kind === "data").length }} events.
+          {{ $t("Over WebSocket at") }} <code>{{ toWsUrl(request.url) }}</code> {{ $t("(graphql-transport-ws or the older graphql-ws). {0} events.", { 0: events.filter((e) => e.kind === "data").length }) }}
         </span>
       </div>
       <ol v-if="events.length" class="events">
@@ -368,9 +368,9 @@ function format() {
     </section>
 
     <p class="hint">
-      <template v-if="isSubscription">Send would post the subscription as a query; use Subscribe. </template>
-      Sent as JSON <code>{query, variables}</code> with <code>{{ "{{" }}variables}}</code> filled in. The query is saved as a
-      <code>.graphql</code> file next to the request.
+      <template v-if="isSubscription">{{ $t("Send would post the subscription as a query; use Subscribe.") }} </template>
+      {{ $t("Sent as JSON") }} <code>{query, variables}</code> {{ $t("with") }} <code>{{ "{{" }}variables}}</code> {{ $t("filled in. The query is saved as a") }}
+      <code>.graphql</code> {{ $t("file next to the request.") }}
     </p>
   </div>
 </template>

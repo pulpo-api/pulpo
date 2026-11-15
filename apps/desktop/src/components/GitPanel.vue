@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from "../i18n";
 import { computed, onMounted, ref } from "vue";
 import { backend, type DiffItem, type GitPanel } from "../workspace";
 
@@ -56,76 +57,76 @@ function commit() {
   void run("Commit", async () => {
     const id = await backend.gitCommit!(props.root, message.value);
     message.value = "";
-    return `Committed ${id}.`;
+    return t("Committed {0}.", { 0: id });
   });
 }
 
 function switchTo(branch: string, create = false) {
   if (!branch || (branch === panel.value?.status.branch && !create)) return;
-  void run(create ? "New branch" : "Switch", async () => {
+  void run(create ? t("New branch") : t("Switch"), async () => {
     await backend.gitSwitch!(props.root, branch, create);
     newBranch.value = "";
-    return `On ${branch}.`;
+    return t("On {0}.", { 0: branch });
   }, true);
 }
 
 const blockedByUnsaved = computed(() =>
-  props.unsaved ? `Save your ${props.unsaved} unsaved request(s) first (Ctrl+S).` : "",
+  props.unsaved ? t("Save your {0} unsaved request(s) first (Ctrl+S).", { 0: props.unsaved }) : "",
 );
 </script>
 
 <template>
   <div class="backdrop" @click.self="emit('close')">
-    <section class="card panel" role="dialog" aria-label="Git">
+    <section class="card panel" role="dialog" :aria-label="$t('Git')">
       <header>
         <div>
-          <h2>Git</h2>
+          <h2>{{ $t("Git") }}</h2>
           <p v-if="panel?.status.repo" class="sub">
-            On <b>{{ panel.status.branch }}</b>
+            {{ $t("On") }} <b>{{ panel.status.branch }}</b>
             <template v-if="panel.status.upstream">
               · {{ panel.status.upstream }}
-              <span v-if="panel.status.ahead" title="Commits to push">↑{{ panel.status.ahead }}</span>
-              <span v-if="panel.status.behind" title="Commits to pull">↓{{ panel.status.behind }}</span>
+              <span v-if="panel.status.ahead" :title="$t('Commits to push')">↑{{ panel.status.ahead }}</span>
+              <span v-if="panel.status.behind" :title="$t('Commits to pull')">↓{{ panel.status.behind }}</span>
             </template>
-            <template v-else> · not pushed yet</template>
+            <template v-else> {{ $t("· not pushed yet") }}</template>
           </p>
         </div>
-        <button class="ghost" title="Close" @click="emit('close')">✕</button>
+        <button class="ghost" :title="$t('Close')" @click="emit('close')">✕</button>
       </header>
 
-      <p v-if="!available" class="note">Git runs in the desktop app (or use <code>pulpo diff</code> in a terminal).</p>
+      <p v-if="!available" class="note">{{ $t("Git runs in the desktop app (or use") }} <code>pulpo diff</code> {{ $t("in a terminal).") }}</p>
       <p v-else-if="panel && !panel.status.repo" class="note">
-        This workspace is not in a git repository. Run <code>git init</code> in its folder (or in a parent one) to version it.
+        {{ $t("This workspace is not in a git repository. Run") }} <code>git init</code> {{ $t("in its folder (or in a parent one) to version it.") }}
       </p>
       <template v-else-if="panel">
         <div class="bar">
           <select
             :value="panel.status.branch"
             :disabled="!!busy || !!blockedByUnsaved"
-            aria-label="Branch"
+            :aria-label="$t('Branch')"
             @change="switchTo(($event.target as HTMLSelectElement).value)"
           >
             <option v-for="b in panel.branches" :key="b" :value="b">{{ b }}</option>
           </select>
           <form class="new" @submit.prevent="switchTo(newBranch.trim(), true)">
-            <input v-model="newBranch" placeholder="new-branch" spellcheck="false" aria-label="New branch name" />
-            <button class="ghost" :disabled="!newBranch.trim() || !!busy || !!blockedByUnsaved">Create</button>
+            <input v-model="newBranch" :placeholder="$t('new-branch')" spellcheck="false" :aria-label="$t('New branch name')" />
+            <button class="ghost" :disabled="!newBranch.trim() || !!busy || !!blockedByUnsaved">{{ $t("Create") }}</button>
           </form>
           <span class="grow"></span>
           <button class="ghost" :disabled="!!busy || !!blockedByUnsaved" @click="run('Pull', () => backend.gitPull!(root), true)">
-            {{ busy === "Pull" ? "Pulling…" : "Pull" }}
+            {{ busy === "Pull" ? $t("Pulling…") : $t("Pull") }}
           </button>
           <button class="ghost" :disabled="!!busy" @click="run('Push', () => backend.gitPush!(root))">
-            {{ busy === "Push" ? "Pushing…" : "Push" }}
+            {{ busy === "Push" ? $t("Pushing…") : $t("Push") }}
           </button>
         </div>
         <p v-if="blockedByUnsaved" class="warn">{{ blockedByUnsaved }}</p>
 
         <div class="list">
-          <p v-if="!changedCount" class="empty">No changes since the last commit.</p>
+          <p v-if="!changedCount" class="empty">{{ $t("No changes since the last commit.") }}</p>
           <template v-if="changes">
             <div v-for="item in changes.added" :key="`a${item.id}`" class="change">
-              <span class="tag add">added</span>
+              <span class="tag add">{{ $t("added") }}</span>
               <code class="method">{{ item.method }}</code>
               <button class="link" @click="emit('open', item.id)">{{ where(item) }}{{ names[item.id] ?? item.name }}</button>
             </div>
@@ -138,17 +139,17 @@ const blockedByUnsaved = computed(() =>
               </ul>
             </div>
             <div v-for="item in changes.removed" :key="`r${item.id}`" class="change">
-              <span class="tag del">removed</span>
+              <span class="tag del">{{ $t("removed") }}</span>
               <code class="method">{{ item.method }}</code>
               <span>{{ where(item) }}{{ item.name }}</span>
             </div>
             <div v-for="(line, i) in [...changes.folders, ...changes.environments]" :key="`f${i}`" class="change">
-              <span class="tag mod">changed</span>
+              <span class="tag mod">{{ $t("changed") }}</span>
               <span>{{ line }}</span>
             </div>
           </template>
           <details v-if="otherFiles" class="files">
-            <summary>{{ otherFiles }} changed file(s)</summary>
+            <summary>{{ $t("{0} changed file(s)", { 0: otherFiles }) }}</summary>
             <div v-for="f in panel.status.files" :key="f.path" class="file">
               <span class="state">{{ f.state }}</span> <code>{{ f.path }}</code>
             </div>
@@ -159,15 +160,15 @@ const blockedByUnsaved = computed(() =>
           <textarea
             v-model="message"
             rows="2"
-            placeholder="Commit message (what changed in the API calls)"
-            aria-label="Commit message"
+            :placeholder="$t('Commit message (what changed in the API calls)')"
+            :aria-label="$t('Commit message')"
           ></textarea>
           <button
             class="primary"
             :disabled="!!busy || nothingToCommit || !message.trim() || !!blockedByUnsaved"
-            :title="nothingToCommit ? 'Nothing to commit' : 'Commit every change of this workspace'"
+            :title="nothingToCommit ? $t('Nothing to commit') : $t('Commit every change of this workspace')"
           >
-            {{ busy === "Commit" ? "Committing…" : "Commit" }}
+            {{ busy === "Commit" ? $t("Committing…") : $t("Commit") }}
           </button>
         </form>
       </template>

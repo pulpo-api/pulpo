@@ -9,10 +9,19 @@ import { varContext } from "../varContext";
 
 /** A one-line text field that highlights `{{variables}}`, shows their value on hover and
  * completes them after `{{`. Behaves like an input: no new lines, Enter emits `enter`. */
-const props = withDefaults(defineProps<{ modelValue: string; placeholder?: string; ariaLabel?: string }>(), {
+const props = withDefaults(
+  defineProps<{
+    modelValue: string;
+    placeholder?: string;
+    ariaLabel?: string;
+    /** Called with pasted text; returning true takes the paste over (nothing is inserted). */
+    interceptPaste?: (text: string) => boolean;
+  }>(),
+  {
   placeholder: "",
-  ariaLabel: "",
-});
+    ariaLabel: "",
+  },
+);
 const emit = defineEmits<{ "update:modelValue": [value: string]; enter: []; run: []; save: [] }>();
 
 const host = ref<HTMLDivElement | null>(null);
@@ -63,6 +72,14 @@ onMounted(() => {
         singleLine,
         theme,
         placeholderExt(props.placeholder),
+        EditorView.domEventHandlers({
+          paste: (event) => {
+            const text = event.clipboardData?.getData("text/plain");
+            if (!text || !props.interceptPaste?.(text)) return false;
+            event.preventDefault();
+            return true;
+          },
+        }),
         EditorView.contentAttributes.of({ "aria-label": props.ariaLabel || props.placeholder, spellcheck: "false" }),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) emit("update:modelValue", update.state.doc.toString());

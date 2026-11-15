@@ -53,45 +53,43 @@ const formats: Record<string, string> = {
 
 <template>
   <div class="backdrop" @click.self="emit('close')">
-    <section class="dialog card" role="dialog" aria-label="Import">
+    <section class="dialog card" role="dialog" :aria-label="$t('Import')">
       <header>
-        <h2>Import</h2>
-        <button class="icon" title="Close" @click="emit('close')">✕</button>
+        <h2>{{ $t("Import") }}</h2>
+        <button class="icon" :title="$t('Close')" @click="emit('close')">✕</button>
       </header>
 
       <p v-if="!available" class="muted">
-        Importing runs in the Pulpo engine, so it needs the desktop app. The browser preview can't import.
+        {{ $t("Importing runs in the Pulpo engine, so it needs the desktop app. The browser preview can't import.") }}
       </p>
       <p v-else-if="blocked" class="warn">{{ blocked }}</p>
       <template v-else>
         <p class="muted">
-          Into <code>{{ target || "workspace root" }}</code>. Recognised automatically: Postman (v2.1) collections and
-          environments, Insomnia, Hoppscotch, Bruno (pick its <code>bruno.json</code>), OpenAPI 3, HAR files from the browser,
-          <code>.http</code> files and curl commands.
+          {{ $t("Into") }} <code>{{ target || "workspace root" }}</code>{{ $t(". Recognised automatically: Postman (v2.1) collections and environments, Insomnia, Hoppscotch, Bruno (pick its") }} <code>bruno.json</code>{{ $t("), OpenAPI 3, HAR files from the browser,") }}
+          <code>.http</code> {{ $t("files and curl commands.") }}
         </p>
 
-        <button class="primary" :disabled="busy" @click="pickFile">Choose a file…</button>
+        <button class="primary" :disabled="busy" @click="pickFile">{{ $t("Choose a file…") }}</button>
 
-        <div class="or"><span>or paste</span></div>
+        <div class="or"><span>{{ $t("or paste") }}</span></div>
         <textarea
           v-model="pasted"
           class="code"
           spellcheck="false"
-          placeholder="curl 'https://api.example.com/orders' -H 'Accept: application/json'"
+          :placeholder="$t('curl \'https://api.example.com/orders\' -H \'Accept: application/json\'')"
         ></textarea>
         <button class="ghost" :disabled="busy || !pasted.trim()" @click="importText">
-          {{ busy ? "Importing…" : "Import pasted text" }}
+          {{ busy ? $t("Importing…") : $t("Import pasted text") }}
         </button>
       </template>
 
       <div v-if="result" class="result ok">
         <strong>
-          Imported {{ result.format ? formats[result.format] : "" }}: {{ result.requests }} requests,
-          {{ result.folders }} folders<template v-if="result.environments.length">, {{ result.environments.length }} environment(s)</template>.
+          {{ $t("Imported {0}: {1} requests, {2} folders", { 0: result.format ? $t(formats[result.format]) : "", 1: result.requests, 2: result.folders }) }}<template v-if="result.environments.length">{{ $t(", {0} environment(s)", { 0: result.environments.length }) }}</template>.
         </strong>
         <ul v-if="result.warnings.length">
           <li v-for="(w, i) in result.warnings.slice(0, 12)" :key="i">{{ w }}</li>
-          <li v-if="result.warnings.length > 12">… and {{ result.warnings.length - 12 }} more</li>
+          <li v-if="result.warnings.length > 12">{{ $t("… and {0} more", { 0: result.warnings.length - 12 }) }}</li>
         </ul>
       </div>
       <p v-if="error" class="result bad">{{ error }}</p>

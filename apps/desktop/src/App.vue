@@ -20,7 +20,10 @@ import FlowView from "./components/FlowView.vue";
 import ContractsPanel from "./components/ContractsPanel.vue";
 import MockPanel from "./components/MockPanel.vue";
 import OpenApiEditor from "./components/OpenApiEditor.vue";
+import CommandPalette, { type PaletteItem } from "./components/CommandPalette.vue";
 import { AUTHOR, AUTHOR_URL, ISSUES_URL, REPO_URL } from "./about";
+import { applyPasted, parsePaste } from "./paste";
+import { LOCALES, locale, setLocale, t, type Locale } from "./i18n";
 import { resolveText } from "./variables";
 import { applyPathParams } from "./params";
 import { applyAuth, asSendError, coreInfo, isEventStream, isMqtt, isWebSocketUrl, resolveAuth, type CoreInfo, type HttpResponse, type SendError } from "./core";
@@ -106,6 +109,83 @@ const showGit = ref(false);
 const showContracts = ref(false);
 const showMock = ref(false);
 const showAbout = ref(false);
+const showPalette = ref(false);
+
+/** Folder names of every request ("Orders / Admin"), for the palette. */
+const folderLabels = computed(() => {
+  const out = new Map<string, string>();
+  const walk = (nodes: TreeNode[], path: string[]) => {
+    for (const n of nodes) {
+      if (n.type === "folder") walk(n.children, [...path, n.name]);
+      else out.set(n.id, path.join(" / "));
+    }
+  };
+  walk(workspace.value?.tree ?? [], []);
+  return out;
+});
+
+const PROTOCOL_BADGES: Record<string, string> = {
+  graphql: "GQL",
+  websocket: "WS",
+  grpc: "gRPC",
+  soap: "SOAP",
+  sse: "SSE",
+  socketio: "SIO",
+  mqtt: "MQTT",
+};
+
+const paletteItems = computed<PaletteItem[]>(() => {
+  const items: PaletteItem[] = requests.value.map((n) => ({
+    id: `request:${n.id}`,
+    label: n.name,
+    group: "Request",
+    hint: folderLabels.value.get(n.id) ?? "",
+    badge: n.protocol === "http" ? n.request.method : PROTOCOL_BADGES[n.protocol] ?? n.protocol.toUpperCase(),
+    run: () => select(n),
+  }));
+  for (const f of flows.value) {
+    items.push({ id: `flow:${f.id}`, label: f.name, group: "Flow", run: () => openFlow(f.id) });
+  }
+  items.push({ id: "env:", label: t("No environment"), group: "Environment", run: () => (activeEnvId.value = "") });
+  for (const env of environments.value) {
+    items.push({ id: `env:${env.id}`, label: t("Use {0}", { 0: env.name }), group: "Environment", run: () => (activeEnvId.value = env.id) });
+  }
+  const action = (id: string, label: string, run: () => void, hint = "") =>
+    items.push({ id: `action:${id}`, label, group: "Action", hint, run });
+  if (selected.value) {
+    action("send", t("Send the request"), () => void send(), "Ctrl+Enter");
+    action("save", t("Save the request"), () => void save(), "Ctrl+S");
+    action("close", t("Close the tab"), () => closeTab(selectedId.value), "Ctrl+W");
+    action("code", t("Show the request as code"), () => (showCode.value = true));
+    action("curl", t("Copy as curl"), () => void copyCurl(selectedId.value));
+  }
+  action("new-request", t("New request"), () => void newRequest(t("New request")));
+  action("new-folder", t("New folder"), () => void newFolder(t("New folder")));
+  action("import", t("Import…"), () => (showImport.value = true), t("Postman, OpenAPI, curl…"));
+  action("export", t("Export…"), () => (exporting.value = ""), t("Postman, OpenAPI, .http, HTML"));
+  action("run", t("Run the collection"), () => openRunner(""));
+  action("envs", t("Manage environments"), () => (showEnvironments.value = true));
+  action("cookies", "Cookies", () => (showCookies.value = true));
+  action("tokens", "OAuth 2.0 tokens", () => (showTokens.value = true));
+  if (backend.persistent) {
+    action("git", t("Git: changes and commit"), () => (showGit.value = true));
+    action("contracts", "API contracts", () => (showContracts.value = true), "OpenAPI, .proto, WSDL, GraphQL");
+    action("mock", t("Mock server"), () => (showMock.value = true));
+    action("open", t("Open another folder"), () => void openFolder());
+  }
+  action("theme", theme.value === "dark" ? t("Switch to light theme") : t("Switch to dark theme"), () => {
+    theme.value = theme.value === "dark" ? "light" : "dark";
+  });
+  action("shortcuts", t("Keyboard shortcuts"), () => (showShortcuts.value = true), "Ctrl+/");
+  action("about", t("About Pulpo"), () => (showAbout.value = true));
+  for (const l of LOCALES) {
+    if (l.code !== locale.value) {
+      // "Language" in English too, for whoever lands in a language they cannot read.
+      items.push({ id: `lang:${l.code}`, label: `${t("Language")}: ${l.name}`, group: t("Language"), hint: "Language", run: () => void setLocale(l.code) });
+    }
+  }
+  return items;
+});
 
 function openLink(url: string) {
   if (backend.openLink) void backend.openLink(url);
@@ -178,7 +258,7 @@ async function addToFlow(flowId: string, name?: string) {
   const requestId = addingToFlow.value;
   if (!ws || !requestId || !backend.addFlowStep) return;
   try {
-    const target = flowId || (await backend.createFlow!(ws.root, name || "New flow")).id;
+    const target = flowId || (await backend.createFlow!(ws.root, name || t("New flow"))).id;
     await backend.addFlowStep(ws.root, target, requestId);
     addingToFlow.value = null;
     await loadFlows();
@@ -197,7 +277,7 @@ function startChain(folderId: string) {
   walk(workspace.value?.tree ?? [], (n) => {
     if (n.type === "folder" && n.id === folderId) name = n.name;
   });
-  chaining.value = { folder: folderId, name: name || "Flow", run: false, busy: false, result: "" };
+  chaining.value = { folder: folderId, name: name || t("Flow"), run: false, busy: false, result: "" };
 }
 async function confirmChain() {
   const c = chaining.value;
@@ -307,7 +387,7 @@ async function saveExample(response: HttpResponse) {
     });
     pinTab(node.id);
     requestEditor.value?.openExamples(false);
-    flash("Saved as an example: see the Examples tab");
+    flash(t("Saved as an example: see the Examples tab"));
   } catch (e) {
     problem.value = asCollectionError(e);
   }
@@ -336,7 +416,7 @@ function addTest(code: string) {
   if (!node) return;
   const current = node.scripts.test.trimEnd();
   node.scripts.test = current ? `${current}\n\n${code}` : code;
-  flash("Test added: see the Tests tab, then save");
+  flash(t("Test added: see the Tests tab, then save"));
 }
 
 /** A pulpo:// link waiting for its workspace folder to be picked. */
@@ -347,7 +427,7 @@ async function copyLink(id: string) {
   if (!ws || !backend.requestLink) return;
   try {
     await navigator.clipboard.writeText(await backend.requestLink(ws.root, id));
-    flash("Link copied: whoever has this repository can open it in Pulpo");
+    flash(t("Link copied: whoever has this repository can open it in Pulpo"));
   } catch (e) {
     problem.value = { kind: "io", message: String(e) };
   }
@@ -376,7 +456,7 @@ async function followLink(text: string, roots = recentRoots()) {
       if (dirty.value.size) {
         problem.value = {
           kind: "io",
-          message: `Save your ${dirty.value.size} unsaved request(s) first (Ctrl+S): the link opens another workspace.`,
+          message: t("Save your {0} unsaved request(s) first (Ctrl+S): the link opens another workspace.", { 0: dirty.value.size }),
         };
         return;
       }
@@ -384,7 +464,7 @@ async function followLink(text: string, roots = recentRoots()) {
     }
     const node = requests.value.find((n) => n.id === target.link.request);
     if (node) select(toEntry(node));
-    else problem.value = { kind: "io", message: `The link's request is not in this workspace any more (${target.link.request}).` };
+    else problem.value = { kind: "io", message: t("The link's request is not in this workspace any more ({0}).", { 0: target.link.request }) };
   } catch (e) {
     problem.value = { kind: "io", message: String(e) };
   }
@@ -416,7 +496,7 @@ async function copyCurl(id: string) {
     });
     await navigator.clipboard.writeText(code);
     problem.value = null;
-    flash(`Copied “${node.name}” as curl`);
+    flash(t("Copied “{0}” as curl", { 0: node.name }));
   } catch (e) {
     problem.value = asCollectionError(e);
   }
@@ -698,7 +778,7 @@ async function openFolder() {
 async function createWorkspace() {
   const root = await backend.pickFolder();
   if (!root) return;
-  const name = root.split(/[\\/]/).filter(Boolean).pop() ?? "My API";
+  const name = root.split(/[\\/]/).filter(Boolean).pop() ?? t("My API");
   try {
     adopt(await backend.init(root, name));
     rememberRoot(root);
@@ -752,6 +832,20 @@ async function newRequest(name: string) {
   }
 }
 
+/** Ctrl+V outside a text field: a curl command or a URL becomes a new request, saved. */
+async function onPaste(event: ClipboardEvent) {
+  const target = event.target as HTMLElement | null;
+  if (target?.closest("input, textarea, select, [contenteditable], .cm-editor")) return;
+  const pasted = parsePaste(event.clipboardData?.getData("text/plain") ?? "");
+  if (!pasted || !workspace.value) return;
+  event.preventDefault();
+  await newRequest(pasted.name);
+  const node = selected.value;
+  if (!node || node.name !== pasted.name) return;
+  applyPasted(node.request, pasted);
+  await save(node);
+}
+
 async function newFolder(name: string) {
   if (!workspace.value) return;
   try {
@@ -793,7 +887,7 @@ async function organize(run: (root: string) => Promise<Organized | void>): Promi
   if (dirty.value.size) {
     problem.value = {
       kind: "io",
-      message: `Save your ${dirty.value.size} unsaved request(s) first (Ctrl+S): organizing moves files and reloads the tree.`,
+      message: t("Save your {0} unsaved request(s) first (Ctrl+S): organizing moves files and reloads the tree.", { 0: dirty.value.size }),
     };
     return;
   }
@@ -890,9 +984,11 @@ async function send() {
 const SHORTCUTS: [string, string][] = [
   ["Ctrl+Enter", "Send the request"],
   ["Ctrl+S", "Save the request"],
+  ["Ctrl+P", "Command palette: requests, flows, environments and actions (> for actions)"],
   ["Ctrl+K", "Search requests"],
   ["Ctrl+W", "Close the tab"],
   ["Ctrl+Tab / Ctrl+Shift+Tab", "Next / previous tab"],
+  ["Ctrl+V", "Paste a curl or a URL: new request (in the URL bar: fills this one)"],
   ["Ctrl+/", "Show these shortcuts"],
   ["Esc", "Close dialogs"],
 ];
@@ -912,6 +1008,9 @@ function onKey(event: KeyboardEvent) {
     event.preventDefault();
     if (editingFolder.value !== null) void folderEditor.value?.save();
     else void save();
+  } else if (key === "p") {
+    event.preventDefault();
+    showPalette.value = !showPalette.value;
   } else if (key === "k") {
     event.preventDefault();
     sidebar.value?.focusSearch();
@@ -929,6 +1028,7 @@ function onKey(event: KeyboardEvent) {
 
 onMounted(async () => {
   window.addEventListener("keydown", onKey);
+  window.addEventListener("paste", onPaste);
   info.value = await coreInfo();
   const last = backend.persistent ? localStorage.getItem(LAST_ROOT) : "memory";
   if (last) await openRoot(last);
@@ -938,7 +1038,10 @@ onMounted(async () => {
   });
 });
 
-onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
+onBeforeUnmount(() => {
+  window.removeEventListener("keydown", onKey);
+  window.removeEventListener("paste", onPaste);
+});
 </script>
 
 <template>
@@ -1034,12 +1137,12 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
             isMqtt(tab.request) ? "MQTT" : tab.request.socketio ? "SIO" : isWebSocketUrl(tab.request.url) ? "WS" : /^\s*grpcs?:\/\//i.test(tab.request.url) ? "gRPC" : isEventStream(tab.request) ? "SSE" : tab.request.soap ? "SOAP" : tab.request.graphql ? "GQL" : tab.protocol === "http" ? tab.request.method : tab.protocol.toUpperCase().slice(0, 4)
           }}</span>
           <span class="tab-name">{{ tab.name }}</span>
-          <span v-if="dirty.has(tab.id)" class="dirty" title="Unsaved changes"></span>
-          <span class="close" title="Close (Ctrl+W)" @click.stop="closeTab(tab.id)">✕</span>
+          <span v-if="dirty.has(tab.id)" class="dirty" :title="$t('Unsaved changes')"></span>
+          <span class="close" :title="$t('Close (Ctrl+W)')" @click.stop="closeTab(tab.id)">✕</span>
         </button>
         <span class="spacer"></span>
-        <button class="ghost small" title="Keyboard shortcuts (Ctrl+/)" @click="showShortcuts = true">⌨</button>
-        <button class="ghost small" title="About Pulpo" @click="showAbout = true">ⓘ</button>
+        <button class="ghost small" :title="$t('Keyboard shortcuts (Ctrl+/)')" @click="showShortcuts = true">⌨</button>
+        <button class="ghost small" :title="$t('About Pulpo')" @click="showAbout = true">ⓘ</button>
       </nav>
 
       <header class="topbar">
@@ -1053,32 +1156,41 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
             :title="`Used in: ${flowUsage[selected.id].join(', ')}`"
             @click="openFlowOf(selected.id)"
           >
-            ⇢ In {{ flowUsage[selected.id].length }} flow{{ flowUsage[selected.id].length > 1 ? "s" : "" }}
+            {{ $t(flowUsage[selected.id].length > 1 ? "⇢ In {0} flows" : "⇢ In 1 flow", { 0: flowUsage[selected.id].length }) }}
           </button>
         </div>
         <div class="actions">
-          <select v-model="activeEnvId" class="env" title="Environment used to resolve variables">
-            <option value="">No environment</option>
+          <select v-model="activeEnvId" class="env" :title="$t('Environment used to resolve variables')">
+            <option value="">{{ $t("No environment") }}</option>
             <option v-for="env in environments" :key="env.id" :value="env.id">{{ env.name }}</option>
           </select>
-          <button class="ghost" title="Manage environments" @click="showEnvironments = true">⚙</button>
-          <button class="ghost" title="Cookies of this environment" @click="showCookies = true">🍪</button>
-          <button class="ghost" title="OAuth 2.0 tokens of this environment" @click="showTokens = true">🔑</button>
-          <button class="ghost" title="Show as code: curl, fetch, Python, Java, Go, C#…" @click="showCode = true">&lt;/&gt;</button>
+          <button class="ghost" :title="$t('Manage environments')" @click="showEnvironments = true">⚙</button>
+          <button class="ghost" :title="$t('Cookies of this environment')" @click="showCookies = true">🍪</button>
+          <button class="ghost" :title="$t('OAuth 2.0 tokens of this environment')" @click="showTokens = true">🔑</button>
+          <button class="ghost" :title="$t('Show as code: curl, fetch, Python, Java, Go, C#…')" @click="showCode = true">&lt;/&gt;</button>
           <span v-if="notice" class="notice" role="status">{{ notice }}</span>
           <button class="ghost danger" :class="{ armed: confirmDelete }" @click="deleteSelected">
-            {{ confirmDelete ? "Click again to delete" : "Delete" }}
+            {{ confirmDelete ? $t("Click again to delete") : $t("Delete") }}
           </button>
-          <button class="ghost" :disabled="!dirty.has(selected.id)" title="Ctrl+S" @click="save()">
-            {{ dirty.has(selected.id) ? "Save" : "Saved" }}
+          <button class="ghost" :disabled="!dirty.has(selected.id)" :title="$t('Ctrl+S')" @click="save()">
+            {{ dirty.has(selected.id) ? $t("Save") : $t("Saved") }}
           </button>
           <button
             class="ghost"
-            :title="`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`"
+            :title="`Switch to ${theme === $t('dark') ? $t('light') : $t('dark')} theme`"
             @click="theme = theme === 'dark' ? 'light' : 'dark'"
           >
             {{ theme === "dark" ? "☀" : "☾" }}
           </button>
+          <select
+            class="env lang"
+            :value="locale"
+            :title="$t('Language')"
+            :aria-label="$t('Language')"
+            @change="setLocale(($event.target as HTMLSelectElement).value as Locale)"
+          >
+            <option v-for="l in LOCALES" :key="l.code" :value="l.code">{{ l.name }}</option>
+          </select>
         </div>
       </header>
 
@@ -1154,38 +1266,52 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       />
 
       <footer class="statusbar">
-        <button class="link-plain" title="About Pulpo" @click="showAbout = true">
-          Pulpo {{ info?.version ?? "…" }} · by {{ AUTHOR }}
+        <button class="link-plain" :title="$t('About Pulpo')" @click="showAbout = true">
+          {{ $t("Pulpo {0} · by {1}", { 0: info?.version ?? "…", 1: AUTHOR }) }}
         </button>
         <span class="muted">{{ selected.id }}</span>
       </footer>
     </main>
 
+    <CommandPalette
+      v-if="showPalette"
+      :items="paletteItems"
+      :placeholder="$t('Go to a request, flow or environment, or type > for actions')"
+      :empty="$t('Nothing matches')"
+      @close="showPalette = false"
+    />
+
     <div v-if="showAbout" class="backdrop" @click.self="showAbout = false" @keydown.esc="showAbout = false">
-      <section class="card about" role="dialog" aria-label="About Pulpo">
-        <h2>Pulpo <span class="muted small">{{ info?.version ?? "" }}</span></h2>
-        <p>The API client that follows your code. Free and open source.</p>
+      <section class="card about" role="dialog" :aria-label="$t('About Pulpo')">
+        <h2>{{ $t("Pulpo") }} <span class="muted small">{{ info?.version ?? "" }}</span></h2>
+        <p>{{ $t("The API client that follows your code. Free and open source.") }}</p>
         <p>
-          Made by <button class="link" @click="openLink(AUTHOR_URL)">{{ AUTHOR }}</button>
+          {{ $t("Made by") }} <button class="link" @click="openLink(AUTHOR_URL)">{{ AUTHOR }}</button>
         </p>
         <p class="muted small">
-          Found a bug or missing something? <button class="link" @click="openLink(ISSUES_URL)">Tell me on GitHub</button>
-          and I will fix it.
+          {{ $t("Found a bug or missing something?") }} <button class="link" @click="openLink(ISSUES_URL)">{{ $t("Tell me on GitHub") }}</button>
+          {{ $t("and I will fix it.") }}
         </p>
         <p class="muted small">
-          MIT or Apache-2.0 · <button class="link" @click="openLink(REPO_URL)">Source code</button>
+          {{ $t("MIT or Apache-2.0 ·") }} <button class="link" @click="openLink(REPO_URL)">{{ $t("Source code") }}</button>
         </p>
-        <footer><button class="primary" @click="showAbout = false">Close</button></footer>
+        <label class="about-lang">
+          {{ $t("Language") }}
+          <select :value="locale" @change="setLocale(($event.target as HTMLSelectElement).value as Locale)">
+            <option v-for="l in LOCALES" :key="l.code" :value="l.code">{{ l.name }}</option>
+          </select>
+        </label>
+        <footer><button class="primary" @click="showAbout = false">{{ $t("Close") }}</button></footer>
       </section>
     </div>
 
     <div v-if="showShortcuts" class="backdrop" @click.self="showShortcuts = false">
-      <section class="card shortcuts" role="dialog" aria-label="Keyboard shortcuts">
-        <h2>Keyboard shortcuts</h2>
+      <section class="card shortcuts" role="dialog" :aria-label="$t('Keyboard shortcuts')">
+        <h2>{{ $t("Keyboard shortcuts") }}</h2>
         <dl>
           <template v-for="[keys, action] in SHORTCUTS" :key="keys">
             <dt><kbd>{{ keys }}</kbd></dt>
-            <dd>{{ action }}</dd>
+            <dd>{{ $t(action) }}</dd>
           </template>
         </dl>
       </section>
@@ -1229,56 +1355,53 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       @close="showTokens = false"
     />
 
-    <div v-if="pendingLink" class="link-ask card" role="alertdialog" aria-label="Open link">
+    <div v-if="pendingLink" class="link-ask card" role="alertdialog" :aria-label="$t('Open link')">
       <p>
-        This link opens <b>{{ pendingLink.name || pendingLink.text }}</b>
+        {{ $t("This link opens") }} <b>{{ pendingLink.name || pendingLink.text }}</b>
         <template v-if="pendingLink.repo">
-          from <code>{{ pendingLink.repo }}</code><template v-if="pendingLink.workspace">, folder <code>{{ pendingLink.workspace }}</code></template>
-        </template>.
-        Pick that folder in your clone once; Pulpo remembers it.
+          {{ $t("from") }} <code>{{ pendingLink.repo }}</code><template v-if="pendingLink.workspace">{{ $t(", folder") }} <code>{{ pendingLink.workspace }}</code></template>
+        </template>{{ $t(". Pick that folder in your clone once; Pulpo remembers it.") }}
       </p>
       <div class="link-actions">
-        <button class="ghost" @click="pendingLink = null">Cancel</button>
-        <button class="primary" @click="pickLinkFolder">Choose folder…</button>
+        <button class="ghost" @click="pendingLink = null">{{ $t("Cancel") }}</button>
+        <button class="primary" @click="pickLinkFolder">{{ $t("Choose folder…") }}</button>
       </div>
     </div>
 
-    <div v-if="chaining" class="link-ask card" role="dialog" aria-label="Make a flow">
+    <div v-if="chaining" class="link-ask card" role="dialog" :aria-label="$t('Make a flow')">
       <p>
-        Pulpo finds which response feeds which request (<code v-pre>{{orderId}}</code> ← <code>id</code> of
-        <code>POST /orders</code>) from saved examples and the folder's OpenAPI contract, and makes a flow that passes
-        those values.
+        {{ $t("Pulpo finds which response feeds which request (") }}<code v-pre>{{orderId}}</code> ← <code>id</code> {{ $t("of") }}
+        <code>POST /orders</code>{{ $t(") from saved examples and the folder's OpenAPI contract, and makes a flow that passes those values.") }}
       </p>
       <form class="flow-pick" @submit.prevent="confirmChain">
-        <input v-model="chaining.name" placeholder="Flow name" spellcheck="false" aria-label="Flow name" />
+        <input v-model="chaining.name" :placeholder="$t('Flow name')" spellcheck="false" :aria-label="$t('Flow name')" />
         <button class="ghost" :disabled="chaining.busy || !chaining.name.trim()">
-          {{ chaining.busy ? "Working…" : "Make flow" }}
+          {{ chaining.busy ? $t("Working…") : $t("Make flow") }}
         </button>
       </form>
       <label class="check">
         <input v-model="chaining.run" type="checkbox" />
-        Also call the API in order to learn from real responses
-        ({{ environments.find((e) => e.id === activeEnvId)?.name || "no environment" }})
+        {{ $t("Also call the API in order to learn from real responses ({0})", { 0: environments.find((e) => e.id === activeEnvId)?.name || "no environment" }) }}
       </label>
       <pre v-if="chaining.result" class="chain-result">{{ chaining.result }}</pre>
       <div class="link-actions">
-        <button class="ghost" @click="chaining = null">Close</button>
+        <button class="ghost" @click="chaining = null">{{ $t("Close") }}</button>
       </div>
     </div>
 
-    <div v-if="addingToFlow" class="link-ask card" role="dialog" aria-label="Add to flow">
+    <div v-if="addingToFlow" class="link-ask card" role="dialog" :aria-label="$t('Add to flow')">
       <p>
-        Add <b>{{ requests.find((n) => n.id === addingToFlow)?.name ?? addingToFlow }}</b> as the last step of a flow:
+        {{ $t("Add") }} <b>{{ requests.find((n) => n.id === addingToFlow)?.name ?? addingToFlow }}</b> {{ $t("as the last step of a flow:") }}
       </p>
       <div class="flow-pick">
         <button v-for="f in flows" :key="f.id" class="ghost" @click="addToFlow(f.id)">{{ f.name }}</button>
       </div>
       <form class="flow-pick" @submit.prevent="newFlowForStep.trim() && addToFlow('', newFlowForStep.trim())">
-        <input v-model="newFlowForStep" placeholder="Or a new flow: Book a visit" spellcheck="false" />
-        <button class="ghost" :disabled="!newFlowForStep.trim()">Create</button>
+        <input v-model="newFlowForStep" :placeholder="$t('Or a new flow: Book a visit')" spellcheck="false" />
+        <button class="ghost" :disabled="!newFlowForStep.trim()">{{ $t("Create") }}</button>
       </form>
       <div class="link-actions">
-        <button class="ghost" @click="addingToFlow = null">Cancel</button>
+        <button class="ghost" @click="addingToFlow = null">{{ $t("Cancel") }}</button>
       </div>
     </div>
 
@@ -1336,16 +1459,16 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
     >
       <div class="hello card">
         <img src="/pulpo.svg" width="72" height="72" alt="" />
-        <h1>{{ workspace ? workspace.name : "Welcome to Pulpo" }}</h1>
+        <h1>{{ workspace ? workspace.name : $t("Welcome to Pulpo") }}</h1>
         <template v-if="workspace">
-          <p v-if="requests.length" class="muted">Pick a request in the sidebar, or press <kbd>Ctrl+K</kbd> to search.</p>
-          <p v-else class="muted">This workspace has no requests yet. Use <strong>+ Request</strong> or <strong>Import</strong> in the sidebar.</p>
+          <p v-if="requests.length" class="muted">{{ $t("Pick a request in the sidebar, or press") }} <kbd>Ctrl+K</kbd> {{ $t("to search.") }}</p>
+          <p v-else class="muted">{{ $t("This workspace has no requests yet. Use") }} <strong>{{ $t("+ Request") }}</strong> {{ $t("or") }} <strong>{{ $t("Import") }}</strong> {{ $t("in the sidebar.") }}</p>
         </template>
         <template v-else>
-          <p class="muted">Your collections live as plain files in a folder of your repo.</p>
+          <p class="muted">{{ $t("Your collections live as plain files in a folder of your repo.") }}</p>
           <div class="buttons">
-            <button class="primary" @click="openFolder">Open a workspace folder</button>
-            <button class="ghost" @click="createWorkspace">Create a workspace in a folder</button>
+            <button class="primary" @click="openFolder">{{ $t("Open a workspace folder") }}</button>
+            <button class="ghost" @click="createWorkspace">{{ $t("Create a workspace in a folder") }}</button>
           </div>
         </template>
         <p v-if="problem" class="problem">{{ problem.message }}</p>
@@ -1515,6 +1638,16 @@ main {
 }
 .about p {
   margin: 6px 0;
+}
+.lang {
+  max-width: 120px;
+}
+.about-lang {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  margin-top: 10px;
 }
 .about footer {
   display: flex;

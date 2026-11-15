@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from "../i18n";
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import type { HttpResponse, SendError } from "../core";
 import { asCollectionError, backend, type QueryLanguage, type TestResult } from "../workspace";
@@ -200,7 +201,7 @@ function createTest() {
       ? `pm.expect(${call}.length).to.eql(${queryResult.value.length});`
       : `pm.expect(${call}).to.eql(${expected});`;
   emit("addTest", `pm.test(${JSON.stringify(expression.value.trim())}, () => {\n  ${check}\n});\n`);
-  saved.value = "Test added to the Tests tab";
+  saved.value = t("Test added to the Tests tab");
 }
 
 async function copyResult() {
@@ -208,7 +209,7 @@ async function copyResult() {
     await navigator.clipboard.writeText(filtered.value ?? "");
     saved.value = "Copied";
   } catch {
-    saved.value = "Could not copy";
+    saved.value = t("Could not copy");
   }
 }
 
@@ -258,10 +259,10 @@ async function nodeAction(action: "fold" | "foldOthers" | "unfold" | "copyValue"
     else if (action === "unfold") bodyEditor.value?.unfoldAll();
     else if (action === "copyValue") {
       await navigator.clipboard.writeText(typeof value === "string" ? value : JSON.stringify(value, null, 2));
-      saved.value = "Value copied";
+      saved.value = t("Value copied");
     } else if (action === "copyPath") {
       await navigator.clipboard.writeText(path);
-      saved.value = `Copied ${path}`;
+      saved.value = t("Copied {0}", { 0: path });
     } else if (action === "filter") {
       queryLanguage.value = "jsonpath";
       expression.value = path;
@@ -272,10 +273,10 @@ async function nodeAction(action: "fold" | "foldOthers" | "unfold" | "copyValue"
           ? `pm.expect(pm.response.jsonPath(${JSON.stringify(path)})).to.have.lengthOf(1);`
           : `pm.expect(pm.response.jsonPath(${JSON.stringify(path)})).to.eql(${expected});`;
       emit("addTest", `pm.test(${JSON.stringify(path)}, () => {\n  ${check}\n});\n`);
-      saved.value = "Test added to the Tests tab";
+      saved.value = t("Test added to the Tests tab");
     }
   } catch {
-    saved.value = "Could not copy";
+    saved.value = t("Could not copy");
   }
 }
 
@@ -283,9 +284,9 @@ async function saveBody() {
   if (!props.response) return;
   try {
     const where = await backend.saveResponse(props.response, suggestedFileName(props.response, props.url));
-    if (where) saved.value = `Saved to ${where}`;
+    if (where) saved.value = t("Saved to {0}", { 0: where });
   } catch (e) {
-    saved.value = `Could not save: ${asCollectionError(e).message}`;
+    saved.value = t("Could not save: {0}", { 0: asCollectionError(e).message });
   }
 }
 
@@ -332,54 +333,54 @@ const errorTitle: Record<SendError["kind"], string> = {
 
 <template>
   <section class="card viewer">
-    <div v-if="sending" class="placeholder"><span class="spinner"></span> Waiting for the server…</div>
+    <div v-if="sending" class="placeholder"><span class="spinner"></span> {{ $t("Waiting for the server…") }}</div>
 
     <div v-else-if="error" class="error">
-      <strong>{{ errorTitle[error.kind] }}</strong>
+      <strong>{{ $t(errorTitle[error.kind]) }}</strong>
       <ul v-if="scriptErrors.length" class="script-errors">
         <li v-for="(e, i) in scriptErrors" :key="i">{{ e }}</li>
       </ul>
       <p>{{ error.message }}</p>
-      <p v-if="error.kind === 'unresolved'" class="tip">Pick an environment that defines them, or add them with ⚙.</p>
+      <p v-if="error.kind === 'unresolved'" class="tip">{{ $t("Pick an environment that defines them, or add them with ⚙.") }}</p>
     </div>
 
     <template v-else-if="response">
       <div class="status">
         <span class="pill" :class="statusClass">{{ response.status }} {{ response.statusText }}</span>
-        <span class="muted">{{ response.durationMs }} ms · {{ size(response.sizeBytes) }} · {{ response.httpVersion }}</span>
+        <span class="muted">{{ $t("{0} ms · {1} · {2}", { 0: response.durationMs, 1: size(response.sizeBytes), 2: response.httpVersion }) }}</span>
         <span class="spacer"></span>
         <select
           v-if="history.length > 1"
           class="history"
           :value="historyIndex"
-          title="Previous responses of this request (kept in memory only)"
+          :title="$t('Previous responses of this request (kept in memory only)')"
           @change="emit('pick', Number(($event.target as HTMLSelectElement).value))"
         >
-          <option v-for="(h, i) in history" :key="h.at + i" :value="i">{{ i === 0 ? "Latest · " : "" }}{{ h.label }}</option>
+          <option v-for="(h, i) in history" :key="h.at + i" :value="i">{{ i === 0 ? $t("Latest · ") : "" }}{{ h.label }}</option>
         </select>
-        <button :class="{ on: tab === 'body' }" @click="tab = 'body'">Body</button>
-        <button :class="{ on: tab === 'headers' }" @click="tab = 'headers'">Headers {{ response.headers.length }}</button>
+        <button :class="{ on: tab === 'body' }" @click="tab = 'body'">{{ $t("Body") }}</button>
+        <button :class="{ on: tab === 'headers' }" @click="tab = 'headers'">{{ $t("Headers {0}", { 0: response.headers.length }) }}</button>
         <button v-if="setCookies.length" :class="{ on: tab === 'cookies' }" @click="tab = 'cookies'">
-          Cookies {{ setCookies.length }}
+          {{ $t("Cookies {0}", { 0: setCookies.length }) }}
         </button>
         <button v-if="tests.length" :class="{ on: tab === 'tests', bad: failed }" @click="tab = 'tests'">
-          Tests {{ tests.length - failed }}/{{ tests.length }}
+          {{ $t("Tests {0}/{1}", { 0: tests.length - failed, 1: tests.length }) }}
         </button>
         <button v-if="logs.length || scriptErrors.length" :class="{ on: tab === 'console', bad: scriptErrors.length }" @click="tab = 'console'">
-          Console
+          {{ $t("Console") }}
         </button>
         <button :class="{ on: tab === 'timing' }" @click="tab = 'timing'">
-          Timing<template v-if="response.redirects?.length"> · {{ response.redirects.length }} redirect{{ response.redirects.length > 1 ? "s" : "" }}</template>
+          {{ $t("Timing") }}<template v-if="response.redirects?.length"> {{ $t(response.redirects.length > 1 ? "· {0} redirects" : "· 1 redirect", { 0: response.redirects.length }) }}</template>
         </button>
-        <button v-if="response.sent" :class="{ on: tab === 'sent' }" @click="tab = 'sent'">Sent</button>
+        <button v-if="response.sent" :class="{ on: tab === 'sent' }" @click="tab = 'sent'">{{ $t("Sent") }}</button>
         <select
           v-if="history.length > 1"
           class="history"
           :value="compareIndex ?? ''"
-          title="Compare this response with another one of the history"
+          :title="$t('Compare this response with another one of the history')"
           @change="compareWith(($event.target as HTMLSelectElement).value)"
         >
-          <option value="">Compare with…</option>
+          <option value="">{{ $t("Compare with…") }}</option>
           <template v-for="(h, i) in history" :key="`c${i}`">
             <option v-if="i !== historyIndex && h.response" :value="i">{{ h.label }}</option>
           </template>
@@ -387,56 +388,56 @@ const errorTitle: Record<SendError["kind"], string> = {
       </div>
       <template v-if="tab === 'body'">
         <div class="views">
-          <button :class="{ on: view === 'pretty' }" @click="view = 'pretty'">Pretty</button>
-          <button :class="{ on: view === 'raw' }" @click="view = 'raw'">Raw</button>
-          <button v-if="kind" :class="{ on: view === 'preview' }" @click="view = 'preview'">Preview</button>
+          <button :class="{ on: view === 'pretty' }" @click="view = 'pretty'">{{ $t("Pretty") }}</button>
+          <button :class="{ on: view === 'raw' }" @click="view = 'raw'">{{ $t("Raw") }}</button>
+          <button v-if="kind" :class="{ on: view === 'preview' }" @click="view = 'preview'">{{ $t("Preview") }}</button>
           <span class="saved" :title="saved">{{ saved }}</span>
           <button
             v-if="view !== 'preview' && !(kind && kind !== 'html')"
             class="save"
-            title="Find in the body (Ctrl+F inside it)"
+            :title="$t('Find in the body (Ctrl+F inside it)')"
             @click="bodyEditor?.openSearch()"
           >
-            Find
+            {{ $t("Find") }}
           </button>
-          <button class="save" title="Save the body to a file" @click="saveBody">Save</button>
-          <button class="save" title="Keep this response next to the request (Examples tab)" @click="emit('saveExample', response)">
-            Save as example
+          <button class="save" :title="$t('Save the body to a file')" @click="saveBody">{{ $t("Save") }}</button>
+          <button class="save" :title="$t('Keep this response next to the request (Examples tab)')" @click="emit('saveExample', response)">
+            {{ $t("Save as example") }}
           </button>
         </div>
         <div v-if="isJson && view !== 'preview'" class="filter">
-          <select v-model="queryLanguage" aria-label="Filter language">
-            <option value="jsonpath">JSONPath</option>
-            <option value="jq">jq</option>
+          <select v-model="queryLanguage" :aria-label="$t('Filter language')">
+            <option value="jsonpath">{{ $t("JSONPath") }}</option>
+            <option value="jq">{{ $t("jq") }}</option>
           </select>
           <input
             v-model="expression"
             spellcheck="false"
-            :placeholder="queryLanguage === 'jq' ? '.data[] | {id, name}' : '$.data[*].name'"
-            aria-label="Filter expression"
+            :placeholder="queryLanguage === 'jq' ? $t('.data[] | {id, name}') : '$.data[*].name'"
+            :aria-label="$t('Filter expression')"
           />
           <template v-if="queryResult !== null">
-            <span class="count">{{ queryResult.length }} result{{ queryResult.length === 1 ? "" : "s" }}</span>
-            <button class="save" @click="copyResult">Copy</button>
-            <button class="save" title="Add a pm.test that checks this result to the request's Tests" @click="createTest">
-              Create test
+            <span class="count">{{ $t(queryResult.length === 1 ? "1 result" : "{0} results", { 0: queryResult.length }) }}</span>
+            <button class="save" @click="copyResult">{{ $t("Copy") }}</button>
+            <button class="save" :title="$t('Add a pm.test that checks this result to the request\'s Tests')" @click="createTest">
+              {{ $t("Create test") }}
             </button>
           </template>
         </div>
         <p v-if="queryError" class="query-error">{{ queryError }}</p>
         <template v-if="view === 'preview' && kind">
           <!-- No scripts, no forms, no navigation: a response cannot act inside Pulpo. -->
-          <iframe v-if="kind === 'html'" class="preview frame" sandbox="" :srcdoc="response.body" title="HTML preview"></iframe>
+          <iframe v-if="kind === 'html'" class="preview frame" sandbox="" :srcdoc="response.body" :title="$t('HTML preview')"></iframe>
           <div v-else-if="kind === 'image'" class="preview image"><img :src="imageSrc" alt="Image in the response" /></div>
-          <iframe v-else-if="kind === 'pdf'" class="preview frame" :src="pdfUrl" title="PDF preview"></iframe>
+          <iframe v-else-if="kind === 'pdf'" class="preview frame" :src="pdfUrl" :title="$t('PDF preview')"></iframe>
           <div v-else class="preview binary">
-            <p>Binary response: {{ contentTypeOf(response) || "no Content-Type" }}, {{ size(response.sizeBytes) }}.</p>
-            <p v-if="!response.bodyBase64">It is bigger than 25 MB, so Pulpo did not keep it.</p>
-            <button v-else class="save" @click="saveBody">Save to a file</button>
+            <p>{{ $t("Binary response: {0}, {1}.", { 0: contentTypeOf(response) || "no Content-Type", 1: size(response.sizeBytes) }) }}</p>
+            <p v-if="!response.bodyBase64">{{ $t("It is bigger than 25 MB, so Pulpo did not keep it.") }}</p>
+            <button v-else class="save" @click="saveBody">{{ $t("Save to a file") }}</button>
           </div>
         </template>
         <div v-else-if="kind && kind !== 'html'" class="preview binary">
-          <p>{{ contentTypeOf(response) || "Binary" }} body ({{ size(response.sizeBytes) }}): see it in Preview or save it.</p>
+          <p>{{ $t("{0} body ({1}): see it in Preview or save it.", { 0: contentTypeOf(response) || $t("Binary"), 1: size(response.sizeBytes) }) }}</p>
         </div>
         <CodeEditor
           v-else
@@ -450,50 +451,48 @@ const errorTitle: Record<SendError["kind"], string> = {
         <div v-if="nodeMenu" class="menu-backdrop" @click="nodeMenu = null" @contextmenu.prevent="nodeMenu = null">
           <div class="node-menu card" role="menu" :style="{ left: `${nodeMenu.x}px`, top: `${nodeMenu.y}px` }" @click.stop>
             <p class="node-path">{{ jsonPathOf(nodeMenu.node.path) }}</p>
-            <button v-if="nodeMenu.node.container" role="menuitem" @click="nodeAction('fold')">Collapse this</button>
-            <button role="menuitem" @click="nodeAction('foldOthers')">Collapse all but this</button>
-            <button role="menuitem" @click="nodeAction('unfold')">Expand all</button>
+            <button v-if="nodeMenu.node.container" role="menuitem" @click="nodeAction('fold')">{{ $t("Collapse this") }}</button>
+            <button role="menuitem" @click="nodeAction('foldOthers')">{{ $t("Collapse all but this") }}</button>
+            <button role="menuitem" @click="nodeAction('unfold')">{{ $t("Expand all") }}</button>
             <hr />
-            <button role="menuitem" @click="nodeAction('copyValue')">Copy value</button>
-            <button role="menuitem" @click="nodeAction('copyPath')">Copy path</button>
-            <button role="menuitem" @click="nodeAction('filter')">Filter by this path</button>
-            <button role="menuitem" @click="nodeAction('test')">Create test from this</button>
+            <button role="menuitem" @click="nodeAction('copyValue')">{{ $t("Copy value") }}</button>
+            <button role="menuitem" @click="nodeAction('copyPath')">{{ $t("Copy path") }}</button>
+            <button role="menuitem" @click="nodeAction('filter')">{{ $t("Filter by this path") }}</button>
+            <button role="menuitem" @click="nodeAction('test')">{{ $t("Create test from this") }}</button>
           </div>
         </div>
       </template>
       <div v-else-if="tab === 'timing'" class="timing">
         <template v-if="response.timings">
           <div v-for="p in PHASES" :key="p.key" class="phase">
-            <span class="label">{{ p.label }}</span>
+            <span class="label">{{ $t(p.label) }}</span>
             <span class="track"><span class="bar" :style="{ width: share(response.timings[p.key]) }"></span></span>
-            <span class="ms">{{ response.timings[p.key] }} ms</span>
+            <span class="ms">{{ $t("{0} ms", { 0: response.timings[p.key] }) }}</span>
           </div>
           <div class="phase total">
-            <span class="label">Total</span>
+            <span class="label">{{ $t("Total") }}</span>
             <span class="track"></span>
-            <span class="ms">{{ response.durationMs }} ms</span>
+            <span class="ms">{{ $t("{0} ms", { 0: response.durationMs }) }}</span>
           </div>
         </template>
-        <p v-else class="muted">Detailed times come from the desktop app; the browser preview only knows the total.</p>
+        <p v-else class="muted">{{ $t("Detailed times come from the desktop app; the browser preview only knows the total.") }}</p>
         <p v-if="previousAverage" class="compare-time">
-          {{ response.durationMs - previousAverage.ms >= 0 ? "+" : "" }}{{ response.durationMs - previousAverage.ms }} ms against the
-          average of the {{ previousAverage.count }} other response{{ previousAverage.count > 1 ? "s" : "" }} in the history
-          ({{ previousAverage.ms }} ms).
+          {{ $t(previousAverage.count > 1 ? "{0} ms against the average of the {1} other responses in the history ({2} ms)." : "{0} ms against the other response in the history ({2} ms).", { 0: (response.durationMs - previousAverage.ms >= 0 ? "+" : "") + (response.durationMs - previousAverage.ms), 1: previousAverage.count, 2: previousAverage.ms }) }}
         </p>
         <template v-if="response.redirects?.length">
-          <h4>Redirects</h4>
+          <h4>{{ $t("Redirects") }}</h4>
           <ol class="redirects">
             <li v-for="(r, i) in response.redirects" :key="i">
               <code>{{ r.status }}</code> {{ r.url }} <span class="muted">→</span> {{ r.location }}
             </li>
           </ol>
         </template>
-        <p v-if="response.url" class="muted final-url">Answered by {{ response.url }}</p>
+        <p v-if="response.url" class="muted final-url">{{ $t("Answered by {0}", { 0: response.url }) }}</p>
       </div>
       <div v-else-if="tab === 'sent' && response.sent" class="sent">
         <p class="line">
           <code>{{ response.sent.method }} {{ response.sent.url }}</code>
-          <label class="reveal"><input v-model="showSecrets" type="checkbox" /> Show secret values</label>
+          <label class="reveal"><input v-model="showSecrets" type="checkbox" /> {{ $t("Show secret values") }}</label>
         </p>
         <table class="code table">
           <tbody>
@@ -507,12 +506,12 @@ const errorTitle: Record<SendError["kind"], string> = {
       </div>
       <div v-else-if="tab === 'diff' && diff" class="diff">
         <p class="muted">
-          Compared with {{ history[compareIndex ?? 0]?.label }}
-          <template v-if="diff.status"> · status {{ diff.status }}</template>
-          · time {{ diff.time >= 0 ? "+" : "" }}{{ diff.time }} ms
+          {{ $t("Compared with {0}", { 0: history[compareIndex ?? 0]?.label }) }}
+          <template v-if="diff.status"> {{ $t("· status {0}", { 0: diff.status }) }}</template>
+          {{ $t("· time {0}{1} ms", { 0: diff.time >= 0 ? "+" : "", 1: diff.time }) }}
         </p>
         <template v-if="diff.fields">
-          <p v-if="!diff.fields.length" class="muted">Same JSON body.</p>
+          <p v-if="!diff.fields.length" class="muted">{{ $t("Same JSON body.") }}</p>
           <table v-else class="code table">
             <tbody>
               <tr v-for="(c, i) in diff.fields" :key="i" :class="c.kind">
@@ -558,7 +557,7 @@ const errorTitle: Record<SendError["kind"], string> = {
 
     <div v-else class="placeholder">
       <img src="/pulpo.svg" width="56" height="56" alt="" />
-      <p>Hit <strong>Send</strong> to see the response here.</p>
+      <p>{{ $t("Hit") }} <strong>{{ $t("Send") }}</strong> {{ $t("to see the response here.") }}</p>
     </div>
   </section>
 </template>

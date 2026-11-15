@@ -96,42 +96,42 @@ function format() {
     <div class="row">
       <label class="field">
         <span>WSDL</span>
-        <input v-model="target.wsdl" placeholder="contracts/calculator.wsdl or https://host/service?wsdl" spellcheck="false" @keydown.enter="load" />
+        <input v-model="target.wsdl" :placeholder="$t('contracts/calculator.wsdl or https://host/service?wsdl')" spellcheck="false" @keydown.enter="load" />
       </label>
       <button v-if="canLoad" class="ghost" :disabled="loading || !target.wsdl.trim()" @click="load">
-        {{ loading ? "Reading…" : operations ? "↻ Operations" : "Load operations" }}
+        {{ loading ? $t("Reading…") : operations ? "↻ Operations" : $t("Load operations") }}
       </button>
     </div>
     <p v-if="!canLoad" class="note">
-      Reading the WSDL is done by the desktop app. Here you can still write the envelope and send it.
+      {{ $t("Reading the WSDL is done by the desktop app. Here you can still write the envelope and send it.") }}
     </p>
     <p v-if="problem" class="warn">{{ problem }}</p>
     <label v-if="operations" class="field">
-      <span>Operation</span>
-      <select :value="target.operation" aria-label="Operation" @change="pick(($event.target as HTMLSelectElement).value)">
-        <option value="" disabled>Pick an operation</option>
+      <span>{{ $t("Operation") }}</span>
+      <select :value="target.operation" :aria-label="$t('Operation')" @change="pick(($event.target as HTMLSelectElement).value)">
+        <option value="" disabled>{{ $t("Pick an operation") }}</option>
         <optgroup v-for="[group, list] in groups" :key="group" :label="group">
           <option v-for="op in list" :key="op.path" :value="op.path">{{ op.name }}</option>
         </optgroup>
       </select>
     </label>
-    <p v-else-if="target.operation" class="muted small">Operation <code>{{ target.operation }}</code></p>
+    <p v-else-if="target.operation" class="muted small">{{ $t("Operation") }} <code>{{ target.operation }}</code></p>
     <p v-if="current" class="muted small">
-      SOAP {{ current.version }} · {{ current.style }} · action <code>{{ current.soapAction || "(none)" }}</code>
+      {{ $t("SOAP {0} · {1} · action", { 0: current.version, 1: current.style }) }} <code>{{ current.soapAction || "(none)" }}</code>
       <template v-if="current.documentation"> · {{ current.documentation }}</template>
     </p>
 
     <div class="label-row">
-      <span class="label">Envelope</span>
-      <button v-if="current" class="link" @click="useExample">Use example</button>
-      <button class="link" @click="format">Format XML</button>
+      <span class="label">{{ $t("Envelope") }}</span>
+      <button v-if="current" class="link" @click="useExample">{{ $t("Use example") }}</button>
+      <button class="link" @click="format">{{ $t("Format XML") }}</button>
     </div>
     <CodeEditor
       v-model="envelope"
       variables
       class="code-area"
       language="xml"
-      placeholder="<soapenv:Envelope …>"
+      :placeholder="$t('<soapenv:Envelope …>')"
       @run="emit('send')"
       @save="emit('save')"
     />
@@ -139,8 +139,7 @@ function format() {
       <li v-for="(i, n) in issues" :key="n">{{ i }}</li>
     </ul>
     <p class="hint">
-      Picking an operation sets <code>Content-Type</code> and <code>SOAPAction</code> in Headers; the envelope is sent as
-      the body, with <code>{{ "{{" }}variables}}</code> filled in.
+      {{ $t("Picking an operation sets") }} <code>Content-Type</code> {{ $t("and") }} <code>SOAPAction</code> {{ $t("in Headers; the envelope is sent as the body, with") }} <code>{{ "{{" }}variables}}</code> {{ $t("filled in.") }}
     </p>
   </div>
 </template>

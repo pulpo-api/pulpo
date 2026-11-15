@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from "../i18n";
 import { computed, onMounted, ref } from "vue";
 import { backend, type Contract, type Drift, type TreeNode, type Workspace } from "../workspace";
 
@@ -42,7 +43,7 @@ async function load() {
 onMounted(load);
 
 const folders = computed(() => {
-  const out: { id: string; label: string }[] = [{ id: "", label: "The whole workspace" }];
+  const out: { id: string; label: string }[] = [{ id: "", label: t("The whole workspace") }];
   const walk = (nodes: TreeNode[], path: string[]) => {
     for (const n of nodes) {
       if (n.type === "folder") {
@@ -90,7 +91,7 @@ async function importContract(c: Contract) {
   busy.value = c.path;
   try {
     const summary = await backend.syncImport!(props.workspace.root, c.path);
-    note.value = `Imported ${c.title}: ${summary.requests} requests into a folder linked to ${c.path}.`;
+    note.value = t("Imported {0}: {1} requests into a folder linked to {2}.", { 0: c.title, 1: summary.requests, 2: c.path });
     emit("changed");
     await load();
   } catch (e) {
@@ -115,23 +116,22 @@ async function link(c: Contract) {
 
 <template>
   <div class="backdrop" @click.self="emit('close')">
-    <section class="card panel" role="dialog" aria-label="API contracts">
+    <section class="card panel" role="dialog" :aria-label="$t('API contracts')">
       <header>
         <div>
-          <h2>API contracts</h2>
+          <h2>{{ $t("API contracts") }}</h2>
           <p class="sub">
-            The collection follows the contracts of this repository: new operations, gone ones and requests that miss
-            something the contract asks for. Nothing you wrote in a request is changed.
+            {{ $t("The collection follows the contracts of this repository: new operations, gone ones and requests that miss something the contract asks for. Nothing you wrote in a request is changed.") }}
           </p>
         </div>
-        <button class="ghost" title="Close" @click="emit('close')">✕</button>
+        <button class="ghost" :title="$t('Close')" @click="emit('close')">✕</button>
       </header>
 
-      <p v-if="!backend.scanContracts" class="note">This runs in the desktop app, or with <code>pulpo sync</code>.</p>
+      <p v-if="!backend.scanContracts" class="note">{{ $t("This runs in the desktop app, or with") }} <code>pulpo sync</code>.</p>
       <p v-if="problem" class="warn">{{ problem }}</p>
       <p v-for="(e, i) in errors" :key="i" class="warn">{{ e }}</p>
       <p v-if="note" class="ok" role="status">{{ note }}</p>
-      <p v-if="loading" class="note">Reading the contracts…</p>
+      <p v-if="loading" class="note">{{ $t("Reading the contracts…") }}</p>
 
       <div v-else class="list">
         <section v-for="d in outOfStep" :key="d.folder" class="drift">
@@ -140,65 +140,64 @@ async function link(c: Contract) {
             <span class="muted">← {{ d.source }}</span>
           </h3>
           <p class="muted small">
-            {{ d.added.length }} new · {{ d.removed.length }} gone · {{ d.changed.length }} to complete ·
-            {{ d.unchanged }} in step<template v-if="d.repeated"> (+{{ d.repeated }} repeated calls)</template>
+            {{ $t("{0} new · {1} gone · {2} to complete · {3} in step", { 0: d.added.length, 1: d.removed.length, 2: d.changed.length, 3: d.unchanged }) }}<template v-if="d.repeated"> {{ $t("(+{0} repeated calls)", { 0: d.repeated }) }}</template>
           </p>
           <label v-for="i in d.added" :key="`a${i.key}`" class="row">
             <input type="checkbox" :checked="picked[d.folder]?.has(i.key)" @change="toggle(d.folder, i.key)" />
-            <span class="tag add">new</span>
+            <span class="tag add">{{ $t("new") }}</span>
             <code class="method">{{ i.method }}</code>
             <span>{{ i.name }}</span>
             <span class="muted small">{{ i.key }}</span>
           </label>
           <label v-for="i in d.changed" :key="`c${i.target}`" class="row">
             <input type="checkbox" :checked="picked[d.folder]?.has(i.target)" @change="toggle(d.folder, i.target)" />
-            <span class="tag mod">complete</span>
+            <span class="tag mod">{{ $t("complete") }}</span>
             <code class="method">{{ i.method }}</code>
             <button class="link" @click.prevent="emit('open', i.target)">{{ i.name }}</button>
-            <span class="muted small">adds {{ i.changes.join(", ") }}</span>
+            <span class="muted small">{{ $t("adds {0}", { 0: i.changes.join(", ") }) }}</span>
           </label>
           <label v-for="i in d.removed" :key="`r${i.target}`" class="row">
             <input type="checkbox" :checked="picked[d.folder]?.has(i.target)" @change="toggle(d.folder, i.target)" />
-            <span class="tag del">gone</span>
+            <span class="tag del">{{ $t("gone") }}</span>
             <code class="method">{{ i.method }}</code>
             <button class="link" @click.prevent="emit('open', i.target)">{{ i.name }}</button>
             <span class="muted small">{{ i.changes[0] ?? "not in the contract any more" }}</span>
           </label>
           <footer>
-            <span class="muted small">Ticked “gone” requests are deleted.</span>
+            <span class="muted small">{{ $t("Ticked “gone” requests are deleted.") }}</span>
             <button class="primary" :disabled="busy === d.folder || !picked[d.folder]?.size" @click="apply(d)">
-              {{ busy === d.folder ? "Applying…" : "Apply selected" }}
+              {{ busy === d.folder ? $t("Applying…") : $t("Apply selected") }}
             </button>
           </footer>
         </section>
-        <p v-if="!outOfStep.length && drifts.length" class="ok">Every linked folder is in step with its contract.</p>
+        <p v-if="!outOfStep.length && drifts.length" class="ok">{{ $t("Every linked folder is in step with its contract.") }}</p>
 
-        <h3 class="section">Contracts in this repository</h3>
+        <h3 class="section">{{ $t("Contracts in this repository") }}</h3>
         <p v-if="!contracts.length" class="note">
-          No OpenAPI, .proto, WSDL or GraphQL schema files, nor Spring, NestJS, Express, FastAPI, Next.js or Nuxt routes, found in the repository of this workspace.
+          {{ $t("No OpenAPI, .proto, WSDL or GraphQL schema files, nor Spring, NestJS, Express, FastAPI, Next.js or Nuxt routes, found in the repository of this workspace.") }}
         </p>
         <div v-for="c in openapi" :key="c.path" class="contract">
           <div>
             <b>{{ c.title }}</b> <span class="muted small">{{ c.operations }} {{ c.note ? "endpoints" : "operations" }}</span>
-            <div class="muted small"><code>{{ c.path }}</code><template v-if="c.note"> · {{ c.kind }} code</template></div>
+            <div class="muted small"><code>{{ c.path }}</code><template v-if="c.note"> {{ $t("· {0} code", { 0: c.kind }) }}</template></div>
             <div v-if="c.folder !== null && c.folder !== undefined" class="small">→ {{ folderName(c.folder) }}</div>
           </div>
           <div class="actions">
-            <button v-if="c.kind === 'openapi'" class="ghost" title="Edit with checks against the OpenAPI schema" @click="emit('edit', c.path)">
-              Edit
+            <button v-if="c.kind === 'openapi'" class="ghost" :title="$t('Edit with checks against the OpenAPI schema')" @click="emit('edit', c.path)">
+              {{ $t("Edit") }}
             </button>
             <template v-if="c.folder !== null && c.folder !== undefined" />
             <template v-else-if="linking === c.path">
-              <select v-model="linkFolder" aria-label="Folder to link">
+              <select v-model="linkFolder" :aria-label="$t('Folder to link')">
                 <option v-for="f in folders" :key="f.id" :value="f.id">{{ f.label }}</option>
               </select>
-              <button class="ghost" :disabled="!!busy" @click="link(c)">Link</button>
-              <button class="ghost" @click="linking = null">Cancel</button>
+              <button class="ghost" :disabled="!!busy" @click="link(c)">{{ $t("Link") }}</button>
+              <button class="ghost" @click="linking = null">{{ $t("Cancel") }}</button>
             </template>
             <template v-else>
-              <button class="ghost" :disabled="!!busy" @click="importContract(c)">Import</button>
-              <button class="ghost" :disabled="!!busy" title="For a collection made by hand or imported from Postman" @click="linking = c.path; linkFolder = ''">
-                Link to a folder…
+              <button class="ghost" :disabled="!!busy" @click="importContract(c)">{{ $t("Import") }}</button>
+              <button class="ghost" :disabled="!!busy" :title="$t('For a collection made by hand or imported from Postman')" @click="linking = c.path; linkFolder = ''">
+                {{ $t("Link to a folder…") }}
               </button>
             </template>
           </div>

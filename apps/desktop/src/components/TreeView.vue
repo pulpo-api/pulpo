@@ -233,7 +233,7 @@ function hintClass(node: TreeNode) {
         @blur="commitRename(node)"
       />
       <span v-else class="name">{{ node.name }}</span>
-      <span v-if="dirty.has(node.id)" class="dot" title="Unsaved changes"></span>
+      <span v-if="dirty.has(node.id)" class="dot" :title="$t('Unsaved changes')"></span>
     </div>
   </template>
 </template>

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from "../i18n";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import CodeEditor from "./CodeEditor.vue";
 import { backend, type FlowPlanNode, type FlowStepEvent, type Flow } from "../workspace";
@@ -63,7 +64,7 @@ async function run() {
   selectedPath.value = "";
   try {
     const report = await backend.runFlow(props.root, props.flowId, props.environmentId);
-    note.value = report.passed ? "Flow passed." : "Flow failed: see the red step.";
+    note.value = report.passed ? t("Flow passed.") : t("Flow failed: see the red step.");
   } catch (e) {
     problem.value = String(e);
   }
@@ -163,7 +164,7 @@ function prettyBody(body: string): string {
   <section class="flow">
     <header>
       <div class="title">
-        <span class="kicker">Flow</span>
+        <span class="kicker">{{ $t("Flow") }}</span>
         <h2>{{ flow?.name ?? flowId }}</h2>
         <p v-if="flow?.description" class="muted">{{ flow.description }}</p>
         <p class="muted small">
@@ -172,37 +173,37 @@ function prettyBody(body: string): string {
       </div>
       <div class="actions">
         <div class="switch" role="tablist">
-          <button :class="{ on: view === 'diagram' }" role="tab" @click="view = 'diagram'">Diagram</button>
+          <button :class="{ on: view === 'diagram' }" role="tab" @click="view = 'diagram'">{{ $t("Diagram") }}</button>
           <button :class="{ on: view === 'yaml' }" role="tab" @click="view = 'yaml'">YAML</button>
         </div>
         <button
           class="primary"
           :disabled="running || !!broken.length || !requestCount"
-          :title="`Run with ${environmentName || 'no environment'}`"
+          :title="`Run with ${environmentName || $t('no environment')}`"
           @click="run"
         >
-          {{ running ? "Running…" : "▶ Run" }}
+          {{ running ? $t("Running…") : "▶ Run" }}
         </button>
         <button class="ghost danger" :class="{ armed: confirmDelete }" @click="remove">
-          {{ confirmDelete ? "Click again to delete" : "Delete" }}
+          {{ confirmDelete ? $t("Click again to delete") : $t("Delete") }}
         </button>
-        <button class="ghost" title="Close" @click="emit('close')">✕</button>
+        <button class="ghost" :title="$t('Close')" @click="emit('close')">✕</button>
       </div>
     </header>
 
     <p v-if="problem" class="problem">{{ problem }}</p>
-    <p v-for="b in broken" :key="b.path" class="problem">Step {{ b.path }}: {{ b.problem }}</p>
+    <p v-for="b in broken" :key="b.path" class="problem">{{ $t("Step {0}: {1}", { 0: b.path, 1: b.problem }) }}</p>
     <p v-if="done.length" class="summary" :class="{ bad: failed }">
-      {{ done.filter((s) => s.state === "passed").length }}/{{ requestCount }} passed · {{ totalMs }} ms
+      {{ $t("{0}/{1} passed · {2} ms", { 0: done.filter((s) => s.state === "passed").length, 1: requestCount, 2: totalMs }) }}
       <template v-if="environmentName"> · {{ environmentName }}</template>
       <span v-if="note"> · {{ note }}</span>
     </p>
     <p v-else-if="note" class="summary">{{ note }}</p>
 
     <div v-if="view === 'diagram'" class="body">
-      <ol class="tree" aria-label="Steps">
+      <ol class="tree" :aria-label="$t('Steps')">
         <li v-if="!nodes.length" class="empty">
-          No steps yet. Right-click a request in the tree → <b>Add to flow…</b>, or write them in the YAML view.
+          {{ $t("No steps yet. Right-click a request in the tree →") }} <b>{{ $t("Add to flow…") }}</b>{{ $t(", or write them in the YAML view.") }}
         </li>
         <li
           v-for="node in nodes"
@@ -222,20 +223,20 @@ function prettyBody(body: string): string {
         >
           <button
             class="card"
-            :title="node.depth === 0 ? 'Drag to move this step' : undefined"
+            :title="node.depth === 0 ? $t('Drag to move this step') : undefined"
             @click="selectedPath = node.kind !== 'flow' ? `pinned:${node.path}` : selectedPath"
           >
             <span class="path">{{ node.path }}</span>
             <template v-if="node.kind === 'flow'">
-              <span class="sub">↳ flow</span>
+              <span class="sub">{{ $t("↳ flow") }}</span>
               <span class="name">{{ node.name }}</span>
-              <span v-if="node.condition" class="chip when">if {{ node.condition }}</span>
-              <span v-if="node.forEach" class="chip loop">for each {{ node.forEach }}</span>
+              <span v-if="node.condition" class="chip when">{{ $t("if {0}", { 0: node.condition }) }}</span>
+              <span v-if="node.forEach" class="chip loop">{{ $t("for each {0}", { 0: node.forEach }) }}</span>
             </template>
             <template v-else-if="node.kind === 'wait'">
               <span class="sub">⏱</span>
               <span class="name">{{ node.name }}</span>
-              <span v-if="node.condition" class="chip when">if {{ node.condition }}</span>
+              <span v-if="node.condition" class="chip when">{{ $t("if {0}", { 0: node.condition }) }}</span>
               <span class="status">{{ statusText(node) }}</span>
             </template>
             <template v-else>
@@ -243,10 +244,10 @@ function prettyBody(body: string): string {
               <span class="name">{{ node.name }}</span>
               <span class="url">{{ node.url }}</span>
               <span v-for="v in node.save" :key="v" class="chip">→ {{ v }}</span>
-              <span v-if="node.expect" class="chip">expects {{ node.expect }}</span>
-              <span v-if="node.condition" class="chip when">if {{ node.condition }}</span>
-              <span v-if="node.forEach" class="chip loop">for each {{ node.forEach }}</span>
-              <span v-if="node.retry" class="chip loop">retry {{ node.retry }}</span>
+              <span v-if="node.expect" class="chip">{{ $t("expects {0}", { 0: node.expect }) }}</span>
+              <span v-if="node.condition" class="chip when">{{ $t("if {0}", { 0: node.condition }) }}</span>
+              <span v-if="node.forEach" class="chip loop">{{ $t("for each {0}", { 0: node.forEach }) }}</span>
+              <span v-if="node.retry" class="chip loop">{{ $t("retry {0}", { 0: node.retry }) }}</span>
               <span class="status">{{ statusText(node) }}</span>
             </template>
           </button>
@@ -258,11 +259,11 @@ function prettyBody(body: string): string {
         <p class="muted small">
           <code>{{ selected.node.target }}</code>
           <button v-if="selected.node.kind === 'request'" class="link" @click="emit('open', selected.node.target)">
-            Open request
+            {{ $t("Open request") }}
           </button>
         </p>
         <p v-if="selected.event?.iteration || selected.event?.note" class="muted small">
-          <template v-if="selected.event.iteration">Last round {{ selected.event.iteration }}</template>
+          <template v-if="selected.event.iteration">{{ $t("Last round {0}", { 0: selected.event.iteration }) }}</template>
           <template v-if="selected.event.iteration && selected.event.note"> · </template>
           {{ selected.event.note }}
         </p>
@@ -270,7 +271,7 @@ function prettyBody(body: string): string {
           <p v-if="failureOf(selected.event)" class="problem">{{ failureOf(selected.event) }}</p>
           <p v-if="selected.event.report.response" class="muted">
             <b>{{ selected.event.report.response.status }} {{ selected.event.report.response.statusText }}</b>
-            · {{ selected.event.report.response.durationMs }} ms
+            {{ $t("· {0} ms", { 0: selected.event.report.response.durationMs }) }}
           </p>
           <div v-if="Object.keys(selected.event.saved ?? {}).length" class="saved">
             <div v-for="(value, key) in selected.event.saved" :key="key">
@@ -286,7 +287,7 @@ function prettyBody(body: string): string {
             prettyBody(selected.event.report.response.body)
           }}</pre>
         </template>
-        <p v-else-if="selected.node.kind === 'request'" class="muted small">Run the flow to see this step's response.</p>
+        <p v-else-if="selected.node.kind === 'request'" class="muted small">{{ $t("Run the flow to see this step's response.") }}</p>
       </aside>
     </div>
 
@@ -295,12 +296,11 @@ function prettyBody(body: string): string {
       <footer>
         <span class="muted small">
           Steps: <code>- request: &lt;id&gt;</code> (<code>save:</code>, <code>expect: {status}</code>,
-          <code>retry: {until, times, every}</code>), <code>- flow: &lt;id&gt;</code> or <code>- wait: 2s</code>; any step
-          can have <code>if: "{{ "{{" }}role}} == admin"</code> and <code>forEach: "{{ "{{" }}ids}}"</code> +
-          <code>as: id</code>. Ctrl+S saves.
+          <code>retry: {until, times, every}</code>), <code>- flow: &lt;id&gt;</code> {{ $t("or") }} <code>- wait: 2s</code>{{ $t("; any step can have") }} <code>if: "{{ "{{" }}role}} == admin"</code> {{ $t("and") }} <code>forEach: "{{ "{{" }}ids}}"</code> +
+          <code>as: id</code>{{ $t(". Ctrl+S saves.") }}
         </span>
-        <button class="ghost" :disabled="yaml === savedYaml" @click="yaml = savedYaml">Discard</button>
-        <button class="primary" :disabled="yaml === savedYaml" @click="saveYaml">Save</button>
+        <button class="ghost" :disabled="yaml === savedYaml" @click="yaml = savedYaml">{{ $t("Discard") }}</button>
+        <button class="primary" :disabled="yaml === savedYaml" @click="saveYaml">{{ $t("Save") }}</button>
       </footer>
     </div>
   </section>

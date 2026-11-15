@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from "../i18n";
 import { computed, nextTick, onUnmounted, ref } from "vue";
 import type { HttpRequest } from "../core";
 import { backend, type Scripts, type WsConnection, type WsFrame } from "../workspace";
@@ -61,14 +62,14 @@ function onSocketIo(frame: WsFrame) {
       reply("3");
       break;
     case "connected":
-      onFrame({ direction: "info", text: `Joined namespace ${target.namespace || "/"}`, atMs: frame.atMs });
+      onFrame({ direction: "info", text: t("Joined namespace {0}", { 0: target.namespace || "/" }), atMs: frame.atMs });
       break;
     case "connectError":
-      onFrame({ direction: "error", text: `The server refused the connection: ${packet.message}`, atMs: frame.atMs });
+      onFrame({ direction: "error", text: t("The server refused the connection: {0}", { 0: packet.message }), atMs: frame.atMs });
       void connection?.close();
       break;
     case "disconnected":
-      onFrame({ direction: "info", text: "The server left the namespace", atMs: frame.atMs });
+      onFrame({ direction: "info", text: t("The server left the namespace"), atMs: frame.atMs });
       break;
     case "event":
       onFrame({
@@ -164,16 +165,16 @@ onUnmounted(() => void connection?.close());
   <section class="card ws">
     <div class="top">
       <button v-if="state === 'closed' || state === 'connecting'" class="primary" :disabled="state === 'connecting' || !backend.wsConnect" @click="connect">
-        {{ state === "connecting" ? "Connecting…" : "Connect" }}
+        {{ state === "connecting" ? $t("Connecting…") : $t("Connect") }}
       </button>
       <button v-else class="ghost danger" :disabled="state === 'closing'" @click="disconnect">
-        {{ state === "closing" ? "Closing…" : "Disconnect" }}
+        {{ state === "closing" ? $t("Closing…") : $t("Disconnect") }}
       </button>
       <span class="state" :class="state">● {{ { open: "Connected", connecting: "Connecting", closing: "Closing", closed: "Not connected" }[state] }}</span>
       <span class="muted small">↑ {{ counts.sent }} · ↓ {{ counts.received }}</span>
       <span class="spacer"></span>
-      <input v-model="filter" class="filter" placeholder="Filter messages" spellcheck="false" />
-      <button class="ghost" :disabled="!frames.length" @click="(frames = []), (expanded = new Set())">Clear</button>
+      <input v-model="filter" class="filter" :placeholder="$t('Filter messages')" spellcheck="false" />
+      <button class="ghost" :disabled="!frames.length" @click="(frames = []), (expanded = new Set())">{{ $t("Clear") }}</button>
     </div>
     <p v-if="problem" class="warn">{{ problem }}</p>
 
@@ -191,9 +192,9 @@ onUnmounted(() => void connection?.close());
       </button>
     </div>
 
-    <ol ref="log" class="log" aria-label="Messages">
+    <ol ref="log" class="log" :aria-label="$t('Messages')">
       <li v-if="!frames.length" class="empty muted">
-        Connect to start. Messages you send and receive show up here; JSON is formatted when you open it.
+        {{ $t("Connect to start. Messages you send and receive show up here; JSON is formatted when you open it.") }}
       </li>
       <li v-for="(f, i) in shown" :key="i" class="frame" :class="f.direction" @click="toggle(i)">
         <span class="arrow">{{ f.direction === "sent" ? "↑" : f.direction === "received" ? "↓" : f.direction === "error" ? "!" : "·" }}</span>
@@ -204,16 +205,16 @@ onUnmounted(() => void connection?.close());
     </ol>
 
     <div class="composer" :class="{ sio }">
-      <input v-if="sio" v-model="draftEvent" class="event-name" placeholder="event" spellcheck="false" aria-label="Event name" />
+      <input v-if="sio" v-model="draftEvent" class="event-name" :placeholder="$t('event')" spellcheck="false" :aria-label="$t('Event name')" />
       <CodeEditor
         v-model="draft"
         variables
         class="code-area"
         :language="/^\s*[[{]/.test(draft) ? 'json' : 'text'"
-        :placeholder="sio ? 'Event data: JSON or text ({{variables}} work). Ctrl+Enter emits.' : 'Message to send ({{variables}} work). Ctrl+Enter sends.'"
+        :placeholder="sio ? $t('Event data: JSON or text ({{variables}} work). Ctrl+Enter emits.') : $t('Message to send ({{variables}} work). Ctrl+Enter sends.')"
         @run="sendDraft"
       />
-      <button class="primary" :disabled="state !== 'open' || (!sio && !draft.trim())" @click="sendDraft">{{ sio ? "Emit" : "Send" }}</button>
+      <button class="primary" :disabled="state !== 'open' || (!sio && !draft.trim())" @click="sendDraft">{{ sio ? $t("Emit") : $t("Send") }}</button>
     </div>
   </section>
 </template>

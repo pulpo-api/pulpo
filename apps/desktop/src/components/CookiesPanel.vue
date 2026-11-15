@@ -88,35 +88,34 @@ async function save() {
 
 <template>
   <div class="backdrop" @click.self="emit('close')">
-    <section class="card panel" role="dialog" aria-label="Cookies">
+    <section class="card panel" role="dialog" :aria-label="$t('Cookies')">
       <header>
         <div>
-          <h2>Cookies</h2>
+          <h2>{{ $t("Cookies") }}</h2>
           <p class="sub">
-            Jar of <b>{{ environmentName || "No environment" }}</b>. Kept in <code>.pulpo/cookies.json</code> on this machine,
-            never in git.
+            {{ $t("Jar of") }} <b>{{ environmentName || $t("No environment") }}</b>{{ $t(". Kept in") }} <code>.pulpo/cookies.json</code> {{ $t("on this machine, never in git.") }}
           </p>
         </div>
-        <button class="ghost" title="Close" @click="emit('close')">✕</button>
+        <button class="ghost" :title="$t('Close')" @click="emit('close')">✕</button>
       </header>
 
       <p v-if="!backend.persistent" class="note">
-        In the browser preview the browser keeps real cookies itself; this list is only to try the panel.
+        {{ $t("In the browser preview the browser keeps real cookies itself; this list is only to try the panel.") }}
       </p>
       <p v-if="problem" class="warn">{{ problem }}</p>
 
       <div class="tools">
-        <input v-model="filter" placeholder="Filter by domain, name or value" spellcheck="false" />
+        <input v-model="filter" :placeholder="$t('Filter by domain, name or value')" spellcheck="false" />
         <button class="ghost danger" :class="{ armed: confirmClear }" :disabled="!draft.length" @click="clearAll">
-          {{ confirmClear ? "Click again to clear all" : "Clear all" }}
+          {{ confirmClear ? $t("Click again to clear all") : $t("Clear all") }}
         </button>
       </div>
 
       <div class="list">
         <p v-if="!draft.length" class="empty">
-          No cookies yet. Responses with <code>Set-Cookie</code> fill this jar, and later requests to the same domain send them.
+          {{ $t("No cookies yet. Responses with") }} <code>Set-Cookie</code> {{ $t("fill this jar, and later requests to the same domain send them.") }}
         </p>
-        <p v-else-if="!groups.length" class="empty">Nothing matches the filter.</p>
+        <p v-else-if="!groups.length" class="empty">{{ $t("Nothing matches the filter.") }}</p>
         <div v-for="[domain, items] in groups" :key="domain" class="group">
           <h3>{{ domain }}</h3>
           <div v-for="{ cookie, index } in items" :key="index" class="row">
@@ -125,26 +124,26 @@ async function save() {
             <span class="meta" :title="`Path ${cookie.path}`">{{ cookie.path }}</span>
             <span class="meta">{{ expiresText(cookie) }}</span>
             <span class="flags">
-              <span v-if="cookie.secure" title="Only sent over https">Secure</span>
-              <span v-if="cookie.httpOnly" title="Browsers hide it from JavaScript">HttpOnly</span>
-              <span v-if="cookie.hostOnly" title="Only this exact host, not its subdomains">Host</span>
+              <span v-if="cookie.secure" :title="$t('Only sent over https')">{{ $t("Secure") }}</span>
+              <span v-if="cookie.httpOnly" :title="$t('Browsers hide it from JavaScript')">HttpOnly</span>
+              <span v-if="cookie.hostOnly" :title="$t('Only this exact host, not its subdomains')">{{ $t("Host") }}</span>
             </span>
-            <button class="icon" title="Delete" @click="remove(index)">✕</button>
+            <button class="icon" :title="$t('Delete')" @click="remove(index)">✕</button>
           </div>
         </div>
       </div>
 
       <form class="add" @submit.prevent="add">
-        <input v-model="adding.name" placeholder="name" spellcheck="false" />
-        <input v-model="adding.value" placeholder="value" spellcheck="false" />
-        <input v-model="adding.domain" placeholder="domain (api.example.com)" spellcheck="false" />
+        <input v-model="adding.name" :placeholder="$t('name')" spellcheck="false" />
+        <input v-model="adding.value" :placeholder="$t('value')" spellcheck="false" />
+        <input v-model="adding.domain" :placeholder="$t('domain (api.example.com)')" spellcheck="false" />
         <input v-model="adding.path" placeholder="/" spellcheck="false" />
-        <button class="ghost" type="submit" :disabled="!adding.name.trim() || !adding.domain.trim()">Add</button>
+        <button class="ghost" type="submit" :disabled="!adding.name.trim() || !adding.domain.trim()">{{ $t("Add") }}</button>
       </form>
 
       <footer>
-        <button class="ghost" :disabled="!dirty" @click="draft = clone(saved)">Discard</button>
-        <button class="primary" :disabled="!dirty" @click="save">Save</button>
+        <button class="ghost" :disabled="!dirty" @click="draft = clone(saved)">{{ $t("Discard") }}</button>
+        <button class="primary" :disabled="!dirty" @click="save">{{ $t("Save") }}</button>
       </footer>
     </section>
   </div>

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from "../i18n";
 import { computed, ref, watch } from "vue";
 import {
   asCollectionError,
@@ -65,43 +66,43 @@ async function copy() {
     copied.value = true;
     setTimeout(() => (copied.value = false), 1500);
   } catch {
-    problem.value = "Could not copy: select the code and copy it by hand.";
+    problem.value = t("Could not copy: select the code and copy it by hand.");
   }
 }
 </script>
 
 <template>
   <div class="backdrop" @click.self="emit('close')">
-    <section class="card panel" role="dialog" aria-label="Code">
+    <section class="card panel" role="dialog" :aria-label="$t('Code')">
       <header>
         <div>
-          <h2>Code</h2>
-          <p class="sub">{{ entry.name }}, with what it inherits from its folders.</p>
+          <h2>{{ $t("Code") }}</h2>
+          <p class="sub">{{ $t("{0}, with what it inherits from its folders.", { 0: entry.name }) }}</p>
         </div>
-        <button class="ghost" title="Close" @click="emit('close')">✕</button>
+        <button class="ghost" :title="$t('Close')" @click="emit('close')">✕</button>
       </header>
 
       <div class="tools">
-        <select v-model="language" aria-label="Language">
+        <select v-model="language" :aria-label="$t('Language')">
           <option v-for="(label, id) in CODE_LANGUAGES" :key="id" :value="id">{{ label }}</option>
         </select>
-        <label :title="environmentId ? `Use the values of ${environmentName}` : 'Pick an environment in the top bar first'">
+        <label :title="environmentId ? `Use the values of ${environmentName}` : $t('Pick an environment in the top bar first')">
           <input v-model="options.resolve" type="checkbox" :disabled="!environmentId" />
-          Resolve variables{{ environmentName ? ` (${environmentName})` : "" }}
+          {{ $t("Resolve variables{0}", { 0: environmentName ? ` (${environmentName})` : "" }) }}
         </label>
         <label>
           <input v-model="options.includeSecrets" type="checkbox" :disabled="!options.resolve" />
-          Include secrets
+          {{ $t("Include secrets") }}
         </label>
         <span class="spacer"></span>
-        <button class="primary" :disabled="!code" @click="copy">{{ copied ? "Copied" : "Copy" }}</button>
+        <button class="primary" :disabled="!code" @click="copy">{{ copied ? $t("Copied") : $t("Copy") }}</button>
       </div>
 
       <p v-if="options.includeSecrets" class="warn">
-        The code now holds secret values (and tokens set by scripts). Do not paste it in tickets, chats or repos.
+        {{ $t("The code now holds secret values (and tokens set by scripts). Do not paste it in tickets, chats or repos.") }}
       </p>
       <p v-else-if="options.resolve" class="sub">
-        Secrets, values set by scripts and dynamic variables stay as <code v-pre>{{name}}</code>.
+        {{ $t("Secrets, values set by scripts and dynamic variables stay as") }} <code v-pre>{{name}}</code>.
       </p>
       <p v-if="problem" class="warn">{{ problem }}</p>
 

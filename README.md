@@ -23,6 +23,13 @@ API clients have gone the wrong way: accounts, forced cloud sync and paid team f
 - **Your collection comes from your code.** Pulpo scans controllers, routes and contracts (OpenAPI, WSDL, `.proto`, GraphQL SDL), builds the collection grouped by feature, and tells you after every `git pull` which endpoints were added, removed or changed.
 - **Secrets never touch the repo.** They live in your OS keychain.
 - **Small and fast.** A native desktop app for Windows, macOS and Linux, built with Tauri.
+- **Speaks your language.** English, Español, Português, Français, Deutsch, Italiano, 中文 and 日本語.
+
+## Quick moves
+
+- **Ctrl+P** opens the command palette: jump to any request, flow or environment, or type `>` for actions (send, import, export, git, mock, theme, language…).
+- **Paste a curl** (from your browser's DevTools, bash, cmd or PowerShell) or a URL anywhere outside a text field and it becomes a new request, headers, body and auth included. Pasted into the URL bar, it fills the request you are on.
+- **Ctrl+/** lists every shortcut.
 
 ## Collections are files
 
@@ -598,6 +605,8 @@ docker compose -f docker/compose.yml run --rm dev bash -c "cd apps/desktop && np
 ## Contributing
 
 Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md). Every commit needs a `Signed-off-by` line (`git commit -s`).
+
+**Translations.** Pulpo starts in your system's language; change it in the top bar, in About (ⓘ) or with Ctrl+P → Language. Each language is one file in [`apps/desktop/src/locales`](apps/desktop/src/locales) whose keys are the English texts. To fix a translation, edit that file; to add a language, run `npm run i18n -- --keys keys.json` in `apps/desktop`, translate those texts into `locales/<code>.json` and add the language to `src/i18n.ts`. `npm run i18n` shows what is missing in each one.
 
 ## Author
 

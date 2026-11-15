@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from "../i18n";
 import { computed, ref } from "vue";
 import type { HttpRequest } from "../core";
 import CodeEditor from "./CodeEditor.vue";
@@ -13,7 +14,7 @@ const messages = computed(() => {
 const open = ref(0);
 
 function add() {
-  messages.value.push({ name: `Message ${messages.value.length + 1}`, body: "" });
+  messages.value.push({ name: t("Message {0}", { 0: messages.value.length + 1 }), body: "" });
   open.value = messages.value.length - 1;
 }
 
@@ -38,16 +39,16 @@ function looksJson(text: string) {
 <template>
   <div class="messages">
     <p v-if="!messages.length" class="empty">
-      No saved messages. Save the ones you send often (subscribe, ping…): they are sent in order by
-      <code>pulpo run</code> and flows, and one click away when connected.
+      {{ $t("No saved messages. Save the ones you send often (subscribe, ping…): they are sent in order by") }}
+      <code>pulpo run</code> {{ $t("and flows, and one click away when connected.") }}
     </p>
     <div v-for="(m, i) in messages" :key="i" class="message" :class="{ open: open === i }">
       <div class="head">
         <button class="toggle" :aria-expanded="open === i" @click="open = open === i ? -1 : i">{{ open === i ? "▾" : "▸" }}</button>
-        <input v-model="m.name" class="name" spellcheck="false" aria-label="Message name" />
-        <button class="icon" title="Move up" :disabled="i === 0" @click="move(i, -1)">↑</button>
-        <button class="icon" title="Move down" :disabled="i === messages.length - 1" @click="move(i, 1)">↓</button>
-        <button class="icon" title="Remove" @click="remove(i)">✕</button>
+        <input v-model="m.name" class="name" spellcheck="false" :aria-label="$t('Message name')" />
+        <button class="icon" :title="$t('Move up')" :disabled="i === 0" @click="move(i, -1)">↑</button>
+        <button class="icon" :title="$t('Move down')" :disabled="i === messages.length - 1" @click="move(i, 1)">↓</button>
+        <button class="icon" :title="$t('Remove')" @click="remove(i)">✕</button>
       </div>
       <CodeEditor
         v-if="open === i"
@@ -59,7 +60,7 @@ function looksJson(text: string) {
         @save="emit('save')"
       />
     </div>
-    <button class="link" @click="add">+ Add message</button>
+    <button class="link" @click="add">{{ $t("+ Add message") }}</button>
   </div>
 </template>
 

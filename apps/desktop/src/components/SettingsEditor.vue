@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from "../i18n";
 import { computed, onMounted, ref } from "vue";
 import { DEFAULT_TIMEOUT_MS, type Settings } from "../core";
 import { backend, certificateFor, type ClientCertificate, type InheritedSettings } from "../workspace";
@@ -34,7 +35,7 @@ function source(from: string) {
 }
 
 function onOff(value: boolean | undefined, fallback: boolean) {
-  return (value ?? fallback) ? "On" : "Off";
+  return (value ?? fallback) ? t("On") : t("Off");
 }
 
 // ---------------------------------------------------------------- timeout
@@ -83,7 +84,7 @@ const proxyMode = computed({
 const inheritedProxy = computed(() => {
   const i = props.inherited.proxy;
   const value = i.value ?? "system";
-  return `${value === "system" ? "System" : value === "none" ? "None" : value} (${source(i.from)})`;
+  return `${value === "system" ? t("System") : value === "none" ? t("None") : value} (${source(i.from)})`;
 });
 
 // ---------------------------------------------------------------- certificates
@@ -105,43 +106,43 @@ const matched = computed(() => certificateFor(certificateList.value, props.resol
 <template>
   <div class="settings">
     <p v-if="!backend.persistent" class="note">
-      The browser preview only applies the timeout; SSL, redirects, proxy and certificates are applied by the desktop app.
+      {{ $t("The browser preview only applies the timeout; SSL, redirects, proxy and certificates are applied by the desktop app.") }}
     </p>
 
     <div class="row">
-      <label for="set-timeout">Timeout (ms)</label>
+      <label for="set-timeout">{{ $t("Timeout (ms)") }}</label>
       <input id="set-timeout" v-model="timeoutText" inputmode="numeric" :placeholder="timeoutPlaceholder" spellcheck="false" />
     </div>
 
     <div class="row">
-      <label for="set-verify">Verify SSL certificates</label>
+      <label for="set-verify">{{ $t("Verify SSL certificates") }}</label>
       <select id="set-verify" v-model="verify">
-        <option value="inherit">Inherit: {{ onOff(inherited.verifySsl.value, true) }} ({{ source(inherited.verifySsl.from) }})</option>
-        <option value="on">On</option>
-        <option value="off">Off</option>
+        <option value="inherit">{{ $t("Inherit: {0} ({1})", { 0: onOff(inherited.verifySsl.value, true), 1: source(inherited.verifySsl.from) }) }}</option>
+        <option value="on">{{ $t("On") }}</option>
+        <option value="off">{{ $t("Off") }}</option>
       </select>
     </div>
     <p v-if="!verifyEffective" class="warn">
-      Any server certificate is accepted, so traffic could be intercepted. Use it only against your own test servers.
+      {{ $t("Any server certificate is accepted, so traffic could be intercepted. Use it only against your own test servers.") }}
     </p>
 
     <div class="row">
-      <label for="set-follow">Follow redirects</label>
+      <label for="set-follow">{{ $t("Follow redirects") }}</label>
       <select id="set-follow" v-model="follow">
-        <option value="inherit">Inherit: {{ onOff(inherited.followRedirects.value, true) }} ({{ source(inherited.followRedirects.from) }})</option>
-        <option value="on">On (up to 10)</option>
-        <option value="off">Off</option>
+        <option value="inherit">{{ $t("Inherit: {0} ({1})", { 0: onOff(inherited.followRedirects.value, true), 1: source(inherited.followRedirects.from) }) }}</option>
+        <option value="on">{{ $t("On (up to 10)") }}</option>
+        <option value="off">{{ $t("Off") }}</option>
       </select>
     </div>
 
     <div class="row">
-      <label for="set-proxy">Proxy</label>
+      <label for="set-proxy">{{ $t("Proxy") }}</label>
       <div class="proxy">
         <select id="set-proxy" v-model="proxyMode">
-          <option value="inherit">Inherit: {{ inheritedProxy }}</option>
-          <option value="system">System (HTTP_PROXY…)</option>
-          <option value="none">None</option>
-          <option value="custom">Custom</option>
+          <option value="inherit">{{ $t("Inherit: {0}", { 0: inheritedProxy }) }}</option>
+          <option value="system">{{ $t("System (HTTP_PROXY…)") }}</option>
+          <option value="none">{{ $t("None") }}</option>
+          <option value="custom">{{ $t("Custom") }}</option>
         </select>
         <input
           v-if="proxyMode === 'custom'"
@@ -154,17 +155,16 @@ const matched = computed(() => certificateFor(certificateList.value, props.resol
     </div>
 
     <section v-if="certificates" class="certs">
-      <h4>Client certificate (mTLS)</h4>
+      <h4>{{ $t("Client certificate (mTLS)") }}</h4>
       <p v-if="matched" class="hint">
-        Uses the certificate for <code>{{ matched.host }}</code> ({{ matched.pfx ? "PFX" : "PEM" }}) set up on this machine.
+        {{ $t("Uses the certificate for") }} <code>{{ matched.host }}</code> {{ $t("({0}) set up on this machine.", { 0: matched.pfx ? "PFX" : "PEM" }) }}
       </p>
-      <p v-else class="hint">No certificate set up for this host on this machine.</p>
-      <button class="link" @click="showCertificates = true">Manage certificates…</button>
+      <p v-else class="hint">{{ $t("No certificate set up for this host on this machine.") }}</p>
+      <button class="link" @click="showCertificates = true">{{ $t("Manage certificates…") }}</button>
     </section>
 
     <p class="hint">
-      Empty fields inherit from the folders and the workspace. Saved in the request file, so the team shares them;
-      certificates stay on each machine.
+      {{ $t("Empty fields inherit from the folders and the workspace. Saved in the request file, so the team shares them; certificates stay on each machine.") }}
     </p>
 
     <CertificatesPanel v-if="showCertificates" :root="root" @close="showCertificates = false" @saved="loadCertificates" />

@@ -82,45 +82,44 @@ watch(folder, loadRoutes);
 
 <template>
   <div class="backdrop" @click.self="emit('close')">
-    <section class="card mock" role="dialog" aria-label="Mock server">
+    <section class="card mock" role="dialog" :aria-label="$t('Mock server')">
       <header>
         <div>
-          <h2>Mock server</h2>
+          <h2>{{ $t("Mock server") }}</h2>
           <p class="muted small">
-            Your saved examples answered as a fake API, so a front end works without its back end (and in CI with
+            {{ $t("Your saved examples answered as a fake API, so a front end works without its back end (and in CI with") }}
             <code>pulpo mock</code>).
           </p>
         </div>
-        <button class="ghost" title="Close" @click="emit('close')">✕</button>
+        <button class="ghost" :title="$t('Close')" @click="emit('close')">✕</button>
       </header>
 
-      <p v-if="!backend.mockStart" class="note">The mock runs in the desktop app, or with <code>pulpo mock</code>.</p>
+      <p v-if="!backend.mockStart" class="note">{{ $t("The mock runs in the desktop app, or with") }} <code>pulpo mock</code>.</p>
       <p v-if="problem" class="warn">{{ problem }}</p>
 
       <div class="row">
         <label>
-          Serve
+          {{ $t("Serve") }}
           <select v-model="folder" :disabled="!!url">
             <option v-for="f in folders" :key="f.id" :value="f.id">{{ f.label }}</option>
           </select>
         </label>
-        <label>Port <input v-model.number="port" type="number" min="0" max="65535" :disabled="!!url" /></label>
+        <label>{{ $t("Port") }} <input v-model.number="port" type="number" min="0" max="65535" :disabled="!!url" /></label>
         <button v-if="!url" class="primary" :disabled="busy || !routes.length || !backend.mockStart" @click="start">
-          {{ busy ? "Starting…" : "Start" }}
+          {{ busy ? $t("Starting…") : $t("Start") }}
         </button>
         <template v-else>
           <code class="url">{{ url }}</code>
-          <button class="ghost" @click="copy">{{ copied ? "Copied" : "Copy" }}</button>
-          <button class="ghost danger" @click="stop">Stop</button>
+          <button class="ghost" @click="copy">{{ copied ? $t("Copied") : $t("Copy") }}</button>
+          <button class="ghost danger" @click="stop">{{ $t("Stop") }}</button>
         </template>
       </div>
 
       <h3>
-        {{ routes.length }} routes<template v-if="fromOpenapi"> · {{ fromOpenapi }} from OpenAPI</template>
+        {{ $t("{0} routes", { 0: routes.length }) }}<template v-if="fromOpenapi"> {{ $t("· {0} from OpenAPI", { 0: fromOpenapi }) }}</template>
       </h3>
       <p v-if="!routes.length" class="muted small">
-        Nothing to serve here yet: save a response as an example (<b>Save as example</b> in the response, or the Examples
-        tab), or link an OpenAPI file with ⟲.
+        {{ $t("Nothing to serve here yet: save a response as an example (") }}<b>{{ $t("Save as example") }}</b> {{ $t("in the response, or the Examples tab), or link an OpenAPI file with ⟲.") }}
       </p>
       <ul class="routes">
         <li v-for="r in routes" :key="`${r.method} ${r.path}`">
@@ -133,14 +132,14 @@ watch(folder, loadRoutes);
         </li>
       </ul>
       <p class="hint">
-        Another answer: header <code>Prefer: code=404</code> or <code>Prefer: example=&lt;name&gt;</code>, or
-        <code>?__example=&lt;name&gt;</code>. CORS is open. Edits apply without a restart.
+        {{ $t("Another answer: header") }} <code>Prefer: code=404</code> {{ $t("or") }} <code>Prefer: example=&lt;name&gt;</code>{{ $t(", or") }}
+        <code>?__example=&lt;name&gt;</code>{{ $t(". CORS is open. Edits apply without a restart.") }}
       </p>
 
       <template v-if="url">
-        <h3>Calls</h3>
+        <h3>{{ $t("Calls") }}</h3>
         <ol class="hits">
-          <li v-if="!hits.length" class="muted small">Waiting for calls to {{ url }}…</li>
+          <li v-if="!hits.length" class="muted small">{{ $t("Waiting for calls to {0}…", { 0: url }) }}</li>
           <li v-for="(h, i) in hits" :key="i" :class="{ bad: h.status >= 400 }">
             <span class="time">{{ (h.atMs / 1000).toFixed(1) }}s</span>
             <span class="status">{{ h.status }}</span>

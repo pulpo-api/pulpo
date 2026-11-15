@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from "../i18n";
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { OAUTH_DESKTOP_ONLY, OAUTH_GRANTS, oauthForgetKey, oauthRenew, oauthRevoke, oauthTokens, type ActiveToken } from "../core";
 import { backend } from "../workspace";
@@ -34,7 +35,7 @@ async function load() {
 onMounted(load);
 
 function expiry(token: ActiveToken): { text: string; state: "ok" | "soon" | "expired" | "unknown" } {
-  if (token.expiresAt === null) return { text: "No expiry given", state: "unknown" };
+  if (token.expiresAt === null) return { text: t("No expiry given"), state: "unknown" };
   const left = token.expiresAt - now.value;
   if (left <= 30) return { text: "Expired", state: "expired" };
   const minutes = Math.floor(left / 60);
@@ -57,13 +58,13 @@ async function act(token: ActiveToken, action: "renew" | "revoke" | "forget") {
   try {
     if (action === "renew") {
       const info = await oauthRenew(props.root, props.environmentId, token.key);
-      note.value = `Got a new access token (${info.preview}…).`;
+      note.value = t("Got a new access token ({0}…).", { 0: info.preview });
     } else if (action === "revoke") {
       const result = await oauthRevoke(props.root, props.environmentId, token.key);
-      note.value = result ? `Forgotten: ${result}.` : "Revoked at the identity provider and forgotten.";
+      note.value = result ? t("Forgotten: {0}.", { 0: result }) : t("Revoked at the identity provider and forgotten.");
     } else {
       await oauthForgetKey(props.root, props.environmentId, token.key);
-      note.value = "Forgotten on this machine.";
+      note.value = t("Forgotten on this machine.");
     }
   } catch (e) {
     problem.value = e instanceof Error ? e.message : String(e);
@@ -79,15 +80,15 @@ function shortUrl(url: string): string {
 
 <template>
   <div class="backdrop" @click.self="emit('close')">
-    <section class="card panel" role="dialog" aria-label="OAuth 2.0 tokens">
+    <section class="card panel" role="dialog" :aria-label="$t('OAuth 2.0 tokens')">
       <header>
         <div>
-          <h2>OAuth 2.0 tokens</h2>
+          <h2>{{ $t("OAuth 2.0 tokens") }}</h2>
           <p class="sub">
-            Tokens of <b>{{ environmentName || "No environment" }}</b>, kept in the OS keychain on this machine, never in git.
+            {{ $t("Tokens of") }} <b>{{ environmentName || $t("No environment") }}</b>{{ $t(", kept in the OS keychain on this machine, never in git.") }}
           </p>
         </div>
-        <button class="ghost" title="Close" @click="emit('close')">✕</button>
+        <button class="ghost" :title="$t('Close')" @click="emit('close')">✕</button>
       </header>
 
       <p v-if="!backend.persistent" class="note">{{ OAUTH_DESKTOP_ONLY }}</p>
@@ -96,59 +97,59 @@ function shortUrl(url: string): string {
 
       <div class="list">
         <p v-if="loaded && !sorted.length" class="empty">
-          No tokens yet. Send a request with OAuth 2.0 auth, or press <i>Get new access token</i> in its Auth tab.
+          {{ $t("No tokens yet. Send a request with OAuth 2.0 auth, or press") }} <i>{{ $t("Get new access token") }}</i> {{ $t("in its Auth tab.") }}
         </p>
         <article v-for="token in sorted" :key="token.key" class="token">
           <div class="top">
             <code class="preview" :title="`Cache key ${token.key}`">{{ token.preview }}…</code>
             <span class="state" :class="expiry(token).state">{{ expiry(token).text }}</span>
             <span class="meta">{{ OAUTH_GRANTS[token.grant] }}</span>
-            <span v-if="token.hasRefresh" class="flag" title="Pulpo renews it on its own when it expires">refresh</span>
+            <span v-if="token.hasRefresh" class="flag" :title="$t('Pulpo renews it on its own when it expires')">{{ $t("refresh") }}</span>
             <span class="actions">
               <button
                 v-if="token.canRenew"
                 class="ghost"
                 :disabled="!!busy"
-                :title="token.hasRefresh ? 'Use the refresh token now' : 'Get a new token now'"
+                :title="token.hasRefresh ? $t('Use the refresh token now') : $t('Get a new token now')"
                 @click="act(token, 'renew')"
               >
-                {{ busy === `renew:${token.key}` ? "Renewing…" : "Renew" }}
+                {{ busy === `renew:${token.key}` ? $t("Renewing…") : $t("Renew") }}
               </button>
               <button
                 v-if="token.canRevoke"
                 class="ghost danger"
                 :class="{ armed: armed === `revoke:${token.key}` }"
                 :disabled="!!busy"
-                title="Ask the identity provider to revoke it, then forget it"
+                :title="$t('Ask the identity provider to revoke it, then forget it')"
                 @click="act(token, 'revoke')"
               >
-                {{ armed === `revoke:${token.key}` ? "Click again to revoke" : "Revoke" }}
+                {{ armed === `revoke:${token.key}` ? $t("Click again to revoke") : $t("Revoke") }}
               </button>
               <button
                 class="ghost"
                 :class="{ armed: armed === `forget:${token.key}` }"
                 :disabled="!!busy"
-                title="Delete it from this machine only; it stays valid at the identity provider"
+                :title="$t('Delete it from this machine only; it stays valid at the identity provider')"
                 @click="act(token, 'forget')"
               >
-                {{ armed === `forget:${token.key}` ? "Click again to forget" : "Forget" }}
+                {{ armed === `forget:${token.key}` ? $t("Click again to forget") : $t("Forget") }}
               </button>
             </span>
           </div>
           <div class="details">
-            <span>client <code>{{ token.clientId || "—" }}</code></span>
-            <span v-if="token.scope">scope <code>{{ token.scope }}</code></span>
+            <span>{{ $t("client") }} <code>{{ token.clientId || "—" }}</code></span>
+            <span v-if="token.scope">{{ $t("scope") }} <code>{{ token.scope }}</code></span>
             <span :title="token.tokenUrl">{{ shortUrl(token.tokenUrl) }}</span>
-            <span>got {{ new Date(token.obtainedAt * 1000).toLocaleString() }}</span>
+            <span>{{ $t("got {0}", { 0: new Date(token.obtainedAt * 1000).toLocaleString() }) }}</span>
           </div>
           <div class="used">
             <template v-if="token.usedBy.length">
-              Used by
+              {{ $t("Used by") }}
               <button v-for="id in token.usedBy" :key="id" class="link" @click="emit('open', id)">
                 {{ names[id] ?? id }}
               </button>
             </template>
-            <template v-else>No request uses these settings any more: it can only be forgotten.</template>
+            <template v-else>{{ $t("No request uses these settings any more: it can only be forgotten.") }}</template>
           </div>
         </article>
       </div>

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from "../i18n";
 import { computed, onMounted, ref, watch } from "vue";
 import { asCollectionError, backend, clone, type Example } from "../workspace";
 import CodeEditor, { type Language } from "./CodeEditor.vue";
@@ -34,7 +35,7 @@ function addNew() {
   selectedId.value = "";
   draft.value = {
     id: "",
-    name: "New example",
+    name: t("New example"),
     status: 200,
     headers: [{ name: "Content-Type", value: "application/json", enabled: true }],
     body: "{\n  \n}\n",
@@ -104,27 +105,27 @@ defineExpose({ addNew, reload: load });
         <span class="code" :class="`s${Math.floor(e.status / 100)}`">{{ e.status }}</span>
         <span class="name">{{ e.name }}</span>
       </button>
-      <button v-if="selectedId === ''" class="item on"><span class="code">new</span><span class="name">{{ draft?.name }}</span></button>
-      <button class="link" @click="addNew">+ Add example</button>
+      <button v-if="selectedId === ''" class="item on"><span class="code">{{ $t("new") }}</span><span class="name">{{ draft?.name }}</span></button>
+      <button class="link" @click="addNew">{{ $t("+ Add example") }}</button>
       <p class="hint">
-        Saved next to the request in <code>.examples/</code>. Make one from a response with "Save as example".
+        {{ $t("Saved next to the request in") }} <code>.examples/</code>{{ $t(". Make one from a response with \"Save as example\".") }}
       </p>
     </aside>
 
     <section v-if="draft" class="editor">
       <div class="row">
-        <input v-model="draft.name" class="name-input" aria-label="Example name" spellcheck="false" />
-        <input v-model.number="draft.status" class="status" type="number" min="100" max="599" aria-label="Status code" />
+        <input v-model="draft.name" class="name-input" :aria-label="$t('Example name')" spellcheck="false" />
+        <input v-model.number="draft.status" class="status" type="number" min="100" max="599" :aria-label="$t('Status code')" />
         <button class="ghost danger" :class="{ armed: confirmDelete }" @click="remove">
-          {{ confirmDelete ? "Click again to delete" : draft.id ? "Delete" : "Discard" }}
+          {{ confirmDelete ? $t("Click again to delete") : draft.id ? $t("Delete") : $t("Discard") }}
         </button>
-        <button class="primary" :disabled="!dirty" @click="save">{{ dirty ? "Save" : "Saved" }}</button>
+        <button class="primary" :disabled="!dirty" @click="save">{{ dirty ? $t("Save") : $t("Saved") }}</button>
       </div>
       <p v-if="problem" class="warn">{{ problem }}</p>
       <HeadersEditor :headers="draft.headers" />
       <CodeEditor v-model="draft.body" class="body" :language="language" @save="save" />
     </section>
-    <p v-else class="empty">No examples yet.</p>
+    <p v-else class="empty">{{ $t("No examples yet.") }}</p>
   </div>
 </template>
 

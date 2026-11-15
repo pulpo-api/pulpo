@@ -87,14 +87,13 @@ function useExample() {
 <template>
   <div class="grpc">
     <p v-if="!canLoad" class="note">
-      gRPC calls are made by the desktop app: a browser can only speak gRPC-Web. You can still write the method and the
-      message here.
+      {{ $t("gRPC calls are made by the desktop app: a browser can only speak gRPC-Web. You can still write the method and the message here.") }}
     </p>
     <div class="row">
       <label class="field">
-        <span>Method</span>
-        <select v-if="schema" :value="target.method" aria-label="Method" @change="pick(($event.target as HTMLSelectElement).value)">
-          <option value="" disabled>Pick a method</option>
+        <span>{{ $t("Method") }}</span>
+        <select v-if="schema" :value="target.method" :aria-label="$t('Method')" @change="pick(($event.target as HTMLSelectElement).value)">
+          <option value="" disabled>{{ $t("Pick a method") }}</option>
           <optgroup v-for="[service, list] in services" :key="service" :label="service">
             <option v-for="m in list" :key="m.path" :value="m.path">{{ m.name }} · {{ kind(m) }}</option>
           </optgroup>
@@ -102,27 +101,27 @@ function useExample() {
         <input v-else v-model="target.method" placeholder="package.Service/Method" spellcheck="false" />
       </label>
       <button v-if="canLoad" class="ghost" :disabled="loading" @click="load">
-        {{ loading ? "Reading…" : schema ? "↻ Methods" : "Load methods" }}
+        {{ loading ? $t("Reading…") : schema ? "↻ Methods" : $t("Load methods") }}
       </button>
     </div>
     <label class="field">
-      <span>.proto files</span>
+      <span>{{ $t(".proto files") }}</span>
       <input
         v-model="protoFiles"
-        placeholder="empty: ask the server (reflection) · or protos/orders.proto, protos/common.proto"
+        :placeholder="$t('empty: ask the server (reflection) · or protos/orders.proto, protos/common.proto')"
         spellcheck="false"
       />
     </label>
     <p v-if="problem" class="warn">{{ problem }}</p>
     <p v-if="schema" class="muted small">
-      {{ schema.methods.length }} methods from {{ schema.source }}<template v-if="current">
+      {{ $t("{0} methods from {1}", { 0: schema.methods.length, 1: schema.source }) }}<template v-if="current">
         · {{ current.input }} → {{ current.output }} · {{ kind(current) }}</template
       >
     </p>
 
     <div class="label-row">
-      <span class="label">Message (JSON)</span>
-      <button v-if="current" class="link" @click="useExample">Use example</button>
+      <span class="label">{{ $t("Message (JSON)") }}</span>
+      <button v-if="current" class="link" @click="useExample">{{ $t("Use example") }}</button>
     </div>
     <CodeEditor
       v-model="body"
@@ -135,12 +134,12 @@ function useExample() {
     />
     <template v-if="current?.clientStreaming">
       <p class="muted small">
-        Client streaming: the saved messages below are sent in order (if there are none, the message above).
+        {{ $t("Client streaming: the saved messages below are sent in order (if there are none, the message above).") }}
       </p>
       <WsMessagesEditor :request="request" @save="emit('save')" />
     </template>
     <p class="hint">
-      Headers go as metadata. The reply comes back as JSON (a list when the server streams); errors show their gRPC code.
+      {{ $t("Headers go as metadata. The reply comes back as JSON (a list when the server streams); errors show their gRPC code.") }}
     </p>
   </div>
 </template>

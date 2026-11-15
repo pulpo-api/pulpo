@@ -80,10 +80,10 @@ watch(
 
 <template>
   <div class="backdrop" @click.self="emit('close')">
-    <section class="panel card" role="dialog" aria-label="Environments">
+    <section class="panel card" role="dialog" :aria-label="$t('Environments')">
       <header>
-        <h2>Environments</h2>
-        <button class="icon" title="Close" @click="emit('close')">✕</button>
+        <h2>{{ $t("Environments") }}</h2>
+        <button class="icon" :title="$t('Close')" @click="emit('close')">✕</button>
       </header>
 
       <div class="body">
@@ -97,45 +97,43 @@ watch(
           >
             {{ env.name }}
           </button>
-          <input v-model="newName" class="new" placeholder="+ New environment" @keydown.enter="create" />
+          <input v-model="newName" class="new" :placeholder="$t('+ New environment')" @keydown.enter="create" />
         </aside>
 
         <div v-if="draft" class="editor">
           <div class="row head">
-            <span>Name</span><span>Value</span><span title="Stored in the OS keychain, never in the repo">Secret</span><span></span>
+            <span>{{ $t("Name") }}</span><span>{{ $t("Value") }}</span><span :title="$t('Stored in the OS keychain, never in the repo')">{{ $t("Secret") }}</span><span></span>
           </div>
           <div v-for="(v, i) in draft.variables" :key="i" class="row">
-            <input v-model="v.name" :class="{ bad: duplicates.has(v.name.trim()) }" placeholder="name" spellcheck="false" />
+            <input v-model="v.name" :class="{ bad: duplicates.has(v.name.trim()) }" :placeholder="$t('name')" spellcheck="false" />
             <input
               v-model="v.value"
               :type="v.secret ? 'password' : 'text'"
-              :placeholder="v.secret ? (v.hasValue ? '•••••• stored in keychain' : 'not set') : 'value'"
+              :placeholder="v.secret ? (v.hasValue ? $t('•••••• stored in keychain') : $t('not set')) : $t('value')"
               spellcheck="false"
               autocomplete="off"
             />
             <input v-model="v.secret" type="checkbox" />
-            <button class="icon" title="Remove" @click="draft.variables.splice(i, 1)">✕</button>
+            <button class="icon" :title="$t('Remove')" @click="draft.variables.splice(i, 1)">✕</button>
           </div>
-          <button class="link" @click="addVariable">+ Add variable</button>
+          <button class="link" @click="addVariable">{{ $t("+ Add variable") }}</button>
 
           <p class="note">
-            Plain values are saved in <code>{{ draft.id }}</code> and go to git. Secret values stay in
-            {{ persistent ? "your OS keychain" : "memory (browser preview)" }} and never touch the repo. Leave a secret empty to keep
-            the stored value.
+            {{ $t("Plain values are saved in") }} <code>{{ draft.id }}</code> {{ $t("and go to git. Secret values stay in {0} and never touch the repo. Leave a secret empty to keep the stored value.", { 0: persistent ? "your OS keychain" : "memory (browser preview)" }) }}
           </p>
-          <p v-if="duplicates.size" class="bad-note">Duplicated names: {{ [...duplicates].join(", ") }}</p>
+          <p v-if="duplicates.size" class="bad-note">{{ $t("Duplicated names: {0}", { 0: [...duplicates].join(", ") }) }}</p>
 
           <footer>
             <button class="ghost danger" :class="{ armed: confirmDelete }" @click="remove">
-              {{ confirmDelete ? "Click again to delete" : "Delete environment" }}
+              {{ confirmDelete ? $t("Click again to delete") : $t("Delete environment") }}
             </button>
             <span class="spacer"></span>
             <button class="primary" :disabled="!dirty || duplicates.size > 0" @click="save">
-              {{ dirty ? "Save" : "Saved" }}
+              {{ dirty ? $t("Save") : $t("Saved") }}
             </button>
           </footer>
         </div>
-        <p v-else class="empty">No environments yet. Type a name on the left and press Enter.</p>
+        <p v-else class="empty">{{ $t("No environments yet. Type a name on the left and press Enter.") }}</p>
       </div>
     </section>
   </div>

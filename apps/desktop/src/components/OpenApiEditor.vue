@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from "../i18n";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import CodeEditor from "./CodeEditor.vue";
 import { backend, type Drift, type OpenApiCheck, type OpenApiOperation, type Workspace } from "../workspace";
@@ -31,7 +32,7 @@ const diagnostics = computed(() =>
 const groups = computed(() => {
   const out = new Map<string, OpenApiOperation[]>();
   for (const op of check.value?.operations ?? []) {
-    const tag = op.tags[0] ?? "Untagged";
+    const tag = op.tags[0] ?? t("Untagged");
     out.set(tag, [...(out.get(tag) ?? []), op]);
   }
   return [...out.entries()];
@@ -80,7 +81,7 @@ async function save() {
     await backend.contractSave!(props.workspace.root, props.contract, now);
     saved.value = now;
     const at = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    savedNote.value = errors.value ? `Saved at ${at} with ${errors.value} error(s).` : `Saved at ${at}.`;
+    savedNote.value = errors.value ? t("Saved at {0} with {1} error(s).", { 0: at, 1: errors.value }) : t("Saved at {0}.", { 0: at });
     const status = (await backend.syncStatus?.(props.workspace.root)) ?? [];
     drifts.value = status
       .filter((s): s is { Ok: Drift } => "Ok" in s)
@@ -93,7 +94,7 @@ async function save() {
 }
 
 const folderName = (id: string) => {
-  if (!id) return "The whole workspace";
+  if (!id) return t("The whole workspace");
   const find = (nodes: Workspace["tree"], path: string[]): string | null => {
     for (const n of nodes) {
       if (n.type !== "folder") continue;
@@ -109,7 +110,7 @@ const folderName = (id: string) => {
 const outOfStep = (d: Drift) => d.added.length + d.removed.length + d.changed.length;
 
 function close() {
-  if (dirty.value && !window.confirm("Close without saving your changes?")) return;
+  if (dirty.value && !window.confirm(t("Close without saving your changes?"))) return;
   emit("close");
 }
 
@@ -125,45 +126,44 @@ const methodColor = (m: string) => `var(--m-${m.toLowerCase()}, var(--muted))`;
 
 <template>
   <div class="backdrop" @click.self="close">
-    <section class="card panel" role="dialog" aria-label="OpenAPI editor">
+    <section class="card panel" role="dialog" :aria-label="$t('OpenAPI editor')">
       <header>
         <div class="title">
           <h2>
-            {{ check?.title || "OpenAPI" }}
+            {{ check?.title || $t("OpenAPI") }}
             <span v-if="check?.version" class="muted small">v{{ check.version }}</span>
-            <span v-if="check?.openapi" class="pill">OpenAPI {{ check.openapi }}</span>
+            <span v-if="check?.openapi" class="pill">{{ $t("OpenAPI {0}", { 0: check.openapi }) }}</span>
           </h2>
           <p class="muted small">
-            <code>{{ contract }}</code><template v-if="dirty"> · unsaved</template>
+            <code>{{ contract }}</code><template v-if="dirty"> {{ $t("· unsaved") }}</template>
             <template v-else-if="savedNote"> · {{ savedNote }}</template>
           </p>
         </div>
         <div class="actions">
           <span v-if="check" class="status" :class="{ bad: errors, good: !errors }" role="status">
-            {{ errors ? `${errors} error${errors === 1 ? "" : "s"}` : "Valid" }}<template v-if="warnings"> · {{ warnings }} warning{{ warnings === 1 ? "" : "s" }}</template>
+            {{ errors ? $t(errors === 1 ? "1 error" : "{0} errors", { 0: errors }) : $t("Valid") }}<template v-if="warnings"> {{ $t(warnings === 1 ? "· 1 warning" : "· {0} warnings", { 0: warnings }) }}</template>
           </span>
-          <button class="primary" :disabled="!dirty || saving" title="Ctrl+S" @click="save">{{ saving ? "Saving…" : "Save" }}</button>
-          <button class="ghost" title="Close" @click="close">✕</button>
+          <button class="primary" :disabled="!dirty || saving" :title="$t('Ctrl+S')" @click="save">{{ saving ? $t("Saving…") : $t("Save") }}</button>
+          <button class="ghost" :title="$t('Close')" @click="close">✕</button>
         </div>
       </header>
 
       <p v-if="problem" class="warn">{{ problem }}</p>
       <div v-if="drifts" class="drift-note" role="status">
         <template v-if="!drifts.length">
-          No folder is linked to this file yet: import it or link a folder in
-          <button class="link" @click="emit('contracts')">API contracts</button>.
+          {{ $t("No folder is linked to this file yet: import it or link a folder in") }}
+          <button class="link" @click="emit('contracts')">{{ $t("API contracts") }}</button>.
         </template>
         <template v-for="d in drifts" v-else :key="d.folder">
           <span v-if="outOfStep(d)">
-            <b>{{ folderName(d.folder) }}</b>: {{ d.added.length }} new · {{ d.removed.length }} gone ·
-            {{ d.changed.length }} to complete —
-            <button class="link" @click="emit('contracts')">review in API contracts</button>
+            <b>{{ folderName(d.folder) }}</b>{{ $t(": {0} new · {1} gone · {2} to complete —", { 0: d.added.length, 1: d.removed.length, 2: d.changed.length }) }}
+            <button class="link" @click="emit('contracts')">{{ $t("review in API contracts") }}</button>
           </span>
-          <span v-else><b>{{ folderName(d.folder) }}</b> is in step with this file.</span>
+          <span v-else><b>{{ folderName(d.folder) }}</b> {{ $t("is in step with this file.") }}</span>
         </template>
       </div>
 
-      <p v-if="loading" class="muted">Reading {{ contract }}…</p>
+      <p v-if="loading" class="muted">{{ $t("Reading {0}…", { 0: contract }) }}</p>
       <div v-else class="body">
         <div class="code">
           <CodeEditor
@@ -177,18 +177,17 @@ const methodColor = (m: string) => `var(--m-${m.toLowerCase()}, var(--muted))`;
         <aside>
           <nav class="tabs" role="tablist">
             <button role="tab" :aria-selected="tab === 'problems'" :class="{ on: tab === 'problems' }" @click="tab = 'problems'">
-              Problems <span class="count">{{ check?.problems.length ?? 0 }}</span>
+              {{ $t("Problems") }} <span class="count">{{ check?.problems.length ?? 0 }}</span>
             </button>
             <button role="tab" :aria-selected="tab === 'preview'" :class="{ on: tab === 'preview' }" @click="tab = 'preview'">
-              Preview <span class="count">{{ check?.operations.length ?? 0 }}</span>
+              {{ $t("Preview") }} <span class="count">{{ check?.operations.length ?? 0 }}</span>
             </button>
-            <span v-if="checking" class="muted small">checking…</span>
+            <span v-if="checking" class="muted small">{{ $t("checking…") }}</span>
           </nav>
 
           <div v-if="tab === 'problems'" class="scroll">
             <p v-if="check && !check.problems.length" class="ok">
-              No problems: the document follows the OpenAPI {{ check.openapi }} schema, every path parameter is declared
-              and every <code>$ref</code> points somewhere.
+              {{ $t("No problems: the document follows the OpenAPI {0} schema, every path parameter is declared and every", { 0: check.openapi }) }} <code>$ref</code> {{ $t("points somewhere.") }}
             </p>
             <button
               v-for="(p, i) in check?.problems ?? []"
@@ -207,7 +206,7 @@ const methodColor = (m: string) => `var(--m-${m.toLowerCase()}, var(--muted))`;
             <p v-if="check?.servers.length" class="muted small">
               Servers: <code v-for="s in check.servers" :key="s" class="server">{{ s }}</code>
             </p>
-            <p v-if="check && !check.operations.length" class="muted">No operations yet: add them under <code>paths</code>.</p>
+            <p v-if="check && !check.operations.length" class="muted">{{ $t("No operations yet: add them under") }} <code>paths</code>.</p>
             <section v-for="[tag, ops] in groups" :key="tag" class="group">
               <h3>{{ tag }}</h3>
               <details v-for="op in ops" :key="`${op.method} ${op.path}`" class="op">
@@ -215,7 +214,7 @@ const methodColor = (m: string) => `var(--m-${m.toLowerCase()}, var(--muted))`;
                   <code class="method" :style="{ color: methodColor(op.method) }">{{ op.method }}</code>
                   <code class="path" :class="{ deprecated: op.deprecated }">{{ op.path }}</code>
                   <span class="muted small">{{ op.summary }}</span>
-                  <button class="link small jump" title="Go to it in the editor" @click.prevent="go(op.line)">↗</button>
+                  <button class="link small jump" :title="$t('Go to it in the editor')" @click.prevent="go(op.line)">↗</button>
                 </summary>
                 <dl>
                   <template v-if="op.operationId">
@@ -223,7 +222,7 @@ const methodColor = (m: string) => `var(--m-${m.toLowerCase()}, var(--muted))`;
                     <dd><code>{{ op.operationId }}</code></dd>
                   </template>
                   <template v-if="op.parameters.length">
-                    <dt>Parameters</dt>
+                    <dt>{{ $t("Parameters") }}</dt>
                     <dd>
                       <span v-for="p in op.parameters" :key="`${p.location}${p.name}`" class="param">
                         <code>{{ p.name }}</code><span class="muted small"> {{ p.location }}{{ p.required ? " · required" : "" }}</span>
@@ -231,15 +230,15 @@ const methodColor = (m: string) => `var(--m-${m.toLowerCase()}, var(--muted))`;
                     </dd>
                   </template>
                   <template v-if="op.body.length">
-                    <dt>Body</dt>
+                    <dt>{{ $t("Body") }}</dt>
                     <dd>{{ op.body.join(", ") }}<span class="muted small">{{ op.bodyRequired ? " · required" : "" }}</span></dd>
                   </template>
-                  <dt>Responses</dt>
+                  <dt>{{ $t("Responses") }}</dt>
                   <dd>
                     <div v-for="r in op.responses" :key="r.status">
                       <code>{{ r.status }}</code> <span class="muted small">{{ r.description }}</span>
                     </div>
-                    <span v-if="!op.responses.length" class="warn">none</span>
+                    <span v-if="!op.responses.length" class="warn">{{ $t("none") }}</span>
                   </dd>
                 </dl>
               </details>

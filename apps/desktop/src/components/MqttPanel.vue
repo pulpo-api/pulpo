@@ -99,14 +99,14 @@ onUnmounted(() => void session?.close());
   <section class="card mqtt">
     <div class="top">
       <button v-if="state !== 'open'" class="primary" :disabled="state === 'connecting' || !backend.mqttConnect" @click="connect">
-        {{ state === "connecting" ? "Connecting…" : "Connect" }}
+        {{ state === "connecting" ? $t("Connecting…") : $t("Connect") }}
       </button>
-      <button v-else class="ghost danger" @click="disconnect">Disconnect</button>
+      <button v-else class="ghost danger" @click="disconnect">{{ $t("Disconnect") }}</button>
       <span class="state" :class="state">● {{ { open: "Connected", connecting: "Connecting", closed: "Not connected" }[state] }}</span>
       <span class="muted small">↑ {{ counts.sent }} · ↓ {{ counts.received }}</span>
       <span class="spacer"></span>
-      <input v-model="filter" class="filter" placeholder="Filter by topic or payload" spellcheck="false" />
-      <button class="ghost" :disabled="!lines.length" @click="(lines = []), (open = new Set())">Clear</button>
+      <input v-model="filter" class="filter" :placeholder="$t('Filter by topic or payload')" spellcheck="false" />
+      <button class="ghost" :disabled="!lines.length" @click="(lines = []), (open = new Set())">{{ $t("Clear") }}</button>
     </div>
     <p v-if="problem" class="warn">{{ problem }}</p>
 
@@ -117,26 +117,26 @@ onUnmounted(() => void session?.close());
       </button>
     </div>
 
-    <ol ref="log" class="log" aria-label="Messages">
+    <ol ref="log" class="log" :aria-label="$t('Messages')">
       <li v-if="!lines.length" class="empty muted">
-        Connect to subscribe to the topics in <b>Topics</b>; messages and what you publish show up here.
+        {{ $t("Connect to subscribe to the topics in") }} <b>{{ $t("Topics") }}</b>{{ $t("; messages and what you publish show up here.") }}
       </li>
       <li v-for="(l, i) in shown" :key="i" class="line" :class="l.direction" @click="toggle(i)">
         <span class="arrow">{{ l.direction === "sent" ? "↑" : l.direction === "received" ? "↓" : l.direction === "error" ? "!" : "·" }}</span>
         <span class="time">{{ (l.atMs / 1000).toFixed(2) }}s</span>
-        <span class="topic">{{ l.topic }}<span v-if="l.retain" class="flag" title="Retained">R</span></span>
+        <span class="topic">{{ l.topic }}<span v-if="l.retain" class="flag" :title="$t('Retained')">R</span></span>
         <pre v-if="open.has(i)" class="text">{{ pretty(l.payload) }}</pre>
         <span v-else class="text one">{{ l.payload }}</span>
       </li>
     </ol>
 
     <div class="composer">
-      <input v-model="topic" class="topic-input" placeholder="topic (orders/{{orderId}})" spellcheck="false" aria-label="Topic" />
-      <CodeEditor v-model="payload" variables class="code-area" :language="/^\s*[[{]/.test(payload) ? 'json' : 'text'" placeholder="Payload. Ctrl+Enter publishes." @run="publish(topic, payload)" />
+      <input v-model="topic" class="topic-input" placeholder="topic (orders/{{orderId}})" spellcheck="false" :aria-label="$t('Topic')" />
+      <CodeEditor v-model="payload" variables class="code-area" :language="/^\s*[[{]/.test(payload) ? 'json' : 'text'" :placeholder="$t('Payload. Ctrl+Enter publishes.')" @run="publish(topic, payload)" />
       <div class="opts">
         <label>QoS <select v-model.number="qos"><option :value="0">0</option><option :value="1">1</option></select></label>
-        <label><input v-model="retain" type="checkbox" /> Retain</label>
-        <button class="primary" :disabled="state !== 'open' || !topic.trim()" @click="publish(topic, payload)">Publish</button>
+        <label><input v-model="retain" type="checkbox" /> {{ $t("Retain") }}</label>
+        <button class="primary" :disabled="state !== 'open' || !topic.trim()" @click="publish(topic, payload)">{{ $t("Publish") }}</button>
       </div>
     </div>
   </section>

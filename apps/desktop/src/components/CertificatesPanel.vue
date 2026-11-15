@@ -60,31 +60,30 @@ async function save() {
 
 <template>
   <div class="backdrop" @click.self="emit('close')">
-    <section class="card panel" role="dialog" aria-label="Client certificates">
+    <section class="card panel" role="dialog" :aria-label="$t('Client certificates')">
       <header>
         <div>
-          <h2>Client certificates</h2>
+          <h2>{{ $t("Client certificates") }}</h2>
           <p class="sub">
-            For APIs that ask for a certificate (mTLS). Kept in <code>.pulpo/certificates.json</code> on this machine, never
-            in git: each teammate points to their own files.
+            {{ $t("For APIs that ask for a certificate (mTLS). Kept in") }} <code>.pulpo/certificates.json</code> {{ $t("on this machine, never in git: each teammate points to their own files.") }}
           </p>
         </div>
-        <button class="ghost" title="Close" @click="emit('close')">✕</button>
+        <button class="ghost" :title="$t('Close')" @click="emit('close')">✕</button>
       </header>
 
-      <p v-if="!backend.persistent" class="sub">In the browser preview certificates are not used; this list is only to try the panel.</p>
+      <p v-if="!backend.persistent" class="sub">{{ $t("In the browser preview certificates are not used; this list is only to try the panel.") }}</p>
       <p v-if="problem" class="warn">{{ problem }}</p>
 
       <div class="list">
-        <p v-if="!draft.length" class="sub">No certificates yet.</p>
+        <p v-if="!draft.length" class="sub">{{ $t("No certificates yet.") }}</p>
         <div v-for="(row, i) in draft" :key="i" class="cert">
           <div class="line">
-            <input v-model="row.host" class="host" placeholder="api.bank.test, api.bank.test:8443 or *.bank.test" spellcheck="false" />
-            <select v-model="row.kind" title="Certificate format">
-              <option value="pfx">PFX / P12</option>
-              <option value="pem">PEM (cert + key)</option>
+            <input v-model="row.host" class="host" :placeholder="$t('api.bank.test, api.bank.test:8443 or *.bank.test')" spellcheck="false" />
+            <select v-model="row.kind" :title="$t('Certificate format')">
+              <option value="pfx">{{ $t("PFX / P12") }}</option>
+              <option value="pem">{{ $t("PEM (cert + key)") }}</option>
             </select>
-            <button class="icon" title="Remove" @click="draft.splice(i, 1)">✕</button>
+            <button class="icon" :title="$t('Remove')" @click="draft.splice(i, 1)">✕</button>
           </div>
           <div v-if="row.kind === 'pfx'" class="line">
             <input v-model="row.pfx" placeholder="~/certs/me.pfx" spellcheck="false" />
@@ -92,21 +91,20 @@ async function save() {
           </div>
           <div v-else class="line">
             <input v-model="row.cert" placeholder="~/certs/me.crt" spellcheck="false" />
-            <input v-model="row.key" placeholder="~/certs/me.key (not encrypted)" spellcheck="false" />
+            <input v-model="row.key" :placeholder="$t('~/certs/me.key (not encrypted)')" spellcheck="false" />
           </div>
           <p v-if="literalPassword(row)" class="warn">
-            The password would be stored as plain text. Write <code v-pre>{{certPassword}}</code> and add it as a secret of the
-            environment (⚙): it then lives in the OS keychain.
+            {{ $t("The password would be stored as plain text. Write") }} <code v-pre>{{certPassword}}</code> {{ $t("and add it as a secret of the environment (⚙): it then lives in the OS keychain.") }}
           </p>
         </div>
-        <button class="link" @click="add">+ Add certificate</button>
+        <button class="link" @click="add">{{ $t("+ Add certificate") }}</button>
       </div>
 
-      <p class="sub">Paths: absolute, <code>~/</code> for your home folder, or relative to the workspace.</p>
+      <p class="sub">{{ $t("Paths: absolute,") }} <code>~/</code> {{ $t("for your home folder, or relative to the workspace.") }}</p>
 
       <footer>
-        <button class="ghost" :disabled="!dirty" @click="draft = clone(saved)">Discard</button>
-        <button class="primary" :disabled="!dirty" @click="save">Save</button>
+        <button class="ghost" :disabled="!dirty" @click="draft = clone(saved)">{{ $t("Discard") }}</button>
+        <button class="primary" :disabled="!dirty" @click="save">{{ $t("Save") }}</button>
       </footer>
     </section>
   </div>

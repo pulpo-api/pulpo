@@ -96,17 +96,17 @@ defineExpose({ save, dirty });
   <section class="card folder-editor">
     <header>
       <div>
-        <p class="kind">{{ isCollection ? "Collection" : "Folder" }}</p>
+        <p class="kind">{{ isCollection ? $t("Collection") : $t("Folder") }}</p>
         <h2>{{ meta?.name ?? "…" }}</h2>
         <p class="sub">
-          Every request inside inherits these, unless it sets its own.
-          <template v-if="!isCollection">Rename it from the tree (F2).</template>
+          {{ $t("Every request inside inherits these, unless it sets its own.") }}
+          <template v-if="!isCollection">{{ $t("Rename it from the tree (F2).") }}</template>
         </p>
       </div>
       <div class="actions">
-        <button class="ghost" :disabled="!dirty" @click="load">Discard</button>
-        <button class="primary" :disabled="!dirty" title="Ctrl+S" @click="save">{{ dirty ? "Save" : "Saved" }}</button>
-        <button class="ghost" title="Back to the request" @click="emit('close')">✕</button>
+        <button class="ghost" :disabled="!dirty" @click="load">{{ $t("Discard") }}</button>
+        <button class="primary" :disabled="!dirty" :title="$t('Ctrl+S')" @click="save">{{ dirty ? $t("Save") : $t("Saved") }}</button>
+        <button class="ghost" :title="$t('Back to the request')" @click="emit('close')">✕</button>
       </div>
     </header>
 
@@ -115,26 +115,25 @@ defineExpose({ save, dirty });
     <template v-if="meta">
       <div class="tabs">
         <button :class="{ on: tab === 'headers' }" @click="tab = 'headers'">
-          Headers <span v-if="headerCount" class="count">{{ headerCount }}</span>
+          {{ $t("Headers") }} <span v-if="headerCount" class="count">{{ headerCount }}</span>
         </button>
         <button :class="{ on: tab === 'auth' }" @click="tab = 'auth'">
-          Auth <span v-if="meta.auth && meta.auth.type !== 'none'" class="count">set</span>
+          {{ $t("Auth") }} <span v-if="meta.auth && meta.auth.type !== 'none'" class="count">{{ $t("set") }}</span>
         </button>
         <button :class="{ on: tab === 'settings' }" @click="tab = 'settings'">
-          Settings <span v-if="settingsCount" class="count">{{ settingsCount }}</span>
+          {{ $t("Settings") }} <span v-if="settingsCount" class="count">{{ settingsCount }}</span>
         </button>
         <button :class="{ on: tab === 'pre' }" @click="tab = 'pre'">
-          Pre-request <span v-if="scripts.pre.trim()" class="dot"></span>
+          {{ $t("Pre-request") }} <span v-if="scripts.pre.trim()" class="dot"></span>
         </button>
         <button :class="{ on: tab === 'test' }" @click="tab = 'test'">
-          Tests <span v-if="scripts.test.trim()" class="dot"></span>
+          {{ $t("Tests") }} <span v-if="scripts.test.trim()" class="dot"></span>
         </button>
       </div>
 
       <HeadersEditor v-if="tab === 'headers'" :headers="meta.headers" :inherited="parentHeaders">
         <p class="hint">
-          Sent by every request inside (Postman makes you repeat them). A request can override one by setting the same
-          header, or stop it with a disabled one.
+          {{ $t("Sent by every request inside (Postman makes you repeat them). A request can override one by setting the same header, or stop it with a disabled one.") }}
         </p>
       </HeadersEditor>
 
@@ -158,8 +157,7 @@ defineExpose({ save, dirty });
       <template v-else>
         <CodeEditor :key="tab" v-model="scripts[tab]" class="code-area" language="javascript" @save="save" />
         <p class="hint">
-          Saved as <code>_folder.{{ tab === "pre" ? "pre" : "test" }}.js</code>. Runs
-          {{ tab === "pre" ? "before" : "after" }} every request inside, before the request's own script.
+          {{ $t("Saved as") }} <code>_folder.{{ tab === "pre" ? "pre" : "test" }}.js</code>{{ $t(". Runs {0} every request inside, before the request's own script.", { 0: tab === "pre" ? "before" : "after" }) }}
         </p>
       </template>
     </template>

@@ -15,6 +15,7 @@ import ParamsEditor from "./ParamsEditor.vue";
 import WsMessagesEditor from "./WsMessagesEditor.vue";
 import GrpcEditor from "./GrpcEditor.vue";
 import { pathParamNames, splitUrl } from "../params";
+import { applyPasted, parseCurl } from "../paste";
 
 const props = defineProps<{
   request: HttpRequest;
@@ -35,6 +36,15 @@ const props = defineProps<{
   environmentId: string;
 }>();
 const emit = defineEmits<{ send: []; save: [] }>();
+
+/** A curl pasted into the URL bar fills the whole request (method, headers, body, auth). */
+function pasteCurl(text: string): boolean {
+  const pasted = parseCurl(text);
+  if (!pasted) return false;
+  applyPasted(props.request, pasted);
+  tab.value = pasted.body !== null || pasted.form ? "body" : "headers";
+  return true;
+}
 
 const tab = ref<"params" | "auth" | "body" | "headers" | "settings" | "pre" | "test" | "examples">(
   props.request.graphql || !(props.request.method === "GET" || splitUrl(props.request.url).params.length) ? "body" : "params",
@@ -144,10 +154,10 @@ const inheritedCount = computed(
 <template>
   <section class="card editor">
     <div class="urlbar">
-      <span v-if="mqtt" class="method mqtt" title="MQTT: connect below">MQTT</span>
-      <span v-else-if="socketio" class="method ws" title="Socket.IO: connect below">SIO</span>
-      <span v-else-if="websocket" class="method ws" title="WebSocket: connect below">WS</span>
-      <span v-else-if="grpc" class="method grpc" title="gRPC: pick the method in Message">gRPC</span>
+      <span v-if="mqtt" class="method mqtt" :title="$t('MQTT: connect below')">MQTT</span>
+      <span v-else-if="socketio" class="method ws" :title="$t('Socket.IO: connect below')">SIO</span>
+      <span v-else-if="websocket" class="method ws" :title="$t('WebSocket: connect below')">WS</span>
+      <span v-else-if="grpc" class="method grpc" :title="$t('gRPC: pick the method in Message')">gRPC</span>
       <select v-else v-model="request.method" class="method" :class="`m-${request.method.toLowerCase()}`">
         <option v-for="m in HTTP_METHODS" :key="m" :value="m">{{ m }}</option>
       </select>
@@ -156,6 +166,7 @@ const inheritedCount = computed(
         class="url"
         placeholder="https://api.example.com/resource"
         aria-label="URL"
+        :intercept-paste="pasteCurl"
         @enter="emit('send')"
         @run="emit('send')"
         @save="emit('save')"
@@ -164,7 +175,7 @@ const inheritedCount = computed(
         v-if="!grpc && !/^\s*mqtts?:\/\//i.test(request.url)"
         class="stream"
         :class="{ on: !!request.mqtt }"
-        :title="request.mqtt ? 'MQTT: click to go back to a plain request' : 'Talk MQTT to this broker (ws:// or wss://); mqtt:// URLs are MQTT already'"
+        :title="request.mqtt ? $t('MQTT: click to go back to a plain request') : $t('Talk MQTT to this broker (ws:// or wss://); mqtt:// URLs are MQTT already')"
         @click="toggleMqtt"
       >
         MQTT
@@ -173,7 +184,7 @@ const inheritedCount = computed(
         v-if="!grpc && !mqtt"
         class="stream"
         :class="{ on: socketio }"
-        :title="socketio ? 'Socket.IO: click to go back to a plain request' : 'Talk Socket.IO (v4) to this server'"
+        :title="socketio ? $t('Socket.IO: click to go back to a plain request') : $t('Talk Socket.IO (v4) to this server')"
         @click="toggleSocketIo"
       >
         SIO
@@ -182,16 +193,16 @@ const inheritedCount = computed(
         v-if="!websocket && !grpc && !socketio && !mqtt"
         class="stream"
         :class="{ on: stream }"
-        :title="stream ? 'Listening to Server-Sent Events: click to send it as a normal request' : 'Listen to it as Server-Sent Events (Accept: text/event-stream)'"
+        :title="stream ? $t('Listening to Server-Sent Events: click to send it as a normal request') : $t('Listen to it as Server-Sent Events (Accept: text/event-stream)')"
         @click="toggleStream"
       >
         SSE
       </button>
       <button v-if="!websocket && !stream && !socketio && !mqtt" class="send" :disabled="sending || !supported" @click="emit('send')">
-        {{ sending ? "Sending…" : "Send" }}
+        {{ sending ? $t("Sending…") : $t("Send") }}
       </button>
     </div>
-    <p v-if="!supported" class="hint">This protocol is not supported yet.</p>
+    <p v-if="!supported" class="hint">{{ $t("This protocol is not supported yet.") }}</p>
     <p v-else-if="preview && (preview.changed || preview.missing.length)" class="resolved">
       <span v-if="preview.changed" class="url" :title="preview.url">→ {{ preview.url }}</span>
       <span v-if="preview.missing.length" class="missing">
@@ -201,42 +212,42 @@ const inheritedCount = computed(
 
     <div class="tabs">
       <button :class="{ on: tab === 'params' }" @click="tab = 'params'">
-        Params <span v-if="paramCount" class="count">{{ paramCount }}</span>
+        {{ $t("Params") }} <span v-if="paramCount" class="count">{{ paramCount }}</span>
       </button>
       <button :class="{ on: tab === 'auth' }" @click="tab = 'auth'">
-        Auth <span v-if="authBadge" class="count" :title="request.auth ? 'Set on this request' : 'Inherited from a parent'">{{ authBadge }}</span>
+        {{ $t("Auth") }} <span v-if="authBadge" class="count" :title="request.auth ? $t('Set on this request') : $t('Inherited from a parent')">{{ authBadge }}</span>
       </button>
       <button v-if="grpc" :class="{ on: tab === 'body' }" @click="tab = 'body'">
-        Message <span v-if="request.grpc?.method" class="count">{{ request.grpc.method.split("/").pop() }}</span>
+        {{ $t("Message") }} <span v-if="request.grpc?.method" class="count">{{ request.grpc.method.split("/").pop() }}</span>
       </button>
       <button v-else-if="mqtt" :class="{ on: tab === 'body' }" @click="(ensureMqtt(), (tab = 'body'))">
-        Topics <span v-if="request.mqtt?.subscribe?.length" class="count">{{ request.mqtt.subscribe.length }}</span>
+        {{ $t("Topics") }} <span v-if="request.mqtt?.subscribe?.length" class="count">{{ request.mqtt.subscribe.length }}</span>
       </button>
       <button v-else-if="socketio" :class="{ on: tab === 'body' }" @click="tab = 'body'">
-        Events <span v-if="request.messages?.length" class="count">{{ request.messages.length }}</span>
+        {{ $t("Events") }} <span v-if="request.messages?.length" class="count">{{ request.messages.length }}</span>
       </button>
       <button v-else-if="websocket" :class="{ on: tab === 'body' }" @click="tab = 'body'">
-        Messages <span v-if="request.messages?.length" class="count">{{ request.messages.length }}</span>
+        {{ $t("Messages") }} <span v-if="request.messages?.length" class="count">{{ request.messages.length }}</span>
       </button>
       <button v-else :class="{ on: tab === 'body' }" @click="tab = 'body'">
-        Body <span v-if="bodyBadge" class="count">{{ bodyBadge }}</span>
+        {{ $t("Body") }} <span v-if="bodyBadge" class="count">{{ bodyBadge }}</span>
       </button>
       <button :class="{ on: tab === 'headers' }" @click="tab = 'headers'">
-        Headers <span v-if="activeHeaders" class="count">{{ activeHeaders }}</span
-        ><span v-if="inheritedCount" class="count" title="Inherited from folders">+{{ inheritedCount }} ↑</span>
+        {{ $t("Headers") }} <span v-if="activeHeaders" class="count">{{ activeHeaders }}</span
+        ><span v-if="inheritedCount" class="count" :title="$t('Inherited from folders')">+{{ inheritedCount }} ↑</span>
       </button>
       <button :class="{ on: tab === 'settings' }" @click="tab = 'settings'">
-        Settings <span v-if="settingsCount" class="count" title="Settings set on this request">{{ settingsCount }}</span>
+        {{ $t("Settings") }} <span v-if="settingsCount" class="count" :title="$t('Settings set on this request')">{{ settingsCount }}</span>
       </button>
       <button :class="{ on: tab === 'pre' }" @click="tab = 'pre'">
-        Pre-request <span v-if="scripts.pre.trim()" class="dot"></span>
+        {{ $t("Pre-request") }} <span v-if="scripts.pre.trim()" class="dot"></span>
       </button>
-      <button :class="{ on: tab === 'examples' }" @click="(examplesNew = false), (tab = 'examples')">Examples</button>
+      <button :class="{ on: tab === 'examples' }" @click="(examplesNew = false), (tab = 'examples')">{{ $t("Examples") }}</button>
       <button :class="{ on: tab === 'test' }" @click="tab = 'test'">
-        Tests <span v-if="scripts.test.trim()" class="dot"></span>
+        {{ $t("Tests") }} <span v-if="scripts.test.trim()" class="dot"></span>
       </button>
       <span class="spacer"></span>
-      <span class="kbd">Ctrl ↵ to send</span>
+      <span class="kbd">{{ $t("Ctrl ↵ to send") }}</span>
     </div>
 
     <ParamsEditor v-if="tab === 'params'" :request="request" />
@@ -279,30 +290,30 @@ const inheritedCount = computed(
 
     <div v-else-if="tab === 'body' && mqtt && request.mqtt" class="sio">
       <div class="sio-row">
-        <label class="grow">Subscribe to <input v-model="subscribeText" placeholder="orders/#, sensors/+/temp" spellcheck="false" /></label>
+        <label class="grow">{{ $t("Subscribe to") }} <input v-model="subscribeText" :placeholder="$t('orders/#, sensors/+/temp')" spellcheck="false" /></label>
         <label>QoS
           <select v-model.number="request.mqtt.qos"><option :value="0">0</option><option :value="1">1</option></select>
         </label>
-        <label>Retain <input v-model="request.mqtt.retain" type="checkbox" /></label>
+        <label>{{ $t("Retain") }} <input v-model="request.mqtt.retain" type="checkbox" /></label>
       </div>
       <div class="sio-row">
-        <label>Client id <input v-model="request.mqtt.clientId" placeholder="(made up)" spellcheck="false" /></label>
-        <label>User <input v-model="request.mqtt.username" spellcheck="false" /></label>
-        <label>Password <input v-model="request.mqtt.password" placeholder="{{mqttPassword}}" spellcheck="false" /></label>
+        <label>{{ $t("Client id") }} <input v-model="request.mqtt.clientId" :placeholder="$t('(made up)')" spellcheck="false" /></label>
+        <label>{{ $t("User") }} <input v-model="request.mqtt.username" spellcheck="false" /></label>
+        <label>{{ $t("Password") }} <input v-model="request.mqtt.password" placeholder="{{mqttPassword}}" spellcheck="false" /></label>
       </div>
-      <p class="hint">Saved publications: the name is the topic, the body the payload. <code>pulpo run</code> publishes them and collects what arrives.</p>
+      <p class="hint">{{ $t("Saved publications: the name is the topic, the body the payload.") }} <code>pulpo run</code> {{ $t("publishes them and collects what arrives.") }}</p>
       <WsMessagesEditor :request="request" @save="emit('save')" />
     </div>
 
     <div v-else-if="tab === 'body' && socketio && request.socketio" class="sio">
       <div class="sio-row">
-        <label>Namespace <input v-model="request.socketio.namespace" placeholder="/" spellcheck="false" /></label>
-        <label>Path <input v-model="request.socketio.path" placeholder="/socket.io" spellcheck="false" /></label>
+        <label>{{ $t("Namespace") }} <input v-model="request.socketio.namespace" placeholder="/" spellcheck="false" /></label>
+        <label>{{ $t("Path") }} <input v-model="request.socketio.path" placeholder="/socket.io" spellcheck="false" /></label>
         <label class="grow">
-          Auth (JSON) <input v-model="request.socketio.auth" placeholder='{ "token": "{{token}}" }' spellcheck="false" />
+          {{ $t("Auth (JSON)") }} <input v-model="request.socketio.auth" placeholder='{ "token": "{{token}}" }' spellcheck="false" />
         </label>
       </div>
-      <p class="hint">Saved events: the name is the event, the body its data. <code>pulpo run</code> emits them in order.</p>
+      <p class="hint">{{ $t("Saved events: the name is the event, the body its data.") }} <code>pulpo run</code> {{ $t("emits them in order.") }}</p>
       <WsMessagesEditor :request="request" @save="emit('save')" />
     </div>
 
@@ -329,13 +340,12 @@ const inheritedCount = computed(
         @save="emit('save')"
         :placeholder="
           tab === 'pre'
-            ? 'Runs before sending. e.g. pm.request.headers.upsert({ key: \'X-Request-Id\', value: pm.variables.replaceIn(\'{{$guid}}\') });'
-            : 'Runs after the response. e.g. pm.test(\'is 200\', () => pm.response.to.have.status(200));\npm.environment.set(\'orderId\', pm.response.json().id);'
+            ? $t('Runs before sending. e.g. pm.request.headers.upsert({ key: \'X-Request-Id\', value: pm.variables.replaceIn(\'{{$guid}}\') });')
+            : $t('Runs after the response. e.g. pm.test(\'is 200\', () => pm.response.to.have.status(200));\npm.environment.set(\'orderId\', pm.response.json().id);')
         "
       />
       <p class="hint">
-        Saved as <code>{{ tab === "pre" ? ".pre.js" : ".test.js" }}</code> next to the request. Postman's <code>pm.*</code> API:
-        variables, request, response, <code>pm.test</code>, <code>pm.expect</code>. Values set here stay local (in <code>.pulpo/</code>).
+        {{ $t("Saved as") }} <code>{{ tab === "pre" ? ".pre.js" : ".test.js" }}</code> {{ $t("next to the request. Postman's") }} <code>pm.*</code> {{ $t("API: variables, request, response,") }} <code>pm.test</code>, <code>pm.expect</code>{{ $t(". Values set here stay local (in") }} <code>.pulpo/</code>).
       </p>
     </template>
 
@@ -346,14 +356,14 @@ const inheritedCount = computed(
       :automatic="automatic"
       @stop-cookies="request.cookies = false"
     >
-      <label class="toggle" title="Uses the cookie jar of the selected environment (🍪 in the top bar)">
+      <label class="toggle" :title="$t('Uses the cookie jar of the selected environment (🍪 in the top bar)')">
         <input
           type="checkbox"
           :checked="request.cookies ?? true"
           @change="request.cookies = ($event.target as HTMLInputElement).checked"
         />
-        Send and store cookies
-        <span class="hint-inline">— a <code>Cookie</code> header written here wins over the jar</span>
+        {{ $t("Send and store cookies") }}
+        <span class="hint-inline">— a <code>Cookie</code> {{ $t("header written here wins over the jar") }}</span>
       </label>
     </HeadersEditor>
   </section>

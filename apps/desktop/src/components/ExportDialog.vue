@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from "../i18n";
 import { computed, ref, watch } from "vue";
 import { backend, type Environment, type ExportFormat, type Exported } from "../workspace";
 
@@ -60,57 +61,56 @@ async function saveFile() {
 async function copy() {
   if (!exported.value) return;
   await navigator.clipboard.writeText(exported.value.text);
-  note.value = "Copied to the clipboard.";
+  note.value = t("Copied to the clipboard.");
 }
 </script>
 
 <template>
   <div class="backdrop" @click.self="emit('close')">
-    <section class="dialog card" role="dialog" aria-label="Export">
+    <section class="dialog card" role="dialog" :aria-label="$t('Export')">
       <header>
-        <h2>Export {{ folderId ? "folder" : "collection" }}</h2>
-        <button class="icon" title="Close" @click="emit('close')">✕</button>
+        <h2>{{ $t("Export {0}", { 0: folderId ? "folder" : "collection" }) }}</h2>
+        <button class="icon" :title="$t('Close')" @click="emit('close')">✕</button>
       </header>
       <p v-if="!available" class="muted">
-        Exporting runs in the Pulpo engine, so it needs the desktop app (or <code>pulpo export</code> in a terminal).
+        {{ $t("Exporting runs in the Pulpo engine, so it needs the desktop app (or") }} <code>pulpo export</code> {{ $t("in a terminal).") }}
       </p>
       <template v-else>
         <p class="muted">
-          From <code>{{ folderId || "the whole workspace" }}</code>. Variables stay as <code v-pre>{{name}}</code>; secrets
-          never leave the keychain.
+          {{ $t("From") }} <code>{{ folderId || "the whole workspace" }}</code>{{ $t(". Variables stay as") }} <code v-pre>{{name}}</code>{{ $t("; secrets never leave the keychain.") }}
         </p>
-        <div class="formats" role="radiogroup" aria-label="Format">
+        <div class="formats" role="radiogroup" :aria-label="$t('Format')">
           <label v-for="f in FORMATS" :key="f.value" class="format" :class="{ on: choice === f.value }">
             <input v-model="choice" type="radio" name="format" :value="f.value" />
             <span>
-              <b>{{ f.label }}</b>
-              <small>{{ f.hint }}</small>
+              <b>{{ $t(f.label) }}</b>
+              <small>{{ $t(f.hint) }}</small>
             </span>
           </label>
           <label v-for="env in environments" :key="env.id" class="format" :class="{ on: choice === `env:${env.id}` }">
             <input v-model="choice" type="radio" name="format" :value="`env:${env.id}`" />
             <span>
-              <b>Environment “{{ env.name }}”</b>
-              <small>As a Postman environment; secret values are left empty.</small>
+              <b>{{ $t("Environment “{0}”", { 0: env.name }) }}</b>
+              <small>{{ $t("As a Postman environment; secret values are left empty.") }}</small>
             </span>
           </label>
         </div>
         <p v-if="problem" class="result bad">{{ problem }}</p>
         <template v-else-if="exported">
           <p class="muted">
-            <template v-if="!choice.startsWith('env:')">{{ exported.requests }} requests → </template>
+            <template v-if="!choice.startsWith('env:')">{{ $t("{0} requests →", { 0: exported.requests }) }} </template>
             <code>{{ exported.fileName }}</code>
           </p>
           <ul v-if="exported.warnings.length" class="warnings">
             <li v-for="(w, i) in exported.warnings.slice(0, 8)" :key="i">{{ w }}</li>
-            <li v-if="exported.warnings.length > 8">… and {{ exported.warnings.length - 8 }} more</li>
+            <li v-if="exported.warnings.length > 8">{{ $t("… and {0} more", { 0: exported.warnings.length - 8 }) }}</li>
           </ul>
           <pre class="code">{{ preview }}</pre>
         </template>
         <footer>
           <span v-if="note" class="note" role="status">{{ note }}</span>
-          <button class="ghost" :disabled="busy || !exported" @click="copy">Copy</button>
-          <button class="primary" :disabled="busy || !exported" @click="saveFile">Save as…</button>
+          <button class="ghost" :disabled="busy || !exported" @click="copy">{{ $t("Copy") }}</button>
+          <button class="primary" :disabled="busy || !exported" @click="saveFile">{{ $t("Save as…") }}</button>
         </footer>
       </template>
     </section>

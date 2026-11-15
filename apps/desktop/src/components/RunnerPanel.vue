@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from "../i18n";
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import {
   backend,
@@ -96,7 +97,7 @@ async function loadRows() {
   try {
     rows.value = await backend.loadData(props.workspace.root, dataPath.value.trim());
     if (rows.value.length) iterations.value = rows.value.length;
-    else dataProblem.value = "The file has no rows.";
+    else dataProblem.value = t("The file has no rows.");
   } catch (e) {
     dataProblem.value = String(e);
   }
@@ -257,7 +258,7 @@ async function exportReport(format: "html" | "junit") {
   if (!backend.saveRunReport) return;
   try {
     const path = await backend.saveRunReport(folderName.value, results.value, format);
-    exportMessage.value = path ? `Saved to ${path}` : "";
+    exportMessage.value = path ? t("Saved to {0}", { 0: path }) : "";
   } catch (e) {
     exportMessage.value = String(e);
   }
@@ -314,32 +315,32 @@ onBeforeUnmount(() => {
   <section class="card runner">
     <header>
       <div>
-        <p class="kind">Runner</p>
+        <p class="kind">{{ $t("Runner") }}</p>
         <h2>{{ folderName }}</h2>
         <p class="sub">
-          Runs the requests in order with their scripts and tests, the same engine as <code>pulpo run</code> in CI.
+          {{ $t("Runs the requests in order with their scripts and tests, the same engine as") }} <code>pulpo run</code> {{ $t("in CI.") }}
         </p>
       </div>
       <div class="actions">
-        <select v-model="environmentId" aria-label="Environment">
-          <option value="">No environment</option>
+        <select v-model="environmentId" :aria-label="$t('Environment')">
+          <option value="">{{ $t("No environment") }}</option>
           <option v-for="env in environments" :key="env.id" :value="env.id">{{ env.name }}</option>
         </select>
-        <button class="ghost" title="Close the runner" @click="emit('close')">✕</button>
+        <button class="ghost" :title="$t('Close the runner')" @click="emit('close')">✕</button>
       </div>
     </header>
 
     <div class="tabs">
-      <button :class="{ on: tab === 'run' }" @click="tab = 'run'">Run</button>
-      <button :class="{ on: tab === 'load' }" @click="tab = 'load'">Load test</button>
+      <button :class="{ on: tab === 'run' }" @click="tab = 'run'">{{ $t("Run") }}</button>
+      <button :class="{ on: tab === 'load' }" @click="tab = 'load'">{{ $t("Load test") }}</button>
     </div>
 
     <div class="setup">
       <div class="pick">
         <div class="pick-head">
-          <span>{{ selection.length }} of {{ requests.length }} requests</span>
-          <button class="link" @click="chosen = new Set(requests.map((r) => r.id))">All</button>
-          <button class="link" @click="chosen = new Set()">None</button>
+          <span>{{ $t("{0} of {1} requests", { 0: selection.length, 1: requests.length }) }}</span>
+          <button class="link" @click="chosen = new Set(requests.map((r) => r.id))">{{ $t("All") }}</button>
+          <button class="link" @click="chosen = new Set()">{{ $t("None") }}</button>
         </div>
         <label v-for="r in requests" :key="r.id" class="req">
           <input type="checkbox" :checked="chosen.has(r.id)" @change="toggle(r.id)" />
@@ -348,62 +349,61 @@ onBeforeUnmount(() => {
           }}</span>
           <span class="name">{{ r.name }}</span>
         </label>
-        <p v-if="!requests.length" class="hint">No requests here yet.</p>
+        <p v-if="!requests.length" class="hint">{{ $t("No requests here yet.") }}</p>
       </div>
 
       <div v-if="tab === 'run'" class="options">
-        <label>Iterations <input v-model.number="iterations" type="number" min="1" max="10000" /></label>
-        <label>Delay (ms) <input v-model.number="delayMs" type="number" min="0" step="100" /></label>
-        <label title="Sends again after a network error or a 5xx answer"
-          >Retries <input v-model.number="retries" type="number" min="0" max="10"
+        <label>{{ $t("Iterations") }} <input v-model.number="iterations" type="number" min="1" max="10000" /></label>
+        <label>{{ $t("Delay (ms)") }} <input v-model.number="delayMs" type="number" min="0" step="100" /></label>
+        <label :title="$t('Sends again after a network error or a 5xx answer')"
+          >{{ $t("Retries") }} <input v-model.number="retries" type="number" min="0" max="10"
         /></label>
-        <label class="check"><input v-model="bail" type="checkbox" /> Stop at the first failure</label>
-        <label class="check" title="Rewrite the saved snapshots with these responses"
-          ><input v-model="updateSnapshots" type="checkbox" /> Update snapshots</label
+        <label class="check"><input v-model="bail" type="checkbox" /> {{ $t("Stop at the first failure") }}</label>
+        <label class="check" :title="$t('Rewrite the saved snapshots with these responses')"
+          ><input v-model="updateSnapshots" type="checkbox" /> {{ $t("Update snapshots") }}</label
         >
         <div class="data">
-          <span>Data file</span>
+          <span>{{ $t("Data file") }}</span>
           <template v-if="canUseData">
             <input
               v-model="dataPath"
-              placeholder="users.csv (CSV or JSON, one row per iteration)"
+              :placeholder="$t('users.csv (CSV or JSON, one row per iteration)')"
               spellcheck="false"
               @change="loadRows"
             />
-            <button class="ghost small" @click="pickData">Browse…</button>
-            <button v-if="dataPath" class="ghost small" @click="clearData">Clear</button>
+            <button class="ghost small" @click="pickData">{{ $t("Browse…") }}</button>
+            <button v-if="dataPath" class="ghost small" @click="clearData">{{ $t("Clear") }}</button>
           </template>
-          <span v-else class="hint">CSV and JSON data files work in the desktop app.</span>
+          <span v-else class="hint">{{ $t("CSV and JSON data files work in the desktop app.") }}</span>
         </div>
         <p v-if="dataProblem" class="warn">{{ dataProblem }}</p>
         <p v-else-if="rows.length" class="hint">
-          {{ rows.length }} rows · {{ dataVariables }}
+          {{ $t("{0} rows · {1}", { 0: rows.length, 1: dataVariables }) }}
         </p>
         <div class="go">
           <button v-if="!running" class="primary" :disabled="!selection.length" @click="start">
-            Run {{ selection.length }} request{{ selection.length === 1 ? "" : "s" }}
+            {{ $t(selection.length === 1 ? "Run 1 request" : "Run {0} requests", { 0: selection.length }) }}
             <template v-if="iterations > 1"> × {{ iterations }}</template>
           </button>
-          <button v-else class="ghost" @click="stop">Stop</button>
+          <button v-else class="ghost" @click="stop">{{ $t("Stop") }}</button>
         </div>
       </div>
 
       <div v-else class="options">
-        <label>Virtual users <input v-model.number="users" type="number" min="1" max="200" /></label>
-        <label>Duration (s) <input v-model.number="durationSecs" type="number" min="1" max="3600" /></label>
-        <label>Ramp-up (s) <input v-model.number="rampUpSecs" type="number" min="0" /></label>
+        <label>{{ $t("Virtual users") }} <input v-model.number="users" type="number" min="1" max="200" /></label>
+        <label>{{ $t("Duration (s)") }} <input v-model.number="durationSecs" type="number" min="1" max="3600" /></label>
+        <label>{{ $t("Ramp-up (s)") }} <input v-model.number="rampUpSecs" type="number" min="0" /></label>
         <p class="hint">
-          Each user runs the selected requests in a loop, with their scripts{{ rows.length ? " and one data row" : "" }}.
-          Nothing is saved: no local values, cookies or snapshots.
+          {{ $t("Each user runs the selected requests in a loop, with their scripts{0}. Nothing is saved: no local values, cookies or snapshots.", { 0: rows.length ? " and one data row" : "" }) }}
         </p>
         <div class="go">
           <template v-if="canLoad">
             <button v-if="!loadRunning" class="primary" :disabled="!selection.length" @click="startLoad">
-              Start load test
+              {{ $t("Start load test") }}
             </button>
-            <button v-else class="ghost" @click="stopLoad">Stop</button>
+            <button v-else class="ghost" @click="stopLoad">{{ $t("Stop") }}</button>
           </template>
-          <span v-else class="hint">Load tests run in the desktop app.</span>
+          <span v-else class="hint">{{ $t("Load tests run in the desktop app.") }}</span>
         </div>
       </div>
     </div>
@@ -414,16 +414,16 @@ onBeforeUnmount(() => {
           ><span class="fill" :style="{ width: `${(doneCount / Math.max(1, plannedTotal)) * 100}%` }"
         /></span>
         <span>{{ doneCount }}/{{ plannedTotal }}</span>
-        <span class="ok">{{ totals.passed }} passed</span>
-        <span :class="{ ko: totals.failed }">{{ totals.failed }} failed</span>
-        <span>tests {{ totals.testsPassed }}/{{ totals.tests }}</span>
-        <span class="muted">{{ totals.ms }} ms</span>
-        <label class="check"><input v-model="onlyFailed" type="checkbox" /> Only failed</label>
+        <span class="ok">{{ $t("{0} passed", { 0: totals.passed }) }}</span>
+        <span :class="{ ko: totals.failed }">{{ $t("{0} failed", { 0: totals.failed }) }}</span>
+        <span>{{ $t("tests {0}/{1}", { 0: totals.testsPassed, 1: totals.tests }) }}</span>
+        <span class="muted">{{ $t("{0} ms", { 0: totals.ms }) }}</span>
+        <label class="check"><input v-model="onlyFailed" type="checkbox" /> {{ $t("Only failed") }}</label>
         <span class="spacer" />
-        <button class="ghost small" :disabled="running || !totals.failed" @click="rerunFailed">Re-run failed</button>
+        <button class="ghost small" :disabled="running || !totals.failed" @click="rerunFailed">{{ $t("Re-run failed") }}</button>
         <template v-if="backend.saveRunReport">
-          <button class="ghost small" :disabled="running" @click="exportReport('html')">HTML report</button>
-          <button class="ghost small" :disabled="running" @click="exportReport('junit')">JUnit</button>
+          <button class="ghost small" :disabled="running" @click="exportReport('html')">{{ $t("HTML report") }}</button>
+          <button class="ghost small" :disabled="running" @click="exportReport('junit')">{{ $t("JUnit") }}</button>
         </template>
       </div>
       <p v-if="exportMessage" class="hint">{{ exportMessage }}</p>
@@ -431,7 +431,7 @@ onBeforeUnmount(() => {
       <div class="results">
         <div v-for="g in groups" :key="g.iteration">
           <p v-if="lastIterations > 1" class="iteration">
-            Iteration {{ g.iteration + 1 }}/{{ lastIterations }}
+            {{ $t("Iteration {0}/{1}", { 0: g.iteration + 1, 1: lastIterations }) }}
             <span v-if="rows.length" class="muted">{{
               Object.entries(rows[Math.min(g.iteration, rows.length - 1)] ?? {})
                 .map(([k, v]) => `${k}=${v}`)
@@ -445,7 +445,7 @@ onBeforeUnmount(() => {
                 r.method
               }}</span>
               <span class="name">{{ r.name }}</span>
-              <span v-if="(r.attempts ?? 1) > 1" class="tag">{{ r.attempts }} attempts</span>
+              <span v-if="(r.attempts ?? 1) > 1" class="tag">{{ $t("{0} attempts", { 0: r.attempts }) }}</span>
               <span class="status">{{ statusOf(r) }}</span>
               <span class="muted">{{ r.response ? `${r.response.durationMs} ms` : "" }}</span>
             </button>
@@ -454,12 +454,12 @@ onBeforeUnmount(() => {
                 {{ t.passed ? "✓" : "✗" }} {{ t.name }}<template v-if="t.error"> — {{ t.error }}</template>
               </p>
               <p v-for="(e, i) in r.scriptErrors" :key="`e${i}`" class="ko">! {{ e }}</p>
-              <p v-for="(l, i) in r.logs" :key="`l${i}`" class="log">&gt; {{ l }}</p>
-              <p v-if="!r.tests.length && !r.scriptErrors.length && !r.logs.length" class="muted">No tests.</p>
+              <p v-for="(l, i) in r.logs" :key="`l${i}`" class="log">{{ $t("> {0}", { 0: l }) }}</p>
+              <p v-if="!r.tests.length && !r.scriptErrors.length && !r.logs.length" class="muted">{{ $t("No tests.") }}</p>
               <div class="detail-actions">
-                <button class="link" @click="emit('open', r.id)">Open request</button>
+                <button class="link" @click="emit('open', r.id)">{{ $t("Open request") }}</button>
                 <button v-if="snapshotFailed(r)" class="link" @click="updateSnapshot(r)">
-                  Accept the new response as snapshot
+                  {{ $t("Accept the new response as snapshot") }}
                 </button>
               </div>
             </div>
@@ -475,27 +475,26 @@ onBeforeUnmount(() => {
           ><span class="fill" :style="{ width: `${(loadProgress.elapsedSecs / Math.max(1, durationSecs)) * 100}%` }"
         /></span>
         <span>{{ loadProgress.elapsedSecs }} / {{ durationSecs }} s</span>
-        <span>{{ loadProgress.done }} done</span>
-        <span :class="{ ko: loadProgress.failed }">{{ loadProgress.failed }} failed</span>
+        <span>{{ $t("{0} done", { 0: loadProgress.done }) }}</span>
+        <span :class="{ ko: loadProgress.failed }">{{ $t("{0} failed", { 0: loadProgress.failed }) }}</span>
       </div>
       <div v-if="loadSummary" class="load">
         <p class="hint">
-          {{ loadSummary.users }} users · {{ (loadSummary.elapsedMs / 1000).toFixed(1) }} s ·
-          {{ loadSummary.total.perSecond }} requests/s
+          {{ $t("{0} users · {1} s · {2} requests/s", { 0: loadSummary.users, 1: (loadSummary.elapsedMs / 1000).toFixed(1), 2: loadSummary.total.perSecond }) }}
         </p>
         <div class="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>Request</th>
-                <th>Count</th>
-                <th>Failed</th>
-                <th>Avg</th>
+                <th>{{ $t("Request") }}</th>
+                <th>{{ $t("Count") }}</th>
+                <th>{{ $t("Failed") }}</th>
+                <th>{{ $t("Avg") }}</th>
                 <th>p50</th>
                 <th>p90</th>
                 <th>p95</th>
                 <th>p99</th>
-                <th>Max</th>
+                <th>{{ $t("Max") }}</th>
                 <th>Req/s</th>
               </tr>
             </thead>
@@ -508,12 +507,12 @@ onBeforeUnmount(() => {
                 <td>{{ s.name }}</td>
                 <td>{{ s.count }}</td>
                 <td :class="{ ko: s.failed }">{{ s.failed }}</td>
-                <td>{{ s.avgMs }} ms</td>
-                <td>{{ s.p50Ms }} ms</td>
-                <td>{{ s.p90Ms }} ms</td>
-                <td>{{ s.p95Ms }} ms</td>
-                <td>{{ s.p99Ms }} ms</td>
-                <td>{{ s.maxMs }} ms</td>
+                <td>{{ $t("{0} ms", { 0: s.avgMs }) }}</td>
+                <td>{{ $t("{0} ms", { 0: s.p50Ms }) }}</td>
+                <td>{{ $t("{0} ms", { 0: s.p90Ms }) }}</td>
+                <td>{{ $t("{0} ms", { 0: s.p95Ms }) }}</td>
+                <td>{{ $t("{0} ms", { 0: s.p99Ms }) }}</td>
+                <td>{{ $t("{0} ms", { 0: s.maxMs }) }}</td>
                 <td>{{ s.perSecond }}</td>
               </tr>
             </tbody>

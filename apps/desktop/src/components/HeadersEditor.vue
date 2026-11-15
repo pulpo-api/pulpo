@@ -57,8 +57,8 @@ function remove(index: number) {
   <div class="headers">
     <template v-if="shownAutomatic.length">
       <button class="head toggle-auto" :aria-expanded="showAutomatic" @click="showAutomatic = !showAutomatic">
-        {{ showAutomatic ? "▾" : "▸" }} Automatic ({{ sentAutomatic }})
-        <span class="hint">added when sending</span>
+        {{ $t("{0} Automatic ({1})", { 0: showAutomatic ? "▾" : "▸", 1: sentAutomatic }) }}
+        <span class="hint">{{ $t("added when sending") }}</span>
       </button>
       <template v-if="showAutomatic">
         <div v-for="a in shownAutomatic" :key="a.name" class="row inherited" :class="{ replaced: a.state !== 'sent' }">
@@ -66,15 +66,15 @@ function remove(index: number) {
           <code class="name">{{ a.name }}</code>
           <code class="value" :title="a.value">{{ a.value }}</code>
           <span class="from">
-            <template v-if="a.state === 'replaced'">replaced below</template>
-            <template v-else-if="a.state === 'stopped'">stopped below</template>
+            <template v-if="a.state === 'replaced'">{{ $t("replaced below") }}</template>
+            <template v-else-if="a.state === 'stopped'">{{ $t("stopped below") }}</template>
             <template v-else>
               {{ a.from }}
               <template v-if="a.override">
-                · <button class="link" title="Send your own value instead" @click="overrideAuto(a)">override</button>
+                · <button class="link" :title="$t('Send your own value instead')" @click="overrideAuto(a)">{{ $t("override") }}</button>
               </template>
               <template v-if="a.stop">
-                · <button class="link" :title="a.stop === 'cookies' ? 'Turn the cookie jar off for this request' : 'Do not send it'" @click="stopAuto(a)">stop</button>
+                · <button class="link" :title="a.stop === 'cookies' ? $t('Turn the cookie jar off for this request') : $t('Do not send it')" @click="stopAuto(a)">{{ $t("stop") }}</button>
               </template>
             </template>
           </span>
@@ -83,7 +83,7 @@ function remove(index: number) {
     </template>
 
     <template v-if="shownInherited.length">
-      <p class="head">Inherited</p>
+      <p class="head">{{ $t("Inherited") }}</p>
       <div v-for="i in shownInherited" :key="i.header.name" class="row inherited" :class="{ replaced: i.replaced }">
         <span class="lock" :title="`Set by ${i.from}`">↑</span>
         <code class="name">{{ i.header.name }}</code>
@@ -91,26 +91,26 @@ function remove(index: number) {
         <span class="from">
           <template v-if="!i.replaced">
             {{ i.from }} ·
-            <button class="link" title="Add your own value for this header" @click="add(i.header)">override</button>
+            <button class="link" :title="$t('Add your own value for this header')" @click="add(i.header)">{{ $t("override") }}</button>
             ·
-            <button class="link" title="Do not send it from this request" @click="add({ ...i.header, enabled: false })">
-              stop
+            <button class="link" :title="$t('Do not send it from this request')" @click="add({ ...i.header, enabled: false })">
+              {{ $t("stop") }}
             </button>
           </template>
-          <template v-else-if="i.replaced.enabled">replaced below</template>
-          <template v-else>stopped below</template>
+          <template v-else-if="i.replaced.enabled">{{ $t("replaced below") }}</template>
+          <template v-else>{{ $t("stopped below") }}</template>
         </span>
       </div>
-      <p class="head">Own</p>
+      <p class="head">{{ $t("Own") }}</p>
     </template>
 
     <div v-for="(header, i) in headers" :key="i" class="row">
-      <input v-model="header.enabled" type="checkbox" :title="header.enabled ? 'Sent' : 'Not sent'" />
-      <input v-model="header.name" placeholder="Name" spellcheck="false" />
-      <VarInput v-model="header.value" placeholder="Value" :aria-label="`Value of ${header.name || 'header'}`" />
-      <button class="icon" title="Remove" @click="remove(i)">✕</button>
+      <input v-model="header.enabled" type="checkbox" :title="header.enabled ? $t('Sent') : $t('Not sent')" />
+      <input v-model="header.name" :placeholder="$t('Name')" spellcheck="false" />
+      <VarInput v-model="header.value" :placeholder="$t('Value')" :aria-label="`Value of ${header.name || $t('header')}`" />
+      <button class="icon" :title="$t('Remove')" @click="remove(i)">✕</button>
     </div>
-    <button class="link add" @click="add()">+ Add header</button>
+    <button class="link add" @click="add()">{{ $t("+ Add header") }}</button>
     <slot />
   </div>
 </template>

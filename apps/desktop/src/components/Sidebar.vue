@@ -219,34 +219,34 @@ function confirm() {
   <aside class="sidebar">
     <div class="brand">
       <img src="/pulpo.svg" alt="" width="28" height="28" />
-      <span>Pulpo</span>
+      <span>{{ $t("Pulpo") }}</span>
     </div>
 
     <template v-if="workspace">
       <div class="ws">
         <button class="ws-name" :title="workspace.root" @click="emit('folder', '')">{{ workspace.name }}</button>
-        <button class="icon" title="Run the collection: iterations, data files, reports and load tests" @click="emit('runFolder', '')">
+        <button class="icon" :title="$t('Run the collection: iterations, data files, reports and load tests')" @click="emit('runFolder', '')">
           ▶
         </button>
-        <button class="icon" title="Collection headers, auth, settings and scripts" @click="emit('editFolder', '')">⚙</button>
-        <button class="icon" title="Export as Postman, OpenAPI, a .http file or HTML documentation" @click="emit('export', '')">⇪</button>
-        <button v-if="persistent" class="icon" title="Git: changes, commit, branches, pull and push" @click="emit('git')">⑂</button>
+        <button class="icon" :title="$t('Collection headers, auth, settings and scripts')" @click="emit('editFolder', '')">⚙</button>
+        <button class="icon" :title="$t('Export as Postman, OpenAPI, a .http file or HTML documentation')" @click="emit('export', '')">⇪</button>
+        <button v-if="persistent" class="icon" :title="$t('Git: changes, commit, branches, pull and push')" @click="emit('git')">⑂</button>
         <button
           v-if="persistent"
           class="icon contracts-btn"
-          :title="driftCount ? `${driftCount} folder(s) out of step with their API contract` : 'API contracts of this repository'"
+          :title="driftCount ? `${driftCount} folder(s) out of step with their API contract` : $t('API contracts of this repository')"
           @click="emit('contracts')"
         >
           ⟲<span v-if="driftCount" class="badge">{{ driftCount }}</span>
         </button>
-        <button v-if="persistent" class="icon" title="Mock server: your examples as a fake API" @click="emit('mock')">◎</button>
-        <button v-if="persistent" class="icon" title="Open another folder" @click="emit('open')">⇄</button>
+        <button v-if="persistent" class="icon" :title="$t('Mock server: your examples as a fake API')" @click="emit('mock')">◎</button>
+        <button v-if="persistent" class="icon" :title="$t('Open another folder')" @click="emit('open')">⇄</button>
       </div>
       <div class="actions">
-        <button @click="start('request')">+ Request</button>
-        <button @click="start('folder')">+ Folder</button>
-        <button title="Import Postman, Insomnia, Bruno, Hoppscotch, OpenAPI, HAR, .http or curl" @click="emit('import')">
-          Import
+        <button @click="start('request')">{{ $t("+ Request") }}</button>
+        <button @click="start('folder')">{{ $t("+ Folder") }}</button>
+        <button :title="$t('Import Postman, Insomnia, Bruno, Hoppscotch, OpenAPI, HAR, .http or curl')" @click="emit('import')">
+          {{ $t("Import") }}
         </button>
       </div>
       <input
@@ -254,7 +254,7 @@ function confirm() {
         v-model="query"
         class="search"
         type="search"
-        placeholder="Search requests, or paste a pulpo:// link  (Ctrl+K)"
+        :placeholder="$t('Search requests, or paste a pulpo:// link (Ctrl+K)')"
         spellcheck="false"
         @keydown.esc="query = ''"
         @keydown.enter="query.trim().startsWith('pulpo://') && (emit('link', query.trim()), (query = ''))"
@@ -264,7 +264,7 @@ function confirm() {
         ref="input"
         v-model="draft"
         class="draft"
-        :placeholder="creating === 'request' ? 'Request name, then Enter' : 'Folder name, then Enter'"
+        :placeholder="creating === 'request' ? $t('Request name, then Enter') : $t('Folder name, then Enter')"
         @keydown.enter="confirm"
         @keydown.esc="creating = null"
         @blur="creating = null"
@@ -283,19 +283,19 @@ function confirm() {
           @rename="(id, name) => emit('rename', id, name)"
           @drop="onDrop"
         />
-        <p v-if="!workspace.tree.length" class="empty">Empty workspace. Add a request to start.</p>
-        <p v-else-if="!visibleTree.length" class="empty">No request matches “{{ query }}”.</p>
+        <p v-if="!workspace.tree.length" class="empty">{{ $t("Empty workspace. Add a request to start.") }}</p>
+        <p v-else-if="!visibleTree.length" class="empty">{{ $t("No request matches “{0}”.", { 0: query }) }}</p>
       </nav>
-      <section v-if="persistent" class="flows" aria-label="Flows">
+      <section v-if="persistent" class="flows" :aria-label="$t('Flows')">
         <h4>
-          <span>Flows</span>
-          <button class="icon" title="New flow: a feature told as a sequence of requests" @click="startFlow">+</button>
+          <span>{{ $t("Flows") }}</span>
+          <button class="icon" :title="$t('New flow: a feature told as a sequence of requests')" @click="startFlow">+</button>
         </h4>
         <input
           v-if="newFlowName !== null"
           v-model="newFlowName"
           class="search"
-          placeholder="Flow name, e.g. Book a telemedicine visit"
+          :placeholder="$t('Flow name, e.g. Book a telemedicine visit')"
           spellcheck="false"
           @keydown.enter="confirmFlow"
           @keydown.esc="newFlowName = null"
@@ -312,41 +312,41 @@ function confirm() {
           <span class="flow-icon">⇢</span>{{ f.name }}<span class="count">{{ f.steps.length }}</span>
         </button>
         <p v-if="!flows.length && newFlowName === null" class="empty">
-          Chain existing requests into a feature (login → search → book) without copying them.
+          {{ $t("Chain existing requests into a feature (login → search → book) without copying them.") }}
         </p>
       </section>
-      <p v-if="workspace.tree.length && !words.length" class="tip">Drag to move · double-click or F2 to rename · right-click for more</p>
+      <p v-if="workspace.tree.length && !words.length" class="tip">{{ $t("Drag to move · double-click or F2 to rename · right-click for more") }}</p>
       <footer :title="workspace.root">
         <span class="dot" :class="{ off: !persistent }"></span>
-        {{ persistent ? workspace.root : "In memory: changes are not saved" }}
+        {{ persistent ? workspace.root : $t("In memory: changes are not saved") }}
       </footer>
     </template>
 
     <div v-if="menu" class="menu-backdrop" @click="closeMenu" @contextmenu.prevent="closeMenu">
       <div class="menu card" role="menu" :style="{ left: `${menu.x}px`, top: `${menu.y}px` }" @click.stop>
-        <button role="menuitem" @click="act('rename')">Rename <kbd>F2</kbd></button>
-        <button role="menuitem" @click="act('duplicate')">Duplicate</button>
-        <button v-if="menu.node.type === 'request'" role="menuitem" @click="act('curl')">Copy as curl</button>
+        <button role="menuitem" @click="act('rename')">{{ $t("Rename") }} <kbd>F2</kbd></button>
+        <button role="menuitem" @click="act('duplicate')">{{ $t("Duplicate") }}</button>
+        <button v-if="menu.node.type === 'request'" role="menuitem" @click="act('curl')">{{ $t("Copy as curl") }}</button>
         <button v-if="menu.node.type === 'request' && persistent" role="menuitem" @click="act('link')">
-          Copy link (pulpo://)
+          {{ $t("Copy link (pulpo://)") }}
         </button>
-        <button v-if="menu.node.type === 'request'" role="menuitem" @click="act('example')">Add example</button>
-        <button v-if="menu.node.type === 'request' && persistent" role="menuitem" @click="act('flow')">Add to flow…</button>
+        <button v-if="menu.node.type === 'request'" role="menuitem" @click="act('example')">{{ $t("Add example") }}</button>
+        <button v-if="menu.node.type === 'request' && persistent" role="menuitem" @click="act('flow')">{{ $t("Add to flow…") }}</button>
         <template v-if="menu.node.type === 'folder'">
-          <button role="menuitem" @click="act('run')">Run folder…</button>
-          <button role="menuitem" @click="act('edit')">Headers, auth, settings…</button>
-          <button role="menuitem" @click="act('export')">Export folder…</button>
-          <button v-if="persistent" role="menuitem" @click="act('chain')">Make a flow from this folder…</button>
-          <button role="menuitem" @click="act('newRequest')">New request here</button>
-          <button role="menuitem" @click="act('newFolder')">New folder here</button>
+          <button role="menuitem" @click="act('run')">{{ $t("Run folder…") }}</button>
+          <button role="menuitem" @click="act('edit')">{{ $t("Headers, auth, settings…") }}</button>
+          <button role="menuitem" @click="act('export')">{{ $t("Export folder…") }}</button>
+          <button v-if="persistent" role="menuitem" @click="act('chain')">{{ $t("Make a flow from this folder…") }}</button>
+          <button role="menuitem" @click="act('newRequest')">{{ $t("New request here") }}</button>
+          <button role="menuitem" @click="act('newFolder')">{{ $t("New folder here") }}</button>
         </template>
         <hr />
         <button role="menuitem" class="danger" :class="{ armed: confirmDelete }" @click="act('delete')">
-          <template v-if="!confirmDelete">Delete</template>
+          <template v-if="!confirmDelete">{{ $t("Delete") }}</template>
           <template v-else-if="menu.node.type === 'folder'">
-            Click again: delete the folder and its {{ countRequests(menu.node) }} request(s)
+            {{ $t("Click again: delete the folder and its {0} request(s)", { 0: countRequests(menu.node) }) }}
           </template>
-          <template v-else>Click again to delete</template>
+          <template v-else>{{ $t("Click again to delete") }}</template>
         </button>
       </div>
     </div>

@@ -89,36 +89,36 @@ watch(pathNames, (names) => {
 <template>
   <div class="params">
     <div class="head">
-      <span>Query params</span>
-      <span class="hint">Enabled params live in the URL; disabled ones are kept aside and not sent.</span>
+      <span>{{ $t("Query params") }}</span>
+      <span class="hint">{{ $t("Enabled params live in the URL; disabled ones are kept aside and not sent.") }}</span>
     </div>
     <div v-for="(row, i) in rows" :key="i" class="row">
-      <input v-model="row.enabled" type="checkbox" :title="row.enabled ? 'Sent' : 'Not sent'" @change="write" />
+      <input v-model="row.enabled" type="checkbox" :title="row.enabled ? $t('Sent') : $t('Not sent')" @change="write" />
       <input
         v-model="row.name"
         :class="{ bad: row.enabled && duplicates.has(row.name) }"
-        placeholder="name"
+        :placeholder="$t('name')"
         spellcheck="false"
         @input="write"
       />
-      <VarInput v-model="row.value" placeholder="value" :aria-label="`Value of ${row.name || 'param'}`" @update:model-value="write" />
-      <button class="icon" title="Remove" @click="remove(i)">✕</button>
+      <VarInput v-model="row.value" :placeholder="$t('value')" :aria-label="`Value of ${row.name || $t('param')}`" @update:model-value="write" />
+      <button class="icon" :title="$t('Remove')" @click="remove(i)">✕</button>
     </div>
-    <button class="link" @click="add">+ Add param</button>
+    <button class="link" @click="add">{{ $t("+ Add param") }}</button>
     <p v-if="duplicates.size" class="warn">
-      Repeated: <code v-for="name in duplicates" :key="name">{{ name }}</code>. Valid in HTTP (e.g. <code>tag=a&amp;tag=b</code>), but often a mistake.
+      Repeated: <code v-for="name in duplicates" :key="name">{{ name }}</code>{{ $t(". Valid in HTTP (e.g.") }} <code>tag=a&amp;tag=b</code>{{ $t("), but often a mistake.") }}
     </p>
 
     <template v-if="pathNames.length">
       <div class="head path">
-        <span>Path params</span>
-        <span class="hint">Values for the <code>:name</code> segments of the URL. They can use <code v-pre>{{variables}}</code>.</span>
+        <span>{{ $t("Path params") }}</span>
+        <span class="hint">{{ $t("Values for the") }} <code>:name</code> {{ $t("segments of the URL. They can use") }} <code v-pre>{{variables}}</code>.</span>
       </div>
       <div v-for="name in pathNames" :key="name" class="row path-row">
         <code class="name">:{{ name }}</code>
         <VarInput
           :model-value="pathValue(name)"
-          placeholder="value"
+          :placeholder="$t('value')"
           :aria-label="`Value of :${name}`"
           @update:model-value="setPathValue(name, $event)"
         />

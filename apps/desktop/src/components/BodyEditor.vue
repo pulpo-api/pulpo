@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from "../i18n";
 import { computed, ref } from "vue";
 import { bodyMode, type BodyMode, type FormField, type HttpRequest } from "../core";
 import { backend, toWorkspacePath, type Scripts } from "../workspace";
@@ -197,7 +198,7 @@ async function pick(apply: (path: string) => void) {
   if (!picked) return;
   const relative = toWorkspacePath(props.root, picked);
   if (relative === null) {
-    pickError.value = "That file is outside the workspace. Copy it into the workspace (e.g. files/) so it travels with the collection.";
+    pickError.value = t("That file is outside the workspace. Copy it into the workspace (e.g. files/) so it travels with the collection.");
     return;
   }
   apply(relative);
@@ -206,29 +207,29 @@ async function pick(apply: (path: string) => void) {
 
 <template>
   <div class="body-editor">
-    <div class="modes" role="radiogroup" aria-label="Body type">
+    <div class="modes" role="radiogroup" :aria-label="$t('Body type')">
       <label v-for="m in MODES" :key="m.mode" :class="{ on: mode === m.mode }">
         <input type="radio" name="body-mode" :checked="mode === m.mode" @change="setMode(m.mode)" />
-        {{ m.label }}
+        {{ $t(m.label) }}
       </label>
       <select
         v-if="mode === 'raw'"
         class="raw-kind"
-        aria-label="Raw type"
+        :aria-label="$t('Raw type')"
         :value="rawKind"
-        :title="contentTypeHeader ? `Content-Type: ${contentTypeHeader.value}` : 'No Content-Type yet: detected from the body'"
+        :title="contentTypeHeader ? `Content-Type: ${contentTypeHeader.value}` : $t('No Content-Type yet: detected from the body')"
         @change="setRawKind(($event.target as HTMLSelectElement).value as RawKind)"
       >
-        <option v-for="k in RAW_KINDS" :key="k.kind" :value="k.kind">{{ k.label }}</option>
+        <option v-for="k in RAW_KINDS" :key="k.kind" :value="k.kind">{{ $t(k.label) }}</option>
       </select>
-      <span v-if="mode === 'raw' && !contentTypeHeader" class="detected">detected</span>
+      <span v-if="mode === 'raw' && !contentTypeHeader" class="detected">{{ $t("detected") }}</span>
       <span class="spacer"></span>
-      <button v-if="mode === 'raw' && rawKind === 'json'" class="link" @click="formatJson">Format JSON</button>
+      <button v-if="mode === 'raw' && rawKind === 'json'" class="link" @click="formatJson">{{ $t("Format JSON") }}</button>
     </div>
 
-    <p v-if="!hasBody && mode !== 'none' && mode !== 'graphql' && mode !== 'soap'" class="warn">{{ request.method }} requests usually have no body; servers may ignore it.</p>
+    <p v-if="!hasBody && mode !== 'none' && mode !== 'graphql' && mode !== 'soap'" class="warn">{{ $t("{0} requests usually have no body; servers may ignore it.", { 0: request.method }) }}</p>
 
-    <p v-if="mode === 'none'" class="empty">This request sends no body.</p>
+    <p v-if="mode === 'none'" class="empty">{{ $t("This request sends no body.") }}</p>
 
     <SoapEditor v-else-if="mode === 'soap'" :request="request" :root="root" @send="emit('send')" @save="emit('save')" />
 
@@ -256,35 +257,34 @@ async function pick(apply: (path: string) => void) {
 
     <div v-else-if="mode === 'urlencoded' || mode === 'multipart'" class="form">
       <div v-for="(field, i) in fields" :key="i" class="row" :class="{ multipart: mode === 'multipart' }">
-        <input v-model="field.enabled" type="checkbox" :title="field.enabled ? 'Sent' : 'Not sent'" />
-        <input v-model="field.name" placeholder="name" spellcheck="false" />
+        <input v-model="field.enabled" type="checkbox" :title="field.enabled ? $t('Sent') : $t('Not sent')" />
+        <input v-model="field.name" :placeholder="$t('name')" spellcheck="false" />
         <select
           v-if="mode === 'multipart'"
           :value="field.file ? 'file' : 'text'"
-          title="Field type"
+          :title="$t('Field type')"
           @change="setFieldType(field, ($event.target as HTMLSelectElement).value === 'file')"
         >
-          <option value="text">Text</option>
-          <option value="file">File</option>
+          <option value="text">{{ $t("Text") }}</option>
+          <option value="file">{{ $t("File") }}</option>
         </select>
         <div v-if="field.file" class="file">
           <input v-model="field.value" placeholder="files/photo.png" spellcheck="false" />
-          <button v-if="canPick" class="ghost" title="Choose a file in the workspace" @click="pick((p) => (field.value = p))">…</button>
+          <button v-if="canPick" class="ghost" :title="$t('Choose a file in the workspace')" @click="pick((p) => (field.value = p))">…</button>
         </div>
-        <VarInput v-else v-model="field.value" placeholder="value" :aria-label="`Value of ${field.name || 'field'}`" />
-        <button class="icon" title="Remove" @click="removeField(i)">✕</button>
+        <VarInput v-else v-model="field.value" :placeholder="$t('value')" :aria-label="`Value of ${field.name || $t('field')}`" />
+        <button class="icon" :title="$t('Remove')" @click="removeField(i)">✕</button>
       </div>
-      <button class="link" @click="addField">+ Add field</button>
+      <button class="link" @click="addField">{{ $t("+ Add field") }}</button>
       <p v-if="wrongType" class="warn">
-        The Content-Type header says <code>{{ contentType }}</code>, so the server will not read this form. Remove it in Headers.
+        {{ $t("The Content-Type header says") }} <code>{{ contentType }}</code>{{ $t(", so the server will not read this form. Remove it in Headers.") }}
       </p>
       <p class="hint">
         <template v-if="mode === 'urlencoded'">
-          Sent as <code>application/x-www-form-urlencoded</code><template v-if="!hasContentType">; Pulpo sets the header</template>.
+          {{ $t("Sent as") }} <code>application/x-www-form-urlencoded</code><template v-if="!hasContentType">{{ $t("; Pulpo sets the header") }}</template>.
         </template>
         <template v-else>
-          Sent as <code>multipart/form-data</code>. Pulpo writes that header with its boundary<template v-if="hasContentType">, so the Content-Type in Headers is not used</template>.
-          Files are paths inside the workspace, so the collection works on any machine.
+          {{ $t("Sent as") }} <code>multipart/form-data</code>{{ $t(". Pulpo writes that header with its boundary") }}<template v-if="hasContentType">{{ $t(", so the Content-Type in Headers is not used") }}</template>{{ $t(". Files are paths inside the workspace, so the collection works on any machine.") }}
         </template>
       </p>
     </div>
@@ -297,11 +297,10 @@ async function pick(apply: (path: string) => void) {
           spellcheck="false"
           @input="request.bodyFile = ($event.target as HTMLInputElement).value"
         />
-        <button v-if="canPick" class="ghost" @click="pick((p) => (request.bodyFile = p))">Choose…</button>
+        <button v-if="canPick" class="ghost" @click="pick((p) => (request.bodyFile = p))">{{ $t("Choose…") }}</button>
       </div>
       <p class="hint">
-        The whole body is this file, relative to the workspace. Content-Type comes from its extension unless you set one in
-        Headers.
+        {{ $t("The whole body is this file, relative to the workspace. Content-Type comes from its extension unless you set one in Headers.") }}
       </p>
     </div>
 

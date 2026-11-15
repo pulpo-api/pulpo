@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from "../i18n";
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import {
   AUTH_LABELS,
@@ -189,236 +190,236 @@ async function discover() {
     if (found.revocationEndpoint) a.revokeUrl = found.revocationEndpoint;
     if (!a.scope && found.scopesSupported.includes("openid")) a.scope = "openid";
   } catch (e) {
-    problem.value = `OpenID discovery: ${e instanceof Error ? e.message : String(e)}`;
+    problem.value = t("OpenID discovery: {0}", { 0: e instanceof Error ? e.message : String(e) });
   }
 }
 
 const getLabel = computed(() =>
   busy.value
     ? oauth.value?.grant === "authorizationCode"
-      ? "Waiting for the browser…"
-      : "Getting a token…"
-    : "Get new access token",
+      ? t("Waiting for the browser…")
+      : t("Getting a token…")
+    : t("Get new access token"),
 );
 </script>
 
 <template>
   <div class="auth">
     <div class="row">
-      <label for="auth-type">Type</label>
+      <label for="auth-type">{{ $t("Type") }}</label>
       <select id="auth-type" v-model="choice">
-        <option v-if="inherited" value="inherit">Inherit from parent</option>
+        <option v-if="inherited" value="inherit">{{ $t("Inherit from parent") }}</option>
         <option v-for="(label, type) in AUTH_LABELS" :key="type" :value="type">{{ label }}</option>
       </select>
     </div>
 
     <p v-if="auth === null && inherited" class="note">
       <template v-if="inherited.found">
-        Uses <b>{{ AUTH_LABELS[inherited.auth.type] }}</b> from {{ inheritedFrom }}.
+        {{ $t("Uses") }} <b>{{ AUTH_LABELS[inherited.auth.type] }}</b> {{ $t("from {0}.", { 0: inheritedFrom }) }}
       </template>
-      <template v-else>Nothing up the tree sets an auth, so none is sent.</template>
+      <template v-else>{{ $t("Nothing up the tree sets an auth, so none is sent.") }}</template>
     </p>
 
     <template v-if="auth?.type === 'bearer'">
       <div class="row">
-        <label for="auth-token">Token</label>
-        <VarInput id="auth-token" v-model="auth.token" placeholder="{{token}}" aria-label="Token" />
+        <label for="auth-token">{{ $t("Token") }}</label>
+        <VarInput id="auth-token" v-model="auth.token" placeholder="{{token}}" :aria-label="$t('Token')" />
       </div>
     </template>
 
     <template v-else-if="auth?.type === 'basic'">
       <div class="row">
-        <label for="auth-user">Username</label>
-        <VarInput id="auth-user" v-model="auth.username" aria-label="Username" />
+        <label for="auth-user">{{ $t("Username") }}</label>
+        <VarInput id="auth-user" v-model="auth.username" :aria-label="$t('Username')" />
       </div>
       <div class="row">
-        <label for="auth-pass">Password</label>
-        <VarInput id="auth-pass" v-model="auth.password" placeholder="{{password}}" aria-label="Password" />
+        <label for="auth-pass">{{ $t("Password") }}</label>
+        <VarInput id="auth-pass" v-model="auth.password" placeholder="{{password}}" :aria-label="$t('Password')" />
       </div>
     </template>
 
     <template v-else-if="auth?.type === 'apiKey'">
       <div class="row">
-        <label for="auth-key">Key</label>
-        <input id="auth-key" v-model="auth.key" spellcheck="false" placeholder="X-API-Key" />
+        <label for="auth-key">{{ $t("Key") }}</label>
+        <input id="auth-key" v-model="auth.key" spellcheck="false" :placeholder="$t('X-API-Key')" />
       </div>
       <div class="row">
-        <label for="auth-value">Value</label>
-        <VarInput id="auth-value" v-model="auth.value" placeholder="{{apiKey}}" aria-label="API key value" />
+        <label for="auth-value">{{ $t("Value") }}</label>
+        <VarInput id="auth-value" v-model="auth.value" placeholder="{{apiKey}}" :aria-label="$t('API key value')" />
       </div>
       <div class="row">
-        <label for="auth-in">Add to</label>
+        <label for="auth-in">{{ $t("Add to") }}</label>
         <select id="auth-in" v-model="auth.in">
-          <option value="header">Header</option>
-          <option value="query">Query params</option>
+          <option value="header">{{ $t("Header") }}</option>
+          <option value="query">{{ $t("Query params") }}</option>
         </select>
       </div>
     </template>
 
     <template v-else-if="auth?.type === 'digest' || auth?.type === 'ntlm'">
       <div class="row">
-        <label for="auth-user">Username</label>
-        <VarInput id="auth-user" v-model="auth.username" placeholder="{{username}}" aria-label="Username" />
+        <label for="auth-user">{{ $t("Username") }}</label>
+        <VarInput id="auth-user" v-model="auth.username" placeholder="{{username}}" :aria-label="$t('Username')" />
       </div>
       <div class="row">
-        <label for="auth-pass">Password</label>
-        <VarInput id="auth-pass" v-model="auth.password" placeholder="{{password}}" aria-label="Password" />
+        <label for="auth-pass">{{ $t("Password") }}</label>
+        <VarInput id="auth-pass" v-model="auth.password" placeholder="{{password}}" :aria-label="$t('Password')" />
       </div>
       <template v-if="auth.type === 'ntlm'">
         <div class="row">
-          <label for="auth-domain">Domain</label>
-          <VarInput id="auth-domain" v-model="auth.domain" placeholder="optional" aria-label="Domain" />
+          <label for="auth-domain">{{ $t("Domain") }}</label>
+          <VarInput id="auth-domain" v-model="auth.domain" :placeholder="$t('optional')" :aria-label="$t('Domain')" />
         </div>
         <div class="row">
-          <label for="auth-workstation">Workstation</label>
-          <VarInput id="auth-workstation" v-model="auth.workstation" placeholder="optional" aria-label="Workstation" />
+          <label for="auth-workstation">{{ $t("Workstation") }}</label>
+          <VarInput id="auth-workstation" v-model="auth.workstation" :placeholder="$t('optional')" :aria-label="$t('Workstation')" />
         </div>
       </template>
     </template>
 
     <template v-else-if="auth?.type === 'awsV4'">
       <div class="row">
-        <label for="aws-access">Access key</label>
-        <VarInput id="aws-access" v-model="auth.accessKey" placeholder="{{awsAccessKey}}" aria-label="Access key" />
+        <label for="aws-access">{{ $t("Access key") }}</label>
+        <VarInput id="aws-access" v-model="auth.accessKey" placeholder="{{awsAccessKey}}" :aria-label="$t('Access key')" />
       </div>
       <div class="row">
-        <label for="aws-secret">Secret key</label>
-        <VarInput id="aws-secret" v-model="auth.secretKey" placeholder="{{awsSecretKey}}" aria-label="Secret key" />
+        <label for="aws-secret">{{ $t("Secret key") }}</label>
+        <VarInput id="aws-secret" v-model="auth.secretKey" placeholder="{{awsSecretKey}}" :aria-label="$t('Secret key')" />
       </div>
       <div class="row">
-        <label for="aws-region">Region</label>
-        <VarInput id="aws-region" v-model="auth.region" placeholder="us-east-1" aria-label="Region" />
+        <label for="aws-region">{{ $t("Region") }}</label>
+        <VarInput id="aws-region" v-model="auth.region" :placeholder="$t('us-east-1')" :aria-label="$t('Region')" />
       </div>
       <div class="row">
-        <label for="aws-service">Service</label>
-        <VarInput id="aws-service" v-model="auth.service" placeholder="execute-api, s3, lambda…" aria-label="Service" />
+        <label for="aws-service">{{ $t("Service") }}</label>
+        <VarInput id="aws-service" v-model="auth.service" :placeholder="$t('execute-api, s3, lambda…')" :aria-label="$t('Service')" />
       </div>
       <div class="row">
-        <label for="aws-session">Session token</label>
+        <label for="aws-session">{{ $t("Session token") }}</label>
         <VarInput
           id="aws-session"
           v-model="auth.sessionToken"
-          placeholder="only for temporary credentials"
-          aria-label="Session token"
+          :placeholder="$t('only for temporary credentials')"
+          :aria-label="$t('Session token')"
         />
       </div>
     </template>
 
     <template v-else-if="auth?.type === 'hawk'">
       <div class="row">
-        <label for="hawk-id">Hawk ID</label>
-        <VarInput id="hawk-id" v-model="auth.id" placeholder="{{hawkId}}" aria-label="Hawk ID" />
+        <label for="hawk-id">{{ $t("Hawk ID") }}</label>
+        <VarInput id="hawk-id" v-model="auth.id" placeholder="{{hawkId}}" :aria-label="$t('Hawk ID')" />
       </div>
       <div class="row">
-        <label for="hawk-key">Hawk key</label>
-        <VarInput id="hawk-key" v-model="auth.key" placeholder="{{hawkKey}}" aria-label="Hawk key" />
+        <label for="hawk-key">{{ $t("Hawk key") }}</label>
+        <VarInput id="hawk-key" v-model="auth.key" placeholder="{{hawkKey}}" :aria-label="$t('Hawk key')" />
       </div>
       <div class="row">
-        <label for="hawk-alg">Algorithm</label>
+        <label for="hawk-alg">{{ $t("Algorithm") }}</label>
         <select id="hawk-alg" v-model="auth.algorithm">
           <option value="sha256">SHA-256</option>
           <option value="sha1">SHA-1</option>
         </select>
       </div>
       <div class="row">
-        <label for="hawk-ext">Ext</label>
-        <VarInput id="hawk-ext" v-model="auth.ext" placeholder="optional app data" aria-label="Ext" />
+        <label for="hawk-ext">{{ $t("Ext") }}</label>
+        <VarInput id="hawk-ext" v-model="auth.ext" :placeholder="$t('optional app data')" :aria-label="$t('Ext')" />
       </div>
       <div class="row">
-        <label for="hawk-payload">Body</label>
-        <label class="check"><input id="hawk-payload" v-model="auth.payload" type="checkbox" /> Sign the body too</label>
+        <label for="hawk-payload">{{ $t("Body") }}</label>
+        <label class="check"><input id="hawk-payload" v-model="auth.payload" type="checkbox" /> {{ $t("Sign the body too") }}</label>
       </div>
     </template>
 
     <template v-else-if="auth?.type === 'oauth2'">
       <div class="row">
-        <label for="oauth-grant">Grant</label>
+        <label for="oauth-grant">{{ $t("Grant") }}</label>
         <select id="oauth-grant" v-model="auth.grant">
           <option v-for="(label, grant) in OAUTH_GRANTS" :key="grant" :value="grant">{{ label }}</option>
         </select>
       </div>
       <div class="row">
-        <label for="oauth-issuer">Issuer</label>
+        <label for="oauth-issuer">{{ $t("Issuer") }}</label>
         <div class="inline">
           <input
             id="oauth-issuer"
             v-model="issuer"
             spellcheck="false"
-            placeholder="https://login.example.com (fills the URLs)"
+            :placeholder="$t('https://login.example.com (fills the URLs)')"
             @keydown.enter.prevent="discover"
           />
-          <button type="button" :disabled="!issuer.trim()" @click="discover">Discover</button>
+          <button type="button" :disabled="!issuer.trim()" @click="discover">{{ $t("Discover") }}</button>
         </div>
       </div>
       <div v-if="auth.grant === 'authorizationCode'" class="row">
-        <label for="oauth-auth-url">Auth URL</label>
-        <VarInput id="oauth-auth-url" v-model="auth.authUrl" placeholder="https://…/authorize" aria-label="Authorization URL" />
+        <label for="oauth-auth-url">{{ $t("Auth URL") }}</label>
+        <VarInput id="oauth-auth-url" v-model="auth.authUrl" placeholder="https://…/authorize" :aria-label="$t('Authorization URL')" />
       </div>
       <div class="row">
-        <label for="oauth-token-url">Token URL</label>
-        <VarInput id="oauth-token-url" v-model="auth.tokenUrl" placeholder="https://…/token" aria-label="Token URL" />
+        <label for="oauth-token-url">{{ $t("Token URL") }}</label>
+        <VarInput id="oauth-token-url" v-model="auth.tokenUrl" placeholder="https://…/token" :aria-label="$t('Token URL')" />
       </div>
       <div class="row">
-        <label for="oauth-client-id">Client ID</label>
-        <VarInput id="oauth-client-id" v-model="auth.clientId" placeholder="{{clientId}}" aria-label="Client ID" />
+        <label for="oauth-client-id">{{ $t("Client ID") }}</label>
+        <VarInput id="oauth-client-id" v-model="auth.clientId" placeholder="{{clientId}}" :aria-label="$t('Client ID')" />
       </div>
       <div class="row">
-        <label for="oauth-client-secret">Client secret</label>
+        <label for="oauth-client-secret">{{ $t("Client secret") }}</label>
         <VarInput
           id="oauth-client-secret"
           v-model="auth.clientSecret"
           placeholder="{{clientSecret}} (empty for public clients)"
-          aria-label="Client secret"
+          :aria-label="$t('Client secret')"
         />
       </div>
       <div class="row">
-        <label for="oauth-scope">Scope</label>
-        <VarInput id="oauth-scope" v-model="auth.scope" placeholder="openid profile api" aria-label="Scope" />
+        <label for="oauth-scope">{{ $t("Scope") }}</label>
+        <VarInput id="oauth-scope" v-model="auth.scope" :placeholder="$t('openid profile api')" :aria-label="$t('Scope')" />
       </div>
       <template v-if="auth.grant === 'password'">
         <div class="row">
-          <label for="oauth-user">Username</label>
-          <VarInput id="oauth-user" v-model="auth.username" aria-label="Username" />
+          <label for="oauth-user">{{ $t("Username") }}</label>
+          <VarInput id="oauth-user" v-model="auth.username" :aria-label="$t('Username')" />
         </div>
         <div class="row">
-          <label for="oauth-pass">Password</label>
-          <VarInput id="oauth-pass" v-model="auth.password" placeholder="{{password}}" aria-label="Password" />
+          <label for="oauth-pass">{{ $t("Password") }}</label>
+          <VarInput id="oauth-pass" v-model="auth.password" placeholder="{{password}}" :aria-label="$t('Password')" />
         </div>
       </template>
       <details class="advanced">
-        <summary>Advanced</summary>
+        <summary>{{ $t("Advanced") }}</summary>
         <div class="row">
-          <label for="oauth-revoke">Revocation URL</label>
+          <label for="oauth-revoke">{{ $t("Revocation URL") }}</label>
           <VarInput
             id="oauth-revoke"
             v-model="auth.revokeUrl"
-            placeholder="optional, for Revoke in the tokens panel"
-            aria-label="Revocation URL"
+            :placeholder="$t('optional, for Revoke in the tokens panel')"
+            :aria-label="$t('Revocation URL')"
           />
         </div>
         <div v-if="auth.grant === 'authorizationCode'" class="row">
-          <label for="oauth-redirect">Redirect URI</label>
+          <label for="oauth-redirect">{{ $t("Redirect URI") }}</label>
           <VarInput
             id="oauth-redirect"
             v-model="auth.redirectUri"
-            placeholder="automatic: http://127.0.0.1:<free port>/callback"
-            aria-label="Redirect URI"
+            :placeholder="$t('automatic: http://127.0.0.1:<free port>/callback')"
+            :aria-label="$t('Redirect URI')"
           />
         </div>
         <div v-if="auth.grant === 'authorizationCode'" class="row">
           <label for="oauth-pkce">PKCE</label>
-          <label class="check"><input id="oauth-pkce" v-model="auth.pkce" type="checkbox" /> Send a code challenge (S256)</label>
+          <label class="check"><input id="oauth-pkce" v-model="auth.pkce" type="checkbox" /> {{ $t("Send a code challenge (S256)") }}</label>
         </div>
         <div class="row">
-          <label for="oauth-client-auth">Client auth</label>
+          <label for="oauth-client-auth">{{ $t("Client auth") }}</label>
           <select id="oauth-client-auth" v-model="auth.clientAuth">
-            <option value="header">Basic auth header</option>
-            <option value="body">In the request body</option>
+            <option value="header">{{ $t("Basic auth header") }}</option>
+            <option value="body">{{ $t("In the request body") }}</option>
           </select>
         </div>
         <div class="row">
-          <label for="oauth-prefix">Header prefix</label>
-          <input id="oauth-prefix" v-model="auth.headerPrefix" spellcheck="false" placeholder="Bearer" />
+          <label for="oauth-prefix">{{ $t("Header prefix") }}</label>
+          <input id="oauth-prefix" v-model="auth.headerPrefix" spellcheck="false" :placeholder="$t('Bearer')" />
         </div>
       </details>
     </template>
@@ -427,45 +428,40 @@ const getLabel = computed(() =>
       <span v-if="!insideTauri" class="muted">{{ OAUTH_DESKTOP_ONLY }}</span>
       <template v-else>
         <span v-if="status" :class="status.valid ? 'ok' : 'muted'">
-          Token <code>{{ status.preview }}…</code> {{ expiry }}<template v-if="environmentId === ''"> (no environment)</template>
+          {{ $t("Token") }} <code>{{ status.preview }}…</code> {{ expiry }}<template v-if="environmentId === ''"> {{ $t("(no environment)") }}</template>
         </span>
         <span v-else class="muted">
-          <template v-if="oauth.grant === 'authorizationCode'">No token yet: log in to get one.</template>
-          <template v-else>No token yet: Pulpo gets one when you send.</template>
+          <template v-if="oauth.grant === 'authorizationCode'">{{ $t("No token yet: log in to get one.") }}</template>
+          <template v-else>{{ $t("No token yet: Pulpo gets one when you send.") }}</template>
         </span>
         <span class="actions">
           <button type="button" class="primary" :disabled="busy || !root" @click="getToken">{{ getLabel }}</button>
-          <button v-if="status" type="button" :disabled="busy" @click="forget">Forget</button>
+          <button v-if="status" type="button" :disabled="busy" @click="forget">{{ $t("Forget") }}</button>
         </span>
       </template>
     </div>
     <p v-if="problem" class="warn">{{ problem }}</p>
 
     <p v-if="literalSecret" class="warn">
-      This value is saved as plain text in the request file, so it ends up in git. Use a variable such as
-      <code v-pre>{{token}}</code> and mark it secret in the environment: its value then lives in the OS keychain.
+      {{ $t("This value is saved as plain text in the request file, so it ends up in git. Use a variable such as") }}
+      <code v-pre>{{token}}</code> {{ $t("and mark it secret in the environment: its value then lives in the OS keychain.") }}
     </p>
     <p v-else-if="shown && shown.type === 'oauth2'" class="hint">
-      Sent as <code>Authorization: {{ shown.headerPrefix || "Bearer" }} …</code>. Tokens are kept per environment in
-      the OS keychain (never in git) and refreshed when they expire; a header with the same name in the
-      Headers tab wins.
+      {{ $t("Sent as") }} <code>Authorization: {{ shown.headerPrefix || $t("Bearer") }} …</code>{{ $t(". Tokens are kept per environment in the OS keychain (never in git) and refreshed when they expire; a header with the same name in the Headers tab wins.") }}
     </p>
     <p v-else-if="shown && (shown.type === 'digest' || shown.type === 'ntlm')" class="hint">
-      Pulpo sends the request, reads the server's <code>WWW-Authenticate</code> challenge and sends it again with the
-      answer<template v-if="shown.type === 'ntlm'"> on the same connection (HTTP/1.1)</template>. A header named
-      Authorization in the Headers tab wins.
+      {{ $t("Pulpo sends the request, reads the server's") }} <code>WWW-Authenticate</code> {{ $t("challenge and sends it again with the answer") }}<template v-if="shown.type === 'ntlm'"> {{ $t("on the same connection (HTTP/1.1)") }}</template>{{ $t(". A header named Authorization in the Headers tab wins.") }}
     </p>
     <p v-else-if="shown && (shown.type === 'awsV4' || shown.type === 'hawk')" class="hint">
-      Signed when sent, over the method, URL, headers<template v-if="shown.type === 'awsV4' || shown.payload">
-      and body</template>. A header named Authorization in the Headers tab wins.
+      {{ $t("Signed when sent, over the method, URL, headers") }}<template v-if="shown.type === 'awsV4' || shown.payload">
+      {{ $t("and body") }}</template>{{ $t(". A header named Authorization in the Headers tab wins.") }}
     </p>
     <p v-else-if="shown && shown.type !== 'none'" class="hint">
-      Sent as
+      {{ $t("Sent as") }}
       <code v-if="shown.type === 'bearer'">Authorization: Bearer …</code>
       <code v-else-if="shown.type === 'basic'">Authorization: Basic …</code>
       <code v-else-if="shown.type === 'apiKey' && shown.in === 'query'">?{{ shown.key }}=…</code>
-      <code v-else-if="shown.type === 'apiKey'">{{ shown.key }}: …</code><template v-if="shown.type !== 'apiKey' || shown.in === 'header'">;
-      a header with the same name in the Headers tab wins</template>.
+      <code v-else-if="shown.type === 'apiKey'">{{ shown.key }}: …</code><template v-if="shown.type !== 'apiKey' || shown.in === 'header'">{{ $t("; a header with the same name in the Headers tab wins") }}</template>.
     </p>
   </div>
 </template>

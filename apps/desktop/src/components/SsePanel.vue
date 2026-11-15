@@ -81,20 +81,20 @@ onUnmounted(() => void stream?.stop());
   <section class="card sse">
     <div class="top">
       <button v-if="state !== 'on'" class="primary" :disabled="state === 'starting' || !backend.sseListen" @click="listen">
-        {{ state === "starting" ? "Connecting…" : "Listen" }}
+        {{ state === "starting" ? $t("Connecting…") : $t("Listen") }}
       </button>
-      <button v-else class="ghost danger" @click="stop">Stop</button>
-      <span class="state" :class="state">● {{ state === "on" ? "Listening" : state === "starting" ? "Connecting" : "Not listening" }}</span>
-      <span class="muted small">{{ count }} events<template v-if="names.length"> · {{ names.join(", ") }}</template></span>
+      <button v-else class="ghost danger" @click="stop">{{ $t("Stop") }}</button>
+      <span class="state" :class="state">● {{ state === "on" ? $t("Listening") : state === "starting" ? $t("Connecting") : $t("Not listening") }}</span>
+      <span class="muted small">{{ $t("{0} events", { 0: count }) }}<template v-if="names.length"> · {{ names.join(", ") }}</template></span>
       <span class="spacer"></span>
-      <input v-model="filter" class="filter" placeholder="Filter events" spellcheck="false" />
-      <button class="ghost" :disabled="!events.length" @click="(events = []), (open = new Set())">Clear</button>
+      <input v-model="filter" class="filter" :placeholder="$t('Filter events')" spellcheck="false" />
+      <button class="ghost" :disabled="!events.length" @click="(events = []), (open = new Set())">{{ $t("Clear") }}</button>
     </div>
     <p v-if="problem" class="warn">{{ problem }}</p>
-    <ol ref="list" class="events" aria-label="Events">
+    <ol ref="list" class="events" :aria-label="$t('Events')">
       <li v-if="!events.length" class="empty muted">
-        Listen to receive the server's events as they come (the request asks for <code>Accept: text/event-stream</code>).
-        <code>pulpo run</code> collects them for tests: <code>pm.response.json()</code> is the list.
+        {{ $t("Listen to receive the server's events as they come (the request asks for") }} <code>Accept: text/event-stream</code>).
+        <code>pulpo run</code> {{ $t("collects them for tests:") }} <code>pm.response.json()</code> {{ $t("is the list.") }}
       </li>
       <li v-for="(e, i) in shown" :key="i" :class="e.event === 'info' || e.event === 'error' ? e.event : 'data'" @click="toggle(i)">
         <span class="time">{{ (e.atMs / 1000).toFixed(2) }}s</span>
