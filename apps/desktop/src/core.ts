@@ -389,6 +389,49 @@ export async function coreInfo(): Promise<CoreInfo> {
   return invoke<CoreInfo>("core_info");
 }
 
+/** The standard introspection query (as in pulpo-core's graphql.rs). */
+export const INTROSPECTION_QUERY = `query IntrospectionQuery {
+  __schema {
+    queryType { name } mutationType { name } subscriptionType { name }
+    types { ...FullType }
+    directives { name description locations args { ...InputValue } }
+  }
+}
+fragment FullType on __Type {
+  kind name description
+  fields(includeDeprecated: true) { name description args { ...InputValue } type { ...TypeRef } isDeprecated deprecationReason }
+  inputFields { ...InputValue }
+  interfaces { ...TypeRef }
+  enumValues(includeDeprecated: true) { name description isDeprecated deprecationReason }
+  possibleTypes { ...TypeRef }
+}
+fragment InputValue on __InputValue { name description type { ...TypeRef } defaultValue }
+fragment TypeRef on __Type {
+  kind name ofType { kind name ofType { kind name ofType { kind name ofType { kind name ofType { kind name ofType { kind name ofType { kind name } } } } } } }
+}`;
+
+/** What a GraphQL operation sends: JSON `{query, variables, operationName}`, or the bare
+ * query when the request says `Content-Type: application/graphql` (as pulpo-core does). */
+export function graphqlWireBody(request: HttpRequest): string | null {
+  const g = request.graphql;
+  if (!g) return null;
+  const raw = request.headers.some(
+    (h) => h.enabled && h.name.trim().toLowerCase() === "content-type" && h.value.toLowerCase().includes("graphql"),
+  );
+  if (raw) return g.query;
+  const out: Record<string, unknown> = { query: g.query };
+  const variables = (g.variables ?? "").trim();
+  if (variables) {
+    try {
+      out.variables = JSON.parse(variables);
+    } catch {
+      out.variables = variables;
+    }
+  }
+  if (g.operationName?.trim()) out.operationName = g.operationName;
+  return JSON.stringify(out);
+}
+
 /** Sends a request. In the app, variables are resolved by pulpo-core with the chosen
  * environment (secrets come from the OS keychain). In the browser preview, `browserVars` is used. */
 export async function sendHttp(
@@ -410,6 +453,13 @@ export async function sendHttp(
       h.enabled ? { ...h, name: resolveText(h.name, vars, missing), value: resolveText(h.value, vars, missing) } : h,
     ),
     body: request.body == null ? null : resolveText(request.body, vars, missing),
+    graphql: request.graphql
+      ? {
+          query: resolveText(request.graphql.query, vars, missing),
+          variables: resolveText(request.graphql.variables ?? "", vars, missing),
+          operationName: request.graphql.operationName ?? null,
+        }
+      : null,
     form: request.form
       ? {
           kind: request.form.kind,
@@ -474,6 +524,11 @@ async function sendWithFetch(request: HttpRequest): Promise<HttpResponse> {
   // The browser preview can only apply the timeout; TLS, proxy and redirects need the app.
   const timeout = AbortSignal.timeout(request.settings?.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   let payload: BodyInit | undefined = request.body ?? undefined;
+  const graphqlBody = graphqlWireBody(request);
+  if (graphqlBody != null) {
+    payload = graphqlBody;
+    if (!headers.has("content-type")) headers.set("content-type", "application/json");
+  }
   if (request.form?.kind === "urlencoded") {
     payload = new URLSearchParams(request.form.fields.map((f) => [f.name, f.value]));
   } else if (request.form?.kind === "multipart") {

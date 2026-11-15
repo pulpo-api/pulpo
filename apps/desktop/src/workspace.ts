@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   insideTauri,
   sendHttp,
+  INTROSPECTION_QUERY,
   asSendError,
   type Auth,
   type Header,
@@ -884,7 +885,26 @@ function slugify(name: string): string {
   return slug || "untitled";
 }
 
+/** `Type` and `Type.field` names of an introspection result (as pulpo-core's `names_of`). */
+function schemaNames(introspection: string): Set<string> {
+  const out = new Set<string>();
+  const types = (JSON.parse(introspection).__schema?.types ?? []) as {
+    name: string;
+    fields?: { name: string }[] | null;
+    inputFields?: { name: string }[] | null;
+    enumValues?: { name: string }[] | null;
+  }[];
+  for (const t of types) {
+    if (t.name.startsWith("__")) continue;
+    out.add(t.name);
+    for (const f of [...(t.fields ?? []), ...(t.inputFields ?? []), ...(t.enumValues ?? [])]) out.add(`${t.name}.${f.name}`);
+  }
+  return out;
+}
+
 function memoryBackend(): WorkspaceBackend {
+  // The browser preview keeps schemas for this session only.
+  const graphqlCache = new Map<string, GraphqlSchema>();
   let workspace = sampleWorkspace();
   const environments: Environment[] = sampleEnvironments();
   const secrets = new Map<string, string>();
@@ -1201,6 +1221,43 @@ function memoryBackend(): WorkspaceBackend {
         report.error = asSendError(e);
       }
       return report;
+    },
+    async graphqlSchema(root, entry, environmentId, refresh) {
+      const key = entry.request.url.trim();
+      const previous = graphqlCache.get(key) ?? null;
+      if (!refresh) return previous ? { ...previous, cached: true, added: [], removed: [], compared: false } : null;
+      const probe = clone(entry);
+      probe.request.method = "POST";
+      probe.request.body = null;
+      probe.request.form = null;
+      probe.request.bodyFile = null;
+      probe.request.graphql = { query: INTROSPECTION_QUERY, variables: "", operationName: "IntrospectionQuery" };
+      probe.scripts = { pre: "", test: "" };
+      const report = await this.run(root, probe, environmentId);
+      if (!report.response) throw report.error?.message ?? "no response";
+      let body: { data?: { __schema?: unknown }; errors?: { message?: string }[] };
+      try {
+        body = JSON.parse(report.response.body);
+      } catch {
+        throw `${report.response.status} ${report.response.statusText}: the answer is not JSON, is this a GraphQL endpoint?`;
+      }
+      if (!body.data?.__schema) {
+        const reason = body.errors?.[0]?.message ?? `${report.response.status} ${report.response.statusText}`;
+        throw `no schema in the answer: ${reason} (is introspection turned off?)`;
+      }
+      const introspection = JSON.stringify({ __schema: body.data.__schema });
+      const before = previous ? schemaNames(previous.introspection) : null;
+      const after = schemaNames(introspection);
+      const schema: GraphqlSchema = {
+        introspection,
+        added: before ? [...after].filter((n) => !before.has(n)).sort() : [],
+        removed: before ? [...before].filter((n) => !after.has(n)).sort() : [],
+        compared: !!before,
+        fetchedAt: Math.floor(Date.now() / 1000),
+        cached: false,
+      };
+      graphqlCache.set(key, schema);
+      return schema;
     },
     browserVariables(environmentId) {
       const env = environments.find((e) => e.id === environmentId);

@@ -62,6 +62,26 @@ export function sampleWorkspace(): Workspace {
           }),
         ],
       },
+      {
+        type: "folder",
+        id: "03-graphql",
+        name: "GraphQL",
+        children: [
+          request(
+            "03-graphql/01-a-country.pulpo.yaml",
+            "A country",
+            {
+              method: "POST",
+              url: "https://countries.trevorblades.com/graphql",
+              graphql: {
+                query: "query Country($code: ID!) {\n  country(code: $code) {\n    name\n    capital\n    currency\n  }\n}\n",
+                variables: '{\n  "code": "CL"\n}\n',
+              },
+            },
+            "graphql",
+          ),
+        ],
+      },
     ],
   };
 }
