@@ -108,6 +108,13 @@ impl Session {
         })
     }
 
+    /// The environment's values with the local ones on top.
+    pub fn variables(&self) -> Variables {
+        let mut vars = self.env.clone();
+        vars.extend(self.local.clone());
+        vars
+    }
+
     /// An in-memory copy (same values and cookies) that saves nothing.
     pub fn detached(&self) -> Session {
         Session {

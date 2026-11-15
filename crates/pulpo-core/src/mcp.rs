@@ -166,7 +166,7 @@ fn tools() -> Value {
         },
         {
             "name": "save_flow",
-            "description": "Create or replace a flow. Steps reference requests by id (never copy them) or other flows. save keeps response values (JSONPath) as {{variables}} for later steps; expect checks the status.",
+            "description": "Create or replace a flow. Steps reference requests by id (never copy them) or other flows, or pause with wait. save keeps response values (JSONPath; several matches make a list) as {{variables}} for later steps; expect checks the status. Any step can have if (a condition like \"{{role}} == admin\", ==, !=, >, <, >=, <=, contains, or just \"{{var}}\") and forEach (a list variable or \"a, b\") with as (the item variable). retry repeats a request until a condition holds; {{$status}} is the last status.",
             "inputSchema": { "type": "object", "properties": {
                 "id": { "type": "string", "description": "Existing flow id to replace; omit to create one from the name." },
                 "name": { "type": "string" },
@@ -176,7 +176,16 @@ fn tools() -> Value {
                     "flow": { "type": "string", "description": "Or a flow id, to reuse it" },
                     "name": { "type": "string" },
                     "save": { "type": "object", "additionalProperties": { "type": "string" }, "description": "variable: JSONPath, e.g. { \"token\": \"$.data.token\" }" },
-                    "expect": { "type": "object", "properties": { "status": { "type": "integer" } } }
+                    "expect": { "type": "object", "properties": { "status": { "type": "integer" } } },
+                    "wait": { "type": "string", "description": "Or a pause: 500ms, 2s, 1m" },
+                    "if": { "type": "string", "description": "Run only when this holds, e.g. {{role}} == admin" },
+                    "forEach": { "type": "string", "description": "Repeat once per item: {{ids}} (a JSON list) or a, b, c" },
+                    "as": { "type": "string", "description": "Variable for each item (item by default)" },
+                    "retry": { "type": "object", "properties": {
+                        "until": { "type": "string", "description": "e.g. {{state}} == DONE" },
+                        "times": { "type": "integer" },
+                        "every": { "type": "string", "description": "e.g. 2s" }
+                    }, "required": ["until"] }
                 } } }
             }, "required": ["name", "steps"] }
         },

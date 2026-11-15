@@ -503,6 +503,8 @@ pub fn to_flow(chain: &Chain, name: &str) -> Flow {
                     .status
                     .filter(|c| (200..300).contains(c))
                     .map(|c| Expect { status: Some(c) }),
+                retry: None,
+                control: Default::default(),
             })
             .collect(),
     }

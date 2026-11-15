@@ -3,6 +3,9 @@
 //! This crate holds the collection model shared by the desktop app and the CLI.
 //! Protocol engines, scripting and code scanning will live in their own modules.
 
+// The MCP tool list is one large json! literal.
+#![recursion_limit = "256"]
+
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;

@@ -27,7 +27,41 @@ pub struct Expect {
     pub status: Option<u16>,
 }
 
-/// One step: a request of the collection or another flow.
+/// Repeat a request until a condition holds (a payment that settles, a job that ends).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Retry {
+    /// A condition like `{{state}} == PAID` or `{{$status}} == 200`.
+    pub until: String,
+    #[serde(default = "five")]
+    pub times: u32,
+    #[serde(default = "one_second")]
+    pub every: String,
+}
+
+fn five() -> u32 {
+    5
+}
+
+fn one_second() -> String {
+    "1s".into()
+}
+
+/// What any step can add: run only `if` a condition holds, or once per item of a list.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Control {
+    #[serde(default, rename = "if", skip_serializing_if = "Option::is_none")]
+    pub when: Option<String>,
+    /// A list: a variable holding a JSON array (`{{ids}}`) or `a, b, c`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub for_each: Option<String>,
+    /// The variable each item goes to (`item` when left out).
+    #[serde(default, rename = "as", skip_serializing_if = "Option::is_none")]
+    pub item: Option<String>,
+}
+
+/// One step: a request of the collection, another flow, or a pause.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Step {
@@ -42,11 +76,179 @@ pub enum Step {
         save: BTreeMap<String, String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         expect: Option<Expect>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retry: Option<Retry>,
+        #[serde(flatten)]
+        control: Control,
     },
     Flow {
         /// Flow id (the file name without `.flow.yaml`).
         flow: String,
+        #[serde(flatten)]
+        control: Control,
     },
+    Wait {
+        /// `500ms`, `2s`, `1m`.
+        #[serde(deserialize_with = "text_or_number")]
+        wait: String,
+        #[serde(flatten)]
+        control: Control,
+    },
+}
+
+impl Step {
+    pub fn control(&self) -> &Control {
+        match self {
+            Step::Request { control, .. }
+            | Step::Flow { control, .. }
+            | Step::Wait { control, .. } => control,
+        }
+    }
+
+    /// A step that runs a request, with nothing else set.
+    pub fn request(id: &str) -> Step {
+        Step::Request {
+            request: id.to_string(),
+            name: None,
+            save: BTreeMap::new(),
+            expect: None,
+            retry: None,
+            control: Control::default(),
+        }
+    }
+}
+
+fn text_or_number<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum TextOrNumber {
+        Text(String),
+        Number(u64),
+    }
+    Ok(match TextOrNumber::deserialize(d)? {
+        TextOrNumber::Text(t) => t,
+        TextOrNumber::Number(n) => format!("{n}ms"),
+    })
+}
+
+/// `500ms`, `2s`, `1m` (a bare number is milliseconds); at most 10 minutes.
+pub fn duration(text: &str) -> Result<std::time::Duration, String> {
+    let t = text.trim();
+    let (number, unit) = match t.find(|c: char| !c.is_ascii_digit() && c != '.') {
+        Some(i) => (&t[..i], t[i..].trim()),
+        None => (t, "ms"),
+    };
+    let n: f64 = number
+        .parse()
+        .map_err(|_| format!("{text} is not a duration (500ms, 2s, 1m)"))?;
+    let ms = match unit {
+        "ms" => n,
+        "s" => n * 1000.0,
+        "m" | "min" => n * 60_000.0,
+        _ => return Err(format!("{text} is not a duration (500ms, 2s, 1m)")),
+    };
+    if ms > 600_000.0 {
+        return Err(format!("{text} is too long (10 minutes at most)"));
+    }
+    Ok(std::time::Duration::from_millis(ms as u64))
+}
+
+/// `{{name}}` → its value, or nothing when it has none.
+fn interpolate(text: &str, vars: &HashMap<String, String>) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find("{{") {
+        out.push_str(&rest[..start]);
+        match rest[start + 2..].find("}}") {
+            Some(end) => {
+                let name = rest[start + 2..start + 2 + end].trim();
+                out.push_str(vars.get(name).map(String::as_str).unwrap_or_default());
+                rest = &rest[start + 2 + end + 2..];
+            }
+            None => {
+                out.push_str(&rest[start..]);
+                rest = "";
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+fn truthy(value: &str) -> bool {
+    let v = value.trim();
+    !(v.is_empty() || ["false", "0", "null", "undefined", "[]"].contains(&v))
+}
+
+fn unquote(text: &str) -> &str {
+    let t = text.trim();
+    for q in ['\'', '"'] {
+        if t.len() >= 2 && t.starts_with(q) && t.ends_with(q) {
+            return &t[1..t.len() - 1];
+        }
+    }
+    t
+}
+
+/// A condition: `{{a}} == b`, `!=`, `>`, `>=`, `<`, `<=`, `contains`, or just `{{a}}` (has a
+/// value that is not false, 0 or null) and `!{{a}}`. Numbers compare as numbers.
+pub fn holds(condition: &str, vars: &HashMap<String, String>) -> bool {
+    let c = condition.trim();
+    for op in [
+        " not contains ",
+        " contains ",
+        "==",
+        "!=",
+        ">=",
+        "<=",
+        ">",
+        "<",
+    ] {
+        if let Some(i) = c.find(op) {
+            let left = interpolate(unquote(&c[..i]), vars);
+            let right = interpolate(unquote(&c[i + op.len()..]), vars);
+            let numbers = left
+                .trim()
+                .parse::<f64>()
+                .ok()
+                .zip(right.trim().parse::<f64>().ok());
+            let order = match numbers {
+                Some((a, b)) => a.partial_cmp(&b),
+                None => Some(left.as_str().cmp(right.as_str())),
+            };
+            return match op {
+                " contains " => left.contains(&right),
+                " not contains " => !left.contains(&right),
+                "==" => order == Some(std::cmp::Ordering::Equal),
+                "!=" => order != Some(std::cmp::Ordering::Equal),
+                ">=" => order.is_some_and(|o| o.is_ge()),
+                "<=" => order.is_some_and(|o| o.is_le()),
+                ">" => order.is_some_and(|o| o.is_gt()),
+                _ => order.is_some_and(|o| o.is_lt()),
+            };
+        }
+    }
+    match c.strip_prefix('!') {
+        Some(rest) => !truthy(&interpolate(unquote(rest), vars)),
+        None => truthy(&interpolate(unquote(c), vars)),
+    }
+}
+
+/// The items of a `forEach`: a JSON array, or a list separated by commas.
+fn items_of(list: &str, vars: &HashMap<String, String>) -> Result<Vec<String>, String> {
+    let text = interpolate(list, vars);
+    let text = text.trim();
+    if text.is_empty() {
+        return Err(format!("forEach {list} has no value"));
+    }
+    if let Ok(serde_json::Value::Array(items)) = serde_json::from_str(text) {
+        return Ok(items.iter().map(value_text).collect());
+    }
+    Ok(text
+        .split(',')
+        .map(|s| unquote(s).to_string())
+        .filter(|s| !s.is_empty())
+        .collect())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -120,14 +322,30 @@ pub fn to_yaml(flow: &Flow) -> String {
     }
     out.push_str("steps:\n");
     for step in &flow.steps {
+        let (first, value) = match step {
+            Step::Request { request, .. } => ("request", request),
+            Step::Flow { flow, .. } => ("flow", flow),
+            Step::Wait { wait, .. } => ("wait", wait),
+        };
+        out.push_str(&format!("  - {first}: {}\n", quote(value)));
+        let control = step.control();
+        if let Some(when) = &control.when {
+            out.push_str(&format!("    if: {}\n", quote(when)));
+        }
+        if let Some(list) = &control.for_each {
+            out.push_str(&format!("    forEach: {}\n", quote(list)));
+        }
+        if let Some(item) = &control.item {
+            out.push_str(&format!("    as: {}\n", quote(item)));
+        }
         match step {
             Step::Request {
-                request,
                 name,
                 save,
                 expect,
+                retry,
+                ..
             } => {
-                out.push_str(&format!("  - request: {}\n", quote(request)));
                 if let Some(name) = name {
                     out.push_str(&format!("    name: {}\n", quote(name)));
                 }
@@ -140,8 +358,16 @@ pub fn to_yaml(flow: &Flow) -> String {
                 if let Some(status) = expect.as_ref().and_then(|e| e.status) {
                     out.push_str(&format!("    expect:\n      status: {status}\n"));
                 }
+                if let Some(retry) = retry {
+                    out.push_str(&format!(
+                        "    retry:\n      until: {}\n      times: {}\n      every: {}\n",
+                        quote(&retry.until),
+                        retry.times,
+                        quote(&retry.every)
+                    ));
+                }
             }
-            Step::Flow { flow } => out.push_str(&format!("  - flow: {}\n", quote(flow))),
+            Step::Flow { .. } | Step::Wait { .. } => {}
         }
     }
     out
@@ -182,14 +408,23 @@ pub fn delete_flow(root: &Path, id: &str) -> Result<(), CollectionError> {
 // --------------------------------------------------------------------- the plan
 
 /// A step of the flow once subflows are expanded: what the tree view draws.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlanNode {
     /// `"2"`, `"1.3"`: position in the flow and its subflows.
     pub path: String,
     pub depth: usize,
-    /// `request`, `flow` (a subflow header) or `missing`.
+    /// `request`, `flow` (a subflow header), `wait` or `missing`.
     pub kind: String,
+    /// `if` of the step.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub condition: Option<String>,
+    /// `forEach` of the step, as `{{ids}} as id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub for_each: Option<String>,
+    /// `retry` of the step, as `until …, 5 times every 1s`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry: Option<String>,
     /// Request or flow id.
     pub target: String,
     pub name: String,
@@ -226,15 +461,39 @@ fn expand(
         } else {
             format!("{prefix}.{}", i + 1)
         };
+        let control = step.control();
+        let base = PlanNode {
+            path: path.clone(),
+            depth,
+            condition: control.when.clone(),
+            for_each: control
+                .for_each
+                .as_ref()
+                .map(|list| format!("{list} as {}", control.item.as_deref().unwrap_or("item"))),
+            ..Default::default()
+        };
         match step {
+            Step::Wait { wait, .. } => out.push(PlanNode {
+                kind: "wait".into(),
+                target: wait.clone(),
+                name: format!("Wait {wait}"),
+                problem: duration(wait).err(),
+                ..base
+            }),
             Step::Request {
                 request,
                 name,
                 save,
                 expect,
+                retry,
+                ..
             } => {
                 let found = collection::load_request(root, request).ok();
+                let bad_retry = retry.as_ref().and_then(|r| duration(&r.every).err());
                 out.push(PlanNode {
+                    retry: retry
+                        .as_ref()
+                        .map(|r| format!("until {}, {} times every {}", r.until, r.times, r.every)),
                     path,
                     depth,
                     kind: if found.is_some() {
@@ -260,10 +519,12 @@ fn expand(
                     expect: expect.as_ref().and_then(|e| e.status),
                     problem: found
                         .is_none()
-                        .then(|| format!("no request {request} in the collection")),
+                        .then(|| format!("no request {request} in the collection"))
+                        .or(bad_retry),
+                    ..base
                 });
             }
-            Step::Flow { flow: sub } => {
+            Step::Flow { flow: sub, .. } => {
                 let problem = if stack.contains(sub) {
                     Some(format!(
                         "{sub} includes itself ({} → {sub})",
@@ -293,6 +554,7 @@ fn expand(
                     save: Vec::new(),
                     expect: None,
                     problem: problem.or_else(|| loaded.is_none().then(|| format!("no flow {sub}"))),
+                    ..base
                 });
                 if let Some(subflow) = loaded {
                     stack.push(sub.clone());
@@ -323,7 +585,7 @@ pub fn usage(root: &Path) -> Result<HashMap<String, Vec<String>>, CollectionErro
 // --------------------------------------------------------------------- running
 
 /// What happened at one step, sent while the flow runs.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StepEvent {
     pub path: String,
@@ -334,6 +596,12 @@ pub struct StepEvent {
     /// Variables the step saved (name → value).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub saved: BTreeMap<String, String>,
+    /// `2/5` inside a `forEach`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub iteration: Option<String>,
+    /// Why it was skipped or failed without a response, or how many attempts it took.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -358,6 +626,301 @@ fn value_text(value: &serde_json::Value) -> String {
     }
 }
 
+type OnStep<'s> = &'s mut (dyn FnMut(&StepEvent) + Send);
+type Running<'s> = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 's>>;
+
+struct Runner<'a> {
+    root: &'a Path,
+    session: Session,
+    /// Values saved by the flow and the current `forEach` items.
+    vars: crate::data::Row,
+    nodes: Vec<PlanNode>,
+    report: FlowReport,
+    failed: bool,
+    last_status: Option<u16>,
+}
+
+impl Runner<'_> {
+    fn emit(&mut self, on_step: OnStep<'_>, event: StepEvent) {
+        on_step(&event);
+        if event.state != "running" {
+            if event.state == "failed" {
+                self.failed = true;
+                self.report.passed = false;
+            }
+            self.report.steps.push(event);
+        }
+    }
+
+    /// What conditions see: the environment, then the flow's values and `$status`.
+    fn condition_vars(&self) -> HashMap<String, String> {
+        let mut vars = self.session.variables();
+        vars.extend(self.vars.clone());
+        if let Some(status) = self.last_status {
+            vars.insert("$status".into(), status.to_string());
+        }
+        vars
+    }
+
+    /// Marks a step and everything under it as skipped.
+    fn skip(&mut self, on_step: OnStep<'_>, path: &str, note: &str) {
+        let inside: Vec<String> = self
+            .nodes
+            .iter()
+            .filter(|n| n.kind == "request" || n.kind == "wait")
+            .filter(|n| n.path == path || n.path.starts_with(&format!("{path}.")))
+            .map(|n| n.path.clone())
+            .collect();
+        for p in inside {
+            self.emit(
+                on_step,
+                StepEvent {
+                    path: p,
+                    state: "skipped".into(),
+                    note: Some(note.to_string()),
+                    ..Default::default()
+                },
+            );
+        }
+    }
+
+    fn steps<'s>(&'s mut self, on_step: OnStep<'s>, flow: Flow, prefix: String) -> Running<'s> {
+        Box::pin(async move {
+            for (i, step) in flow.steps.iter().enumerate() {
+                if self.failed {
+                    return;
+                }
+                let path = if prefix.is_empty() {
+                    format!("{}", i + 1)
+                } else {
+                    format!("{prefix}.{}", i + 1)
+                };
+                let control = step.control().clone();
+                if let Some(when) = &control.when {
+                    if !holds(when, &self.condition_vars()) {
+                        self.skip(on_step, &path, &format!("if {when}: no"));
+                        continue;
+                    }
+                }
+                let items: Vec<Option<String>> = match &control.for_each {
+                    None => vec![None],
+                    Some(list) => match items_of(list, &self.condition_vars()) {
+                        Ok(items) => items.into_iter().map(Some).collect(),
+                        Err(e) => {
+                            self.emit(
+                                on_step,
+                                StepEvent {
+                                    path: path.clone(),
+                                    state: "failed".into(),
+                                    note: Some(e),
+                                    ..Default::default()
+                                },
+                            );
+                            return;
+                        }
+                    },
+                };
+                if items.is_empty() {
+                    self.skip(on_step, &path, "forEach: the list is empty");
+                    continue;
+                }
+                let total = items.len();
+                for (n, item) in items.into_iter().enumerate() {
+                    if self.failed {
+                        return;
+                    }
+                    let iteration = item.as_ref().map(|_| format!("{}/{total}", n + 1));
+                    if let Some(item) = item {
+                        let name = control.item.clone().unwrap_or_else(|| "item".into());
+                        self.vars.insert(name, item);
+                    }
+                    match step {
+                        Step::Request { .. } => {
+                            self.request(&mut *on_step, step, &path, iteration).await
+                        }
+                        Step::Wait { wait, .. } => {
+                            self.wait(&mut *on_step, wait, &path, iteration).await
+                        }
+                        Step::Flow { flow: sub, .. } => {
+                            // `plan` already refused cycles and missing flows.
+                            if let Ok(subflow) = load_flow(self.root, sub) {
+                                self.steps(&mut *on_step, subflow, path.clone()).await;
+                            }
+                        }
+                    }
+                }
+            }
+        })
+    }
+
+    async fn wait(
+        &mut self,
+        on_step: OnStep<'_>,
+        text: &str,
+        path: &str,
+        iteration: Option<String>,
+    ) {
+        let event = StepEvent {
+            path: path.to_string(),
+            iteration,
+            ..Default::default()
+        };
+        match duration(text) {
+            Ok(d) => {
+                on_step(&StepEvent {
+                    state: "running".into(),
+                    ..event.clone()
+                });
+                tokio::time::sleep(d).await;
+                self.emit(
+                    on_step,
+                    StepEvent {
+                        state: "passed".into(),
+                        note: Some(format!("waited {text}")),
+                        ..event
+                    },
+                );
+            }
+            Err(e) => self.emit(
+                on_step,
+                StepEvent {
+                    state: "failed".into(),
+                    note: Some(e),
+                    ..event
+                },
+            ),
+        }
+    }
+
+    async fn request(
+        &mut self,
+        on_step: OnStep<'_>,
+        step: &Step,
+        path: &str,
+        iteration: Option<String>,
+    ) {
+        let Step::Request {
+            request,
+            save,
+            expect,
+            retry,
+            ..
+        } = step
+        else {
+            return;
+        };
+        let event = StepEvent {
+            path: path.to_string(),
+            iteration: iteration.clone(),
+            ..Default::default()
+        };
+        let entry: RequestEntry = match collection::load_request(self.root, request) {
+            Ok(entry) => entry,
+            Err(e) => {
+                return self.emit(
+                    on_step,
+                    StepEvent {
+                        state: "failed".into(),
+                        note: Some(e.to_string()),
+                        ..event
+                    },
+                )
+            }
+        };
+        let times = retry.as_ref().map(|r| r.times.max(1)).unwrap_or(1);
+        let every = retry
+            .as_ref()
+            .and_then(|r| duration(&r.every).ok())
+            .unwrap_or_default();
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            on_step(&StepEvent {
+                state: "running".into(),
+                note: retry.as_ref().map(|_| format!("attempt {attempt}/{times}")),
+                ..event.clone()
+            });
+            let options = RunOptions {
+                data: self.vars.clone(),
+                ..Default::default()
+            };
+            let mut run_report = run::run_in(self.root, &entry, &mut self.session, &options).await;
+            run_report.name = match &iteration {
+                Some(i) => format!("{path} · {} ({i})", entry.name),
+                None => format!("{path} · {}", entry.name),
+            };
+            self.last_status = run_report.response.as_ref().map(|r| r.status);
+            if let (Some(want), Some(response)) =
+                (expect.as_ref().and_then(|e| e.status), &run_report.response)
+            {
+                run_report.tests.push(TestResult {
+                    name: format!("status is {want}"),
+                    passed: response.status == want,
+                    error: (response.status != want)
+                        .then(|| format!("expected {want}, got {}", response.status)),
+                });
+            }
+            let mut saved = BTreeMap::new();
+            if let Some(response) = &run_report.response {
+                for (var, json_path) in save {
+                    match crate::query::json_path(&response.body, json_path) {
+                        Ok(values) if !values.is_empty() => {
+                            // Several matches keep them all, as a list for `forEach`.
+                            let text = if values.len() == 1 {
+                                value_text(&values[0])
+                            } else {
+                                serde_json::Value::Array(values).to_string()
+                            };
+                            self.vars.insert(var.clone(), text.clone());
+                            saved.insert(var.clone(), text);
+                        }
+                        Ok(_) => run_report.tests.push(TestResult {
+                            name: format!("save {var}"),
+                            passed: false,
+                            error: Some(format!("{json_path} found nothing in the response")),
+                        }),
+                        Err(e) => run_report.tests.push(TestResult {
+                            name: format!("save {var}"),
+                            passed: false,
+                            error: Some(format!("{json_path}: {e}")),
+                        }),
+                    }
+                }
+            }
+            let mut note = None;
+            if let Some(retry) = retry {
+                let done = holds(&retry.until, &self.condition_vars());
+                if !done && attempt < times {
+                    tokio::time::sleep(every).await;
+                    continue;
+                }
+                if !done {
+                    run_report.tests.push(TestResult {
+                        name: format!("until {}", retry.until),
+                        passed: false,
+                        error: Some(format!("still not true after {times} attempts")),
+                    });
+                }
+                note = Some(format!(
+                    "{attempt} attempt{}",
+                    if attempt == 1 { "" } else { "s" }
+                ));
+            }
+            let passed = run_report.passed();
+            return self.emit(
+                on_step,
+                StepEvent {
+                    state: if passed { "passed" } else { "failed" }.into(),
+                    report: Some(run_report),
+                    saved,
+                    note,
+                    ..event
+                },
+            );
+        }
+    }
+}
+
 /// Runs a flow. The environment's values and the request scripts work as usual; values
 /// saved by the flow are variables of this run only. Stops at the first failing step.
 pub async fn run_flow(
@@ -378,124 +941,40 @@ pub async fn run_flow(
         ));
     }
     // In memory: a flow does not leave its values or cookies in the workspace.
-    let mut session = Session::open(root, environment_id, store, false)?.detached();
-    let mut vars: crate::data::Row = HashMap::new();
-    let mut report = FlowReport {
-        flow: flow.name.clone(),
-        passed: true,
-        steps: Vec::new(),
+    let session = Session::open(root, environment_id, store, false)?.detached();
+    let mut runner = Runner {
+        root,
+        session,
+        vars: HashMap::new(),
+        nodes,
+        report: FlowReport {
+            flow: flow.name.clone(),
+            passed: true,
+            steps: Vec::new(),
+        },
+        failed: false,
+        last_status: None,
     };
-    let steps: Vec<(PlanNode, Option<Step>)> = {
-        // The step definition of each request node, to read its save/expect.
-        let mut defs = Vec::new();
-        collect_steps(root, &flow, "", &mut defs);
-        nodes
-            .into_iter()
-            .map(|n| {
-                let def = defs
-                    .iter()
-                    .find(|(p, _)| *p == n.path)
-                    .map(|(_, s)| s.clone());
-                (n, def)
-            })
-            .collect()
-    };
-    let mut failed = false;
-    for (node, def) in steps {
-        if node.kind != "request" {
-            continue;
-        }
-        if failed {
-            let event = StepEvent {
-                path: node.path.clone(),
+    runner.steps(&mut *on_step, flow, String::new()).await;
+    // What never ran because an earlier step failed.
+    let pending: Vec<String> = runner
+        .nodes
+        .iter()
+        .filter(|n| n.kind == "request" || n.kind == "wait")
+        .filter(|n| !runner.report.steps.iter().any(|s| s.path == n.path))
+        .map(|n| n.path.clone())
+        .collect();
+    for path in pending {
+        runner.emit(
+            on_step,
+            StepEvent {
+                path,
                 state: "skipped".into(),
-                report: None,
-                saved: BTreeMap::new(),
-            };
-            on_step(&event);
-            report.steps.push(event);
-            continue;
-        }
-        on_step(&StepEvent {
-            path: node.path.clone(),
-            state: "running".into(),
-            report: None,
-            saved: BTreeMap::new(),
-        });
-        let entry: RequestEntry =
-            collection::load_request(root, &node.target).map_err(|e| e.to_string())?;
-        let options = RunOptions {
-            data: vars.clone(),
-            ..Default::default()
-        };
-        let mut run_report = run::run_in(root, &entry, &mut session, &options).await;
-        run_report.name = format!("{} · {}", node.path, entry.name);
-        let mut saved = BTreeMap::new();
-        if let Some(Step::Request { save, expect, .. }) = def {
-            if let (Some(want), Some(response)) =
-                (expect.as_ref().and_then(|e| e.status), &run_report.response)
-            {
-                run_report.tests.push(TestResult {
-                    name: format!("status is {want}"),
-                    passed: response.status == want,
-                    error: (response.status != want)
-                        .then(|| format!("expected {want}, got {}", response.status)),
-                });
-            }
-            if let Some(response) = &run_report.response {
-                for (var, path) in &save {
-                    match crate::query::json_path(&response.body, path) {
-                        Ok(values) if !values.is_empty() => {
-                            let text = value_text(&values[0]);
-                            vars.insert(var.clone(), text.clone());
-                            saved.insert(var.clone(), text);
-                        }
-                        Ok(_) => run_report.tests.push(TestResult {
-                            name: format!("save {var}"),
-                            passed: false,
-                            error: Some(format!("{path} found nothing in the response")),
-                        }),
-                        Err(e) => run_report.tests.push(TestResult {
-                            name: format!("save {var}"),
-                            passed: false,
-                            error: Some(format!("{path}: {e}")),
-                        }),
-                    }
-                }
-            }
-        }
-        let passed = run_report.passed();
-        failed = !passed;
-        report.passed &= passed;
-        let event = StepEvent {
-            path: node.path.clone(),
-            state: if passed { "passed" } else { "failed" }.into(),
-            report: Some(run_report),
-            saved,
-        };
-        on_step(&event);
-        report.steps.push(event);
+                ..Default::default()
+            },
+        );
     }
-    Ok(report)
-}
-
-fn collect_steps(root: &Path, flow: &Flow, prefix: &str, out: &mut Vec<(String, Step)>) {
-    for (i, step) in flow.steps.iter().enumerate() {
-        let path = if prefix.is_empty() {
-            format!("{}", i + 1)
-        } else {
-            format!("{prefix}.{}", i + 1)
-        };
-        if let Step::Flow { flow: sub } = step {
-            // `plan` already refused cycles before anything runs.
-            if out.len() < 10_000 {
-                if let Ok(subflow) = load_flow(root, sub) {
-                    collect_steps(root, &subflow, &path, out);
-                }
-            }
-        }
-        out.push((path, step.clone()));
-    }
+    Ok(runner.report)
 }
 
 #[cfg(test)]
@@ -512,6 +991,7 @@ mod tests {
     async fn api() -> String {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
+        let polls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         tokio::spawn(async move {
             loop {
                 let Ok((mut socket, _)) = listener.accept().await else {
@@ -527,6 +1007,19 @@ mod tests {
                     )
                 } else if text.starts_with("GET /users/7") && text.contains("Bearer t-42") {
                     ("200 OK", r#"{"name":"Ana"}"#.to_string())
+                } else if text.starts_with("GET /orders ") {
+                    (
+                        "200 OK",
+                        r#"{"items":[{"id":11},{"id":12},{"id":13}],"role":"admin"}"#.to_string(),
+                    )
+                } else if let Some(rest) = text.strip_prefix("GET /orders/") {
+                    let id: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+                    ("200 OK", format!(r#"{{"id":{id}}}"#))
+                } else if text.starts_with("GET /job") {
+                    // Running twice, then done.
+                    let n = polls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let state = if n < 2 { "RUNNING" } else { "DONE" };
+                    ("200 OK", format!(r#"{{"state":"{state}"}}"#))
                 } else {
                     ("401 Unauthorized", "{}".to_string())
                 };
@@ -598,6 +1091,8 @@ mod tests {
                     name: None,
                     save,
                     expect: Some(Expect { status: Some(200) }),
+                    retry: None,
+                    control: Control::default(),
                 }],
             },
         )
@@ -613,12 +1108,15 @@ mod tests {
                 steps: vec![
                     Step::Flow {
                         flow: "log-in".into(),
+                        control: Control::default(),
                     },
                     Step::Request {
                         request: "02-me.pulpo.yaml".into(),
                         name: Some("Profile".into()),
                         save: BTreeMap::new(),
                         expect: Some(Expect { status: Some(200) }),
+                        retry: None,
+                        control: Control::default(),
                     },
                 ],
             },
@@ -706,12 +1204,16 @@ mod tests {
                         name: None,
                         save: BTreeMap::new(),
                         expect: Some(Expect { status: Some(200) }),
+                        retry: None,
+                        control: Control::default(),
                     },
                     Step::Request {
                         request: "02-me.pulpo.yaml".into(),
                         name: None,
                         save: BTreeMap::new(),
                         expect: None,
+                        retry: None,
+                        control: Control::default(),
                     },
                 ],
             },
@@ -736,6 +1238,7 @@ mod tests {
                 description: String::new(),
                 steps: vec![Step::Flow {
                     flow: "loop".into(),
+                    control: Control::default(),
                 }],
             },
         )
@@ -756,11 +1259,186 @@ mod tests {
                     name: None,
                     save: BTreeMap::new(),
                     expect: None,
+                    retry: None,
+                    control: Control::default(),
                 }],
             },
         )
         .unwrap();
         assert_eq!(plan(root, "gone").unwrap()[0].kind, "missing");
         assert!(load_flow(root, "../etc").is_err());
+    }
+
+    #[test]
+    fn conditions_and_durations() {
+        let mut vars = HashMap::new();
+        vars.insert("role".to_string(), "admin".to_string());
+        vars.insert("total".to_string(), "12.5".to_string());
+        vars.insert("$status".to_string(), "201".to_string());
+        assert!(holds("{{role}} == admin", &vars));
+        assert!(holds("{{role}} == 'admin'", &vars));
+        assert!(!holds("{{role}} != admin", &vars));
+        assert!(holds("{{total}} > 9", &vars));
+        assert!(holds("{{total}} <= 12.5", &vars));
+        assert!(holds("{{$status}} >= 200", &vars));
+        assert!(holds("{{role}} contains dm", &vars));
+        assert!(holds("{{role}}", &vars));
+        assert!(!holds("{{missing}}", &vars));
+        assert!(holds("!{{missing}}", &vars));
+        assert_eq!(duration("500ms").unwrap().as_millis(), 500);
+        assert_eq!(duration("2s").unwrap().as_millis(), 2000);
+        assert_eq!(duration("1m").unwrap().as_secs(), 60);
+        assert_eq!(duration("250").unwrap().as_millis(), 250);
+        assert!(duration("soon").is_err());
+        assert!(duration("1h").is_err());
+        assert_eq!(items_of("a, 'b' ,c", &vars).unwrap(), vec!["a", "b", "c"]);
+        assert!(items_of("{{nothing}}", &vars).is_err());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn runs_conditions_loops_retries_and_waits() {
+        let base = api().await;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        init_workspace(root, "Shop").unwrap();
+        request(
+            root,
+            "01-orders.pulpo.yaml",
+            "Orders",
+            HttpMethod::Get,
+            &format!("{base}/orders"),
+            false,
+        );
+        request(
+            root,
+            "02-order.pulpo.yaml",
+            "Order",
+            HttpMethod::Get,
+            &format!("{base}/orders/{{{{orderId}}}}"),
+            false,
+        );
+        request(
+            root,
+            "03-job.pulpo.yaml",
+            "Job",
+            HttpMethod::Get,
+            &format!("{base}/job"),
+            false,
+        );
+        let yaml = r#"version: 1
+name: "Everything"
+steps:
+  - request: "01-orders.pulpo.yaml"
+    save:
+      ids: "$.items[*].id"
+      role: "$.role"
+  - request: "02-order.pulpo.yaml"
+    forEach: "{{ids}}"
+    as: "orderId"
+    save:
+      seen: "$.id"
+  - request: "02-order.pulpo.yaml"
+    if: "{{role}} == guest"
+  - wait: 20ms
+    if: "{{role}} == admin"
+  - request: "03-job.pulpo.yaml"
+    retry:
+      until: "{{state}} == DONE"
+      times: 5
+      every: 10ms
+    save:
+      state: "$.state"
+"#;
+        fs::create_dir_all(root.join(FLOWS_DIR)).unwrap();
+        fs::write(root.join("flows/everything.flow.yaml"), yaml).unwrap();
+        let flow = load_flow(root, "everything").unwrap();
+        // Written back without losing anything.
+        let again = save_flow(root, &flow).unwrap();
+        assert_eq!(load_flow(root, &again.id).unwrap().steps, flow.steps);
+        let nodes = plan(root, "everything").unwrap();
+        assert_eq!(nodes[1].for_each.as_deref(), Some("{{ids}} as orderId"));
+        assert_eq!(nodes[2].condition.as_deref(), Some("{{role}} == guest"));
+        assert_eq!(nodes[3].kind, "wait");
+        assert!(nodes[4]
+            .retry
+            .as_deref()
+            .unwrap()
+            .starts_with("until {{state}} == DONE"));
+
+        let report = run_flow(
+            root,
+            "everything",
+            None,
+            &MemoryStore::default(),
+            &mut |_| {},
+        )
+        .await
+        .unwrap();
+        assert!(report.passed, "{report:#?}");
+        let summary: Vec<String> = report
+            .steps
+            .iter()
+            .map(|s| {
+                format!(
+                    "{} {} {} {}",
+                    s.path,
+                    s.state,
+                    s.iteration.as_deref().unwrap_or("-"),
+                    s.note.as_deref().unwrap_or("-")
+                )
+            })
+            .collect();
+        assert_eq!(
+            summary,
+            vec![
+                "1 passed - -",
+                "2 passed 1/3 -",
+                "2 passed 2/3 -",
+                "2 passed 3/3 -",
+                "3 skipped - if {{role}} == guest: no",
+                "4 passed - waited 20ms",
+                "5 passed - 3 attempts",
+            ]
+        );
+        assert_eq!(report.steps[0].saved["ids"], "[11,12,13]");
+        assert_eq!(report.steps[3].saved["seen"], "13");
+
+        // A retry that never gets there fails the step.
+        let yaml = "version: 1
+name: Never
+steps:
+  - request: \"03-job.pulpo.yaml\"
+    retry:
+      until: \"{{$status}} == 500\"
+      times: 2
+      every: 1ms
+  - wait: 1ms
+";
+        fs::write(root.join("flows/never.flow.yaml"), yaml).unwrap();
+        let report = run_flow(root, "never", None, &MemoryStore::default(), &mut |_| {})
+            .await
+            .unwrap();
+        assert!(!report.passed);
+        let tests = &report.steps[0].report.as_ref().unwrap().tests;
+        assert_eq!(
+            tests[0].error.as_deref(),
+            Some("still not true after 2 attempts")
+        );
+        assert_eq!(report.steps[1].state, "skipped");
+
+        // A bad duration is caught before anything runs.
+        fs::write(
+            root.join("flows/bad.flow.yaml"),
+            "version: 1
+name: Bad
+steps:
+  - wait: soon
+",
+        )
+        .unwrap();
+        let error = run_flow(root, "bad", None, &MemoryStore::default(), &mut |_| {})
+            .await
+            .unwrap_err();
+        assert!(error.contains("not a duration"), "{error}");
     }
 }

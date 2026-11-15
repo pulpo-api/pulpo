@@ -609,6 +609,24 @@ async fn delete_flow(root: String, id: String) -> Result<(), String> {
     flow::delete_flow(Path::new(&root), &id).map_err(|e| e.to_string())
 }
 
+/// Moves a step of a flow to another position (drag and drop in the diagram).
+#[tauri::command]
+async fn move_flow_step(
+    root: String,
+    flow_id: String,
+    from: usize,
+    to: usize,
+) -> Result<flow::Flow, String> {
+    let root = Path::new(&root);
+    let mut f = flow::load_flow(root, &flow_id).map_err(|e| e.to_string())?;
+    if from >= f.steps.len() || to >= f.steps.len() {
+        return Err(format!("the flow has {} steps", f.steps.len()));
+    }
+    let step = f.steps.remove(from);
+    f.steps.insert(to, step);
+    flow::save_flow(root, &f).map_err(|e| e.to_string())
+}
+
 /// Adds a request at the end of a flow.
 #[tauri::command]
 async fn add_flow_step(
@@ -618,12 +636,7 @@ async fn add_flow_step(
 ) -> Result<flow::Flow, String> {
     let root = Path::new(&root);
     let mut f = flow::load_flow(root, &flow_id).map_err(|e| e.to_string())?;
-    f.steps.push(flow::Step::Request {
-        request: request_id,
-        name: None,
-        save: Default::default(),
-        expect: None,
-    });
+    f.steps.push(flow::Step::request(&request_id));
     flow::save_flow(root, &f).map_err(|e| e.to_string())
 }
 
@@ -950,6 +963,7 @@ pub fn run() {
             create_flow,
             delete_flow,
             add_flow_step,
+            move_flow_step,
             flow_usage,
             run_flow,
             scan_contracts,

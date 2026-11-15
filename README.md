@@ -316,9 +316,30 @@ steps:
       status: 200
 ```
 
+When a feature branches or waits, a step can say so. The flow stays a list of steps, not a language: anything more complex belongs in the request's scripts.
+
+```yaml
+steps:
+  - request: "03-orders/01-list.pulpo.yaml"
+    save:
+      ids: "$.items[*].id"                           # several matches make a list
+  - request: "03-orders/02-cancel.pulpo.yaml"
+    forEach: "{{ids}}"                               # once per item; also "a, b, c"
+    as: "orderId"
+    if: "{{role}} == admin"                          # ==, !=, >, <, >=, <=, contains, or just {{var}}
+  - wait: 2s                                         # 500ms, 2s, 1m
+  - request: "04-payments/03-status.pulpo.yaml"
+    save:
+      state: "$.state"
+    retry:                                           # poll until it settles
+      until: "{{state}} == PAID"                     # {{$status}} is the last HTTP status
+      times: 10
+      every: 2s
+```
+
 - **Let Pulpo chain them.** `pulpo chain <folder> --flow "Order an item"` (or right-click a folder → *Make a flow from this folder…*) finds which response feeds which request: `{{orderId}}` ← `id` of `POST /orders`, `{{token}}` ← `access_token` of the login. The evidence comes from saved examples, the folder's OpenAPI contract and, with `--run`, real responses. Variables already set by request or folder scripts are left to them; the ones nothing provides are listed, with the request in another folder that sets them.
-- In the app, **Flows** in the sidebar shows each flow as a tree; ▶ Run lights each step green or red with its status and time, and a click shows its response and the values it saved. Right-click a request → *Add to flow…*; a request used by flows shows *In N flows*.
-- Values a flow saves live only while it runs; the environment is not touched. Request scripts keep working as usual. The flow stops at the first failing step.
+- In the app, **Flows** in the sidebar shows each flow as a tree; ▶ Run lights each step green or red with its status and time (and the round of a `forEach` or the attempts of a `retry`), and a click shows its response and the values it saved. Drag a step to move it. Right-click a request → *Add to flow…*; a request used by flows shows *In N flows*.
+- Values a flow saves live only while it runs; the environment is not touched. Request scripts keep working as usual. The flow stops at the first failing step; a step whose `if` does not hold is skipped.
 - `pulpo flow ls`, `pulpo flow show <flow>` and `pulpo flow run <flow> -e Local --junit report.xml` for CI. Through `pulpo mcp` your AI can list, create and run flows too.
 
 ## Let your AI use the collection (MCP)

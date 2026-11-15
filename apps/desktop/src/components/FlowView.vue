@@ -17,6 +17,8 @@ const running = ref(false);
 const states = ref<Record<string, FlowStepEvent>>({});
 const selectedPath = ref("");
 const confirmDelete = ref(false);
+const dragFrom = ref<number | null>(null);
+const dropOn = ref<number | null>(null);
 let unlisten: (() => void) | null = null;
 
 async function load() {
@@ -43,7 +45,7 @@ onUnmounted(() => unlisten?.());
 watch(() => props.flowId, load);
 
 const broken = computed(() => nodes.value.filter((n) => n.problem));
-const requestCount = computed(() => nodes.value.filter((n) => n.kind === "request").length);
+const requestCount = computed(() => nodes.value.filter((n) => n.kind === "request" || n.kind === "wait").length);
 const done = computed(() => Object.values(states.value).filter((s) => s.state === "passed" || s.state === "failed"));
 const failed = computed(() => done.value.some((s) => s.state === "failed"));
 const totalMs = computed(() => done.value.reduce((sum, s) => sum + (s.report?.response?.durationMs ?? 0), 0));
@@ -88,6 +90,38 @@ async function remove() {
   emit("deleted");
 }
 
+/** Top-level steps move by dragging; their index is the first part of the path. */
+function topIndex(node: FlowPlanNode): number | null {
+  return node.depth === 0 ? Number(node.path) - 1 : null;
+}
+
+function onDragStart(node: FlowPlanNode, event: DragEvent) {
+  dragFrom.value = topIndex(node);
+  event.dataTransfer?.setData("text/plain", node.path);
+}
+
+function onDragOver(node: FlowPlanNode, event: DragEvent) {
+  const to = topIndex(node);
+  if (dragFrom.value === null || to === null) return;
+  event.preventDefault();
+  dropOn.value = to;
+}
+
+async function onDrop(node: FlowPlanNode) {
+  const from = dragFrom.value;
+  const to = topIndex(node);
+  dragFrom.value = dropOn.value = null;
+  if (from === null || to === null || from === to || !backend.moveFlowStep) return;
+  try {
+    flow.value = await backend.moveFlowStep(props.root, props.flowId, from, to);
+    states.value = {};
+    await load();
+    emit("changed");
+  } catch (e) {
+    problem.value = String(e);
+  }
+}
+
 function stateOf(node: FlowPlanNode): string {
   if (node.kind === "missing") return "broken";
   if (node.kind === "flow") return "group";
@@ -98,16 +132,18 @@ function statusText(node: FlowPlanNode): string {
   const event = states.value[node.path];
   const r = event?.report;
   if (!event) return "";
-  if (event.state === "running") return "running…";
-  if (event.state === "skipped") return "skipped";
-  if (r?.response) return `${r.response.status} · ${r.response.durationMs} ms`;
-  if (r?.error) return r.error.message ?? "error";
-  return event.state;
+  const round = event.iteration ? `${event.iteration} · ` : "";
+  if (event.state === "running") return `${round}${event.note ?? "running…"}`;
+  if (event.state === "skipped") return event.note ? `skipped · ${event.note}` : "skipped";
+  const extra = event.note ? ` · ${event.note}` : "";
+  if (r?.response) return `${round}${r.response.status} · ${r.response.durationMs} ms${extra}`;
+  if (r?.error) return round + (r.error.message ?? "error");
+  return `${round}${event.note ?? event.state}`;
 }
 
 function failureOf(event: FlowStepEvent | null): string {
   const r = event?.report;
-  if (!r) return "";
+  if (!r) return event?.state === "failed" ? (event.note ?? "") : "";
   const test = r.tests.find((t) => !t.passed);
   if (test) return `${test.name}: ${test.error ?? "failed"}`;
   if (r.scriptErrors.length) return r.scriptErrors[0];
@@ -172,14 +208,35 @@ function prettyBody(body: string): string {
           v-for="node in nodes"
           :key="node.path"
           class="node"
-          :class="[stateOf(node), { chosen: selected.node?.path === node.path }]"
+          :class="[
+            stateOf(node),
+            { chosen: selected.node?.path === node.path, dropping: dropOn === topIndex(node) && dragFrom !== null },
+          ]"
           :style="{ marginLeft: `${node.depth * 28}px` }"
+          :draggable="node.depth === 0 && !running"
+          @dragstart="onDragStart(node, $event)"
+          @dragover="onDragOver(node, $event)"
+          @dragleave="dropOn = null"
+          @drop.prevent="onDrop(node)"
+          @dragend="dragFrom = dropOn = null"
         >
-          <button class="card" @click="selectedPath = node.kind === 'request' ? `pinned:${node.path}` : selectedPath">
+          <button
+            class="card"
+            :title="node.depth === 0 ? 'Drag to move this step' : undefined"
+            @click="selectedPath = node.kind !== 'flow' ? `pinned:${node.path}` : selectedPath"
+          >
             <span class="path">{{ node.path }}</span>
             <template v-if="node.kind === 'flow'">
               <span class="sub">↳ flow</span>
               <span class="name">{{ node.name }}</span>
+              <span v-if="node.condition" class="chip when">if {{ node.condition }}</span>
+              <span v-if="node.forEach" class="chip loop">for each {{ node.forEach }}</span>
+            </template>
+            <template v-else-if="node.kind === 'wait'">
+              <span class="sub">⏱</span>
+              <span class="name">{{ node.name }}</span>
+              <span v-if="node.condition" class="chip when">if {{ node.condition }}</span>
+              <span class="status">{{ statusText(node) }}</span>
             </template>
             <template v-else>
               <span class="method" :class="node.method.toLowerCase()">{{ node.method || "?" }}</span>
@@ -187,6 +244,9 @@ function prettyBody(body: string): string {
               <span class="url">{{ node.url }}</span>
               <span v-for="v in node.save" :key="v" class="chip">→ {{ v }}</span>
               <span v-if="node.expect" class="chip">expects {{ node.expect }}</span>
+              <span v-if="node.condition" class="chip when">if {{ node.condition }}</span>
+              <span v-if="node.forEach" class="chip loop">for each {{ node.forEach }}</span>
+              <span v-if="node.retry" class="chip loop">retry {{ node.retry }}</span>
               <span class="status">{{ statusText(node) }}</span>
             </template>
           </button>
@@ -197,7 +257,14 @@ function prettyBody(body: string): string {
         <h3>{{ selected.node.path }} · {{ selected.node.name }}</h3>
         <p class="muted small">
           <code>{{ selected.node.target }}</code>
-          <button class="link" @click="emit('open', selected.node.target)">Open request</button>
+          <button v-if="selected.node.kind === 'request'" class="link" @click="emit('open', selected.node.target)">
+            Open request
+          </button>
+        </p>
+        <p v-if="selected.event?.iteration || selected.event?.note" class="muted small">
+          <template v-if="selected.event.iteration">Last round {{ selected.event.iteration }}</template>
+          <template v-if="selected.event.iteration && selected.event.note"> · </template>
+          {{ selected.event.note }}
         </p>
         <template v-if="selected.event?.report">
           <p v-if="failureOf(selected.event)" class="problem">{{ failureOf(selected.event) }}</p>
@@ -219,7 +286,7 @@ function prettyBody(body: string): string {
             prettyBody(selected.event.report.response.body)
           }}</pre>
         </template>
-        <p v-else class="muted small">Run the flow to see this step's response.</p>
+        <p v-else-if="selected.node.kind === 'request'" class="muted small">Run the flow to see this step's response.</p>
       </aside>
     </div>
 
@@ -227,8 +294,10 @@ function prettyBody(body: string): string {
       <CodeEditor v-model="yaml" language="text" @save="saveYaml" />
       <footer>
         <span class="muted small">
-          Steps: <code>- request: &lt;id&gt;</code> (with optional <code>save:</code> and <code>expect: {status}</code>) or
-          <code>- flow: &lt;id&gt;</code>. Ctrl+S saves.
+          Steps: <code>- request: &lt;id&gt;</code> (<code>save:</code>, <code>expect: {status}</code>,
+          <code>retry: {until, times, every}</code>), <code>- flow: &lt;id&gt;</code> or <code>- wait: 2s</code>; any step
+          can have <code>if: "{{ "{{" }}role}} == admin"</code> and <code>forEach: "{{ "{{" }}ids}}"</code> +
+          <code>as: id</code>. Ctrl+S saves.
         </span>
         <button class="ghost" :disabled="yaml === savedYaml" @click="yaml = savedYaml">Discard</button>
         <button class="primary" :disabled="yaml === savedYaml" @click="saveYaml">Save</button>
@@ -445,6 +514,19 @@ h3 {
   border-radius: 4px;
   background: var(--surface-2);
   color: var(--muted);
+}
+.chip.when {
+  color: var(--m-put);
+}
+.chip.loop {
+  color: var(--accent);
+}
+.node[draggable="true"] .card {
+  cursor: grab;
+}
+.node.dropping .card {
+  border-color: var(--accent);
+  border-style: dashed;
 }
 .status {
   margin-left: auto;

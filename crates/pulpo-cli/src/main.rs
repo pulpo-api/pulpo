@@ -668,11 +668,22 @@ fn run_flow_command(args: &[String]) -> ExitCode {
                 Err(e) => return fail(format!("could not start the runtime: {e}")),
             };
             let mut print = |event: &flow::StepEvent| match event.state.as_str() {
-                "skipped" => println!("- {}  skipped", event.path),
+                "skipped" => match &event.note {
+                    Some(note) => println!("- {}  skipped ({note})", event.path),
+                    None => println!("- {}  skipped", event.path),
+                },
                 "running" => {}
                 _ => {
                     if let Some(report) = &event.report {
                         print_report(report);
+                    }
+                    let extra: Vec<&str> = [event.iteration.as_deref(), event.note.as_deref()]
+                        .into_iter()
+                        .flatten()
+                        .collect();
+                    if !extra.is_empty() {
+                        let mark = if event.state == "failed" { "✗" } else { "·" };
+                        println!("  {mark} {}  {}", event.path, extra.join(" · "));
                     }
                     for (var, value) in &event.saved {
                         let shown: String = value.chars().take(40).collect();

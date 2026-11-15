@@ -437,7 +437,10 @@ export interface Flow {
 export interface FlowPlanNode {
   path: string;
   depth: number;
-  kind: "request" | "flow" | "missing";
+  kind: "request" | "flow" | "wait" | "missing";
+  condition?: string;
+  forEach?: string;
+  retry?: string;
   target: string;
   name: string;
   method: string;
@@ -452,6 +455,8 @@ export interface FlowStepEvent {
   state: "running" | "passed" | "failed" | "skipped";
   report?: RunReport;
   saved?: Record<string, string>;
+  iteration?: string;
+  note?: string;
 }
 
 export interface FlowReport {
@@ -649,6 +654,7 @@ export interface WorkspaceBackend {
   createFlow?(root: string, name: string): Promise<Flow>;
   deleteFlow?(root: string, id: string): Promise<void>;
   addFlowStep?(root: string, flowId: string, requestId: string): Promise<Flow>;
+  moveFlowStep?(root: string, flowId: string, from: number, to: number): Promise<Flow>;
   flowUsage?(root: string): Promise<Record<string, string[]>>;
   runFlow?(root: string, id: string, environmentId: string): Promise<FlowReport>;
   onFlowStep?(handler: (event: FlowStepEvent) => void): Promise<() => void>;
@@ -787,6 +793,7 @@ const tauriBackend: WorkspaceBackend = {
   createFlow: (root, name) => invoke<Flow>("create_flow", { root, name }),
   deleteFlow: (root, id) => invoke<void>("delete_flow", { root, id }),
   addFlowStep: (root, flowId, requestId) => invoke<Flow>("add_flow_step", { root, flowId, requestId }),
+  moveFlowStep: (root, flowId, from, to) => invoke<Flow>("move_flow_step", { root, flowId, from, to }),
   flowUsage: (root) => invoke<Record<string, string[]>>("flow_usage", { root }),
   runFlow: (root, id, environmentId) =>
     invoke<FlowReport>("run_flow", { root, id, environmentId: environmentId || null }),
