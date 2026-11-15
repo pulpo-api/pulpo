@@ -3983,9 +3983,13 @@ dependencies = [
 name = "pulpo-core"
 version = "0.0.1"
 dependencies = [
+ "bytes",
  "futures-util",
  "hmac 0.12.1",
+ "http-body-util",
  "httpdate",
+ "hyper",
+ "hyper-util",
  "jaq-core",
  "jaq-json",
  "jaq-std",
@@ -5820,6 +5824,7 @@ dependencies = [
  "libc",
  "mio",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2",
  "tokio-macros",
  "windows-sys 0.61.2",

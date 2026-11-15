@@ -64,6 +64,12 @@ COMMANDS:
                in a loop for DURATION (default 30s; 45, 45s or 2m) and the
                percentiles are printed. With --data, user N uses row N.
                Nothing is saved to the workspace.
+    mock [FOLDER] [-w DIR] [--port N]
+               Serve the saved examples (and the example responses of linked
+               OpenAPI files) as a fake API on 127.0.0.1 (default port 4010).
+               Pick an answer with the header Prefer: code=404 (or
+               example=NAME) or ?__example=NAME. CORS is open; edits apply
+               without a restart.
     scan [-w DIR]
                Find the API contracts of the workspace's repository (OpenAPI,
                .proto, WSDL, GraphQL) and the folders made from them
@@ -158,6 +164,7 @@ fn main() -> ExitCode {
         Some("mcp") => run_mcp(&args[1..]),
         Some("flow") => run_flow_command(&args[1..]),
         Some("scan") => run_scan(&args[1..]),
+        Some("mock") => run_mock(&args[1..]),
         Some("chain") => run_chain(&args[1..]),
         Some("sync") => run_sync(&args[1..]),
         Some("run") => run_run(&args[1..]),
@@ -453,6 +460,85 @@ fn run_chain(args: &[String]) -> ExitCode {
         }
     }
     ExitCode::SUCCESS
+}
+
+fn run_mock(args: &[String]) -> ExitCode {
+    const USAGE: &str = "mock: expected [FOLDER] [-w DIR] [--port N]";
+    let mut folder = String::new();
+    let mut dir = PathBuf::from(".");
+    let mut port: u16 = 4010;
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        match arg.as_str() {
+            "-w" | "--workspace" => match rest.next() {
+                Some(d) => dir = PathBuf::from(d),
+                None => return usage_error("mock: -w needs a DIR"),
+            },
+            "--port" | "-p" => match rest.next().and_then(|p| p.parse().ok()) {
+                Some(p) => port = p,
+                None => return usage_error("mock: --port needs a number"),
+            },
+            other if !other.starts_with('-') && folder.is_empty() => {
+                folder = other.replace('\\', "/").trim_matches('/').to_string()
+            }
+            _ => return usage_error(USAGE),
+        }
+    }
+    let routes = match pulpo_core::mock::routes(&dir, &folder) {
+        Ok(r) => r,
+        Err(e) => return fail(e),
+    };
+    if routes.is_empty() {
+        println!("Nothing to serve: save examples of responses first (Examples tab, or Save as example), or link an OpenAPI file.");
+        return ExitCode::FAILURE;
+    }
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(r) => r,
+        Err(e) => return fail(format!("could not start the runtime: {e}")),
+    };
+    runtime.block_on(async {
+        let mock = match pulpo_core::mock::start(&dir, &folder, port, |hit| {
+            let matched = if hit.matched.is_empty() {
+                "no mock".to_string()
+            } else {
+                hit.matched
+            };
+            println!(
+                "{:>4} {:<7} {}  {matched}",
+                hit.status, hit.method, hit.path
+            );
+        })
+        .await
+        {
+            Ok(m) => m,
+            Err(e) => return fail(e),
+        };
+        println!(
+            "Mock on http://{}  ({} routes, Ctrl+C stops it)",
+            mock.address,
+            routes.len()
+        );
+        for r in &routes {
+            let answers: Vec<String> = r
+                .answers
+                .iter()
+                .map(|a| format!("{} {}", a.status, a.name))
+                .collect();
+            println!(
+                "  {:<7} {:<40} {}  [{}]",
+                r.method,
+                r.path,
+                r.name,
+                answers.join(", ")
+            );
+        }
+        let _ = tokio::signal::ctrl_c().await;
+        drop(mock);
+        ExitCode::SUCCESS
+    })
 }
 
 fn run_scan(args: &[String]) -> ExitCode {

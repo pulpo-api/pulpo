@@ -35,6 +35,7 @@ pub mod link;
 pub mod load;
 pub mod local;
 pub mod mcp;
+pub mod mock;
 pub mod mqtt;
 pub mod oauth;
 pub mod organize;

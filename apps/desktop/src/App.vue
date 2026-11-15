@@ -18,6 +18,7 @@ import ExportDialog from "./components/ExportDialog.vue";
 import GitPanel from "./components/GitPanel.vue";
 import FlowView from "./components/FlowView.vue";
 import ContractsPanel from "./components/ContractsPanel.vue";
+import MockPanel from "./components/MockPanel.vue";
 import { resolveText } from "./variables";
 import { applyPathParams } from "./params";
 import { applyAuth, asSendError, coreInfo, isEventStream, isMqtt, isWebSocketUrl, resolveAuth, type CoreInfo, type HttpResponse, type SendError } from "./core";
@@ -101,6 +102,7 @@ const showGit = ref(false);
 
 // ---- API contracts
 const showContracts = ref(false);
+const showMock = ref(false);
 /** Folders out of step with their contract (checked in the background on open). */
 const driftCount = ref(0);
 async function checkDrift() {
@@ -948,6 +950,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       @git="showGit = true"
       :drift-count="driftCount"
       @contracts="showContracts = true"
+      @mock="showMock = true"
       :flows="flows"
       :open-flow-id="flowView"
       @open-flow="openFlow"
@@ -1247,6 +1250,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         <button class="ghost" @click="addingToFlow = null">Cancel</button>
       </div>
     </div>
+
+    <MockPanel v-if="showMock && workspace" :workspace="workspace" @close="showMock = false" />
 
     <ContractsPanel
       v-if="showContracts && workspace"

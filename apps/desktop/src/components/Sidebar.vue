@@ -46,6 +46,7 @@ const emit = defineEmits<{
   export: [id: string];
   git: [];
   contracts: [];
+  mock: [];
   openFlow: [id: string];
   newFlow: [name: string];
   addToFlow: [requestId: string];
@@ -238,6 +239,7 @@ function confirm() {
         >
           ⟲<span v-if="driftCount" class="badge">{{ driftCount }}</span>
         </button>
+        <button v-if="persistent" class="icon" title="Mock server: your examples as a fake API" @click="emit('mock')">◎</button>
         <button v-if="persistent" class="icon" title="Open another folder" @click="emit('open')">⇄</button>
       </div>
       <div class="actions">

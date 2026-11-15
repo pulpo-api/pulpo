@@ -456,6 +456,25 @@ export interface WsFrame {
   atMs: number;
 }
 
+export interface MockRoute {
+  method: string;
+  /** `/orders/:id`. */
+  path: string;
+  name: string;
+  /** `example` or `openapi`. */
+  source: string;
+  answers: { name: string; status: number; headers: Header[]; body: string }[];
+}
+
+export interface MockHit {
+  method: string;
+  path: string;
+  status: number;
+  /** `Request · example`, empty when no route matched. */
+  matched: string;
+  atMs: number;
+}
+
 export interface SoapOperation {
   /** `Service/Port/Operation`. */
   path: string;
@@ -763,6 +782,12 @@ export interface WorkspaceBackend {
   deleteFlow?(root: string, id: string): Promise<void>;
   addFlowStep?(root: string, flowId: string, requestId: string): Promise<Flow>;
   moveFlowStep?(root: string, flowId: string, from: number, to: number): Promise<Flow>;
+  /** What the mock server would answer for a folder (`""` = the workspace). */
+  mockRoutes?(root: string, folder: string): Promise<MockRoute[]>;
+  mockStart?(root: string, folder: string, port: number): Promise<{ url: string; folder: string }>;
+  mockStop?(): Promise<void>;
+  mockStatus?(): Promise<{ url: string; folder: string } | null>;
+  onMockHit?(handler: (hit: MockHit) => void): Promise<() => void>;
   /** Connects to an MQTT broker and subscribes; every message goes to `onMessage`. */
   mqttConnect?(root: string, entry: RequestEntry, environmentId: string, onMessage: (m: MqttMessage) => void): Promise<MqttSession>;
   /** The SOAP operations of a WSDL (workspace file or URL), with sample envelopes. */
@@ -917,6 +942,14 @@ const tauriBackend: WorkspaceBackend = {
   graphqlSchema: (root, entry, environmentId, refresh) =>
     invoke<GraphqlSchema | null>("graphql_schema", { root, entry, environmentId: environmentId || null, refresh }),
   soapOperations: (root, wsdl) => invoke<SoapOperation[]>("soap_operations", { root, wsdl }),
+  mockRoutes: (root, folder) => invoke<MockRoute[]>("mock_routes", { root, folder }),
+  mockStart: (root, folder, port) => invoke<{ url: string; folder: string }>("mock_start", { root, folder, port }),
+  mockStop: () => invoke<void>("mock_stop"),
+  mockStatus: () => invoke<{ url: string; folder: string } | null>("mock_status"),
+  async onMockHit(handler) {
+    const { listen } = await import("@tauri-apps/api/event");
+    return listen<MockHit>("mock-hit", (event) => handler(event.payload));
+  },
   async mqttConnect(root, entry, environmentId, onMessage) {
     const { listen } = await import("@tauri-apps/api/event");
     let id: string | null = null;

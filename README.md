@@ -397,6 +397,27 @@ Orders vs ../api/orders.yaml (Orders API): 2 new, 1 gone, 3 to update, 18 in ste
 - No OpenAPI file? Pulpo reads the code itself: Spring (`@RequestMapping`, `@Tag`, `@Operation`, required params, headers and body), NestJS, Express and Fastify (following `app.use('/prefix', router)` across files), FastAPI (`APIRouter` prefixes and tags), Next.js and Nuxt route files. Requests are grouped in a folder per tag or controller, and `{{baseUrl}}` comes from the port and context path in the config (`application.yml`, `.env`…). The folder stays linked to the service, so `pulpo sync` tells you when a developer adds an endpoint.
 - In the app, **⟲** next to the collection name lists the contracts of the repository and shows a badge when a linked folder is out of step (checked on opening and after a pull).
 
+## Mock server
+
+Your saved examples answer as a fake API, so the front end works before (or without) the back end, locally and in CI:
+
+```bash
+pulpo mock                      # the whole collection on http://127.0.0.1:4010
+pulpo mock "Orders" --port 3001 # one folder
+```
+
+```
+Mock on http://127.0.0.1:4010  (2 routes, Ctrl+C stops it)
+  POST    /orders          Create order  [201 Created]
+  GET     /orders/:id      Get order  [200 Paid, 404 Missing]
+ 200 GET     /orders/7  Get order · Paid
+```
+
+- Each request with examples is a route (`GET /orders/:id` matches `/orders/7`; `/orders/new` wins over it). Folders linked to an OpenAPI fill in the operations that have no example with its example responses.
+- The first 2xx example answers; ask for another with `Prefer: code=404`, `Prefer: example=Missing` or `?__example=Missing`. `X-Pulpo-Mock` tells which one answered.
+- CORS is open, and edits to the examples apply without a restart.
+- In the app, **◎** starts it, lists the routes and shows every call as it comes.
+
 ## Flows: features made of requests you already have
 
 A folder groups endpoints; a **flow** tells a feature: log in, pick a doctor, see the free hours, book. Flows reference the requests of the collection (they never copy them), so changing a request changes every flow that uses it, and a flow can reuse another one.

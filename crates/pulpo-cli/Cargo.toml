@@ -15,4 +15,4 @@ path = "src/main.rs"
 
 [dependencies]
 pulpo-core = { workspace = true, features = ["keychain"] }
-tokio = { workspace = true, features = ["rt"] }
+tokio = { workspace = true, features = ["rt", "signal"] }

@@ -208,6 +208,67 @@ async fn grpc_schema(
     pulpo_core::grpc::schema(&root, &request).await
 }
 
+/// The running mock server, if any: (address, folder, server).
+#[derive(Default)]
+struct Mocks(std::sync::Mutex<Option<(String, String, pulpo_core::mock::Mock)>>);
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MockState {
+    url: String,
+    folder: String,
+}
+
+/// The routes a folder would serve (`""` = the whole workspace).
+#[tauri::command]
+fn mock_routes(root: String, folder: String) -> Result<Vec<pulpo_core::mock::Route>, String> {
+    pulpo_core::mock::routes(Path::new(&root), &folder)
+}
+
+/// Starts the mock server (stopping one already running); calls arrive as `mock-hit`.
+#[tauri::command]
+async fn mock_start(
+    app: tauri::AppHandle,
+    mocks: tauri::State<'_, Mocks>,
+    root: String,
+    folder: String,
+    port: u16,
+) -> Result<MockState, String> {
+    if let Some((_, _, mut old)) = mocks.0.lock().map_err(|e| e.to_string())?.take() {
+        old.stop();
+    }
+    let mock = pulpo_core::mock::start(Path::new(&root), &folder, port, move |hit| {
+        let _ = app.emit("mock-hit", hit);
+    })
+    .await?;
+    let url = format!("http://{}", mock.address);
+    *mocks.0.lock().map_err(|e| e.to_string())? = Some((url.clone(), folder.clone(), mock));
+    Ok(MockState { url, folder })
+}
+
+/// Stops the mock server.
+#[tauri::command]
+fn mock_stop(mocks: tauri::State<'_, Mocks>) -> Result<(), String> {
+    if let Some((_, _, mut mock)) = mocks.0.lock().map_err(|e| e.to_string())?.take() {
+        mock.stop();
+    }
+    Ok(())
+}
+
+/// The running mock server, if any.
+#[tauri::command]
+fn mock_status(mocks: tauri::State<'_, Mocks>) -> Result<Option<MockState>, String> {
+    Ok(mocks
+        .0
+        .lock()
+        .map_err(|e| e.to_string())?
+        .as_ref()
+        .map(|(url, folder, _)| MockState {
+            url: url.clone(),
+            folder: folder.clone(),
+        }))
+}
+
 /// Live MQTT sessions by id.
 #[derive(Default)]
 struct Brokers(
@@ -1140,6 +1201,7 @@ pub fn run() {
         .manage(Sockets::default())
         .manage(Streams::default())
         .manage(Brokers::default())
+        .manage(Mocks::default())
         .manage(StartupLinks(std::sync::Mutex::new(links_in(
             std::env::args().skip(1),
         ))))
@@ -1244,6 +1306,10 @@ pub fn run() {
             grpc_schema,
             soap_operations,
             mqtt_connect,
+            mock_routes,
+            mock_start,
+            mock_stop,
+            mock_status,
             mqtt_publish,
             mqtt_close,
             flow_usage,
