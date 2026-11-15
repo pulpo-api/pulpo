@@ -1274,13 +1274,21 @@ function memoryBackend(): WorkspaceBackend {
       const started = performance.now();
       const at = () => Math.round(performance.now() - started);
       const auth = entry.request.auth ?? inheritedAuth(workspace, entry.id).auth;
-      const headers = effectiveHeaders(workspace, entry).filter((h) => h.enabled && h.name.trim());
-      const socket = new WebSocket(url);
+      const all = effectiveHeaders(workspace, entry).filter((h) => h.enabled && h.name.trim());
+      // The one handshake header a browser can send: the subprotocols.
+      const isProtocol = (h: { name: string }) => h.name.trim().toLowerCase() === "sec-websocket-protocol";
+      const protocols = all
+        .filter(isProtocol)
+        .flatMap((h) => h.value.split(","))
+        .map((p) => p.trim())
+        .filter(Boolean);
+      const headers = all.filter((h) => !isProtocol(h));
+      const socket = protocols.length ? new WebSocket(url, protocols) : new WebSocket(url);
       await new Promise<void>((resolve, reject) => {
         socket.onopen = () => resolve();
         socket.onerror = () => reject(`could not connect to ${url}`);
       });
-      onFrame({ direction: "info", text: `Connected to ${url}`, atMs: at() });
+      onFrame({ direction: "info", text: `Connected to ${url}${socket.protocol ? ` · protocol ${socket.protocol}` : ""}`, atMs: at() });
       if (headers.length || (auth && auth.type !== "none")) {
         onFrame({
           direction: "info",

@@ -198,6 +198,7 @@ Pick **GraphQL** as the body of a request: the query and its variables get their
 - Completion (Ctrl+Space), error marks and a **Docs** explorer come from that schema; search any type or field and click through types.
 - The schema is cached in `.pulpo/graphql/`, so it is there offline; reading it again tells you what changed (`+User.email`, `−Order.total`).
 - It goes out as JSON `{query, variables, operationName}` with `{{variables}}` filled in; a query with several operations lets you pick one.
+- **Subscriptions** go over WebSocket at the same address (`https` → `wss`): **Subscribe** speaks `graphql-transport-ws` (the graphql-ws library) or the older `graphql-ws` (Apollo), whichever the server picks, and lists every event until you stop or the server completes it.
 - On disk the query is a `.graphql` file and the variables a `.variables.json` file next to the request, so reviews read like code. GraphQL requests imported from Postman, Insomnia, Bruno, curl or HAR become GraphQL requests.
 
 ```

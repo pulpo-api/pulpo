@@ -471,4 +471,81 @@ mod tests {
         assert!(report.passed(), "{:#?}", report.tests);
         assert!(report.response.unwrap().body.contains("BTC"));
     }
+
+    /// Answers the handshake choosing `graphql-transport-ws`, as GraphQL servers do.
+    #[allow(clippy::result_large_err)]
+    async fn graphql_server() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            if let Ok((stream, _)) = listener.accept().await {
+                let callback = |request: &tokio_tungstenite::tungstenite::handshake::server::Request,
+                                mut response: tokio_tungstenite::tungstenite::handshake::server::Response| {
+                    let offered = request
+                        .headers()
+                        .get("sec-websocket-protocol")
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("")
+                        .to_string();
+                    assert!(offered.contains("graphql-transport-ws"), "{offered}");
+                    response.headers_mut().insert(
+                        "sec-websocket-protocol",
+                        HeaderValue::from_static("graphql-transport-ws"),
+                    );
+                    Ok(response)
+                };
+                if let Ok(mut ws) = tokio_tungstenite::accept_hdr_async(stream, callback).await {
+                    while let Some(Ok(Message::Text(text))) = ws.next().await {
+                        if text.contains("connection_init") {
+                            let _ = ws
+                                .send(Message::Text(r#"{"type":"connection_ack"}"#.into()))
+                                .await;
+                        }
+                    }
+                }
+            }
+        });
+        format!("ws://{address}/graphql")
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn negotiates_a_subprotocol() {
+        let mut r = HttpRequest::new(HttpMethod::Get, graphql_server().await);
+        r.headers.push(Header::new(
+            "Sec-WebSocket-Protocol",
+            "graphql-transport-ws, graphql-ws",
+        ));
+        let frames = std::sync::Arc::new(std::sync::Mutex::new(Vec::<Frame>::new()));
+        let sink = frames.clone();
+        let live = open(&r, move |f| sink.lock().unwrap().push(f))
+            .await
+            .unwrap();
+        assert!(live.send(r#"{"type":"connection_init","payload":{}}"#.into()));
+        for _ in 0..50 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            if frames
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|f| f.text.contains("connection_ack"))
+            {
+                break;
+            }
+        }
+        let seen: Vec<String> = frames
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|f| f.text.clone())
+            .collect();
+        assert!(
+            seen[0].ends_with("· protocol graphql-transport-ws"),
+            "{seen:?}"
+        );
+        assert!(
+            seen.iter().any(|t| t.contains("connection_ack")),
+            "{seen:?}"
+        );
+        live.close();
+    }
 }

@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, shallowRef, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from "vue";
 import type { HttpRequest } from "../core";
 import { backend, type GraphqlSchema, type Scripts } from "../workspace";
 import CodeEditor from "./CodeEditor.vue";
+import { operationType, subscribe, toWsUrl, type SubEvent, type Subscription } from "../graphqlSubscription";
 
 const props = defineProps<{
   request: HttpRequest;
@@ -54,6 +55,62 @@ const variablesProblem = computed(() => {
 const operations = computed(() =>
   [...query.value.matchAll(/\b(query|mutation|subscription)\s+([_A-Za-z][_0-9A-Za-z]*)/g)].map((m) => m[2]),
 );
+
+// ---------------------------------------------------------------- subscriptions
+
+const isSubscription = computed(() => operationType(query.value, operationName.value) === "subscription");
+const subState = ref<"idle" | "starting" | "on">("idle");
+const events = ref<SubEvent[]>([]);
+const openEvents = ref<Set<number>>(new Set());
+let subscription: Subscription | null = null;
+
+async function startSubscription() {
+  if (!backend.wsConnect) return;
+  problem.value = "";
+  subState.value = "starting";
+  events.value = [];
+  openEvents.value = new Set();
+  try {
+    subscription = await subscribe(
+      props.root,
+      { id: props.requestId, name: "", protocol: "graphql", request: props.request, scripts: props.scripts },
+      props.environmentId,
+      (event) => {
+        events.value.push(event);
+        if (event.kind === "done" || event.kind === "error" || (event.kind === "info" && event.text.startsWith("Closed"))) {
+          if (event.kind !== "error" || event.text.startsWith("could not")) subState.value = "idle";
+        }
+      },
+    );
+    subState.value = "on";
+  } catch (e) {
+    problem.value = String(e);
+    subState.value = "idle";
+  }
+}
+
+async function stopSubscription() {
+  await subscription?.stop();
+  subscription = null;
+  subState.value = "idle";
+}
+
+function toggleEvent(i: number) {
+  const next = new Set(openEvents.value);
+  if (next.has(i)) next.delete(i);
+  else next.add(i);
+  openEvents.value = next;
+}
+
+function prettyJson(text: string) {
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2);
+  } catch {
+    return text;
+  }
+}
+
+onUnmounted(() => void subscription?.stop());
 
 async function useSchema(result: GraphqlSchema | null) {
   fetched.value = result;
@@ -285,7 +342,33 @@ function format() {
         </ul>
       </aside>
     </div>
+    <section v-if="isSubscription" class="sub" aria-label="Subscription">
+      <div class="sub-bar">
+        <button
+          v-if="subState !== 'on'"
+          class="primary"
+          :disabled="subState === 'starting' || !backend.wsConnect"
+          @click="startSubscription"
+        >
+          {{ subState === "starting" ? "Connecting…" : "Subscribe" }}
+        </button>
+        <button v-else class="ghost" @click="stopSubscription">Stop</button>
+        <span class="muted small">
+          Over WebSocket at <code>{{ toWsUrl(request.url) }}</code> (graphql-transport-ws or the older graphql-ws).
+          {{ events.filter((e) => e.kind === "data").length }} events.
+        </span>
+      </div>
+      <ol v-if="events.length" class="events">
+        <li v-for="(e, i) in events" :key="i" :class="e.kind" @click="toggleEvent(i)">
+          <span class="time">{{ (e.atMs / 1000).toFixed(2) }}s</span>
+          <pre v-if="openEvents.has(i) && e.kind !== 'info'">{{ prettyJson(e.text) }}</pre>
+          <span v-else class="one">{{ e.text }}</span>
+        </li>
+      </ol>
+    </section>
+
     <p class="hint">
+      <template v-if="isSubscription">Send would post the subscription as a query; use Subscribe. </template>
       Sent as JSON <code>{query, variables}</code> with <code>{{ "{{" }}variables}}</code> filled in. The query is saved as a
       <code>.graphql</code> file next to the request.
     </p>
@@ -442,6 +525,68 @@ h4 {
 }
 .del {
   color: var(--m-delete);
+}
+.sub {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sub-bar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.primary {
+  border: 0;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 8px;
+  padding: 5px 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.primary:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.events {
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  max-height: 260px;
+  overflow: auto;
+  font: 12px/1.5 var(--mono);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.events li {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  gap: 6px;
+  cursor: pointer;
+}
+.events li.info,
+.events li.done {
+  color: var(--muted);
+}
+.events li.error {
+  color: var(--m-delete);
+}
+.events .time {
+  color: var(--muted);
+}
+.events pre {
+  margin: 0;
+  white-space: pre-wrap;
+}
+.events .one {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .hint {
   font-size: 12px;
