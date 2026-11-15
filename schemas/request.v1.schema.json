@@ -10,7 +10,7 @@
     "version": { "const": 1, "description": "File format version." },
     "name": { "type": "string", "minLength": 1, "description": "Name shown in the collection tree." },
     "protocol": {
-      "enum": ["http", "graphql", "grpc", "websocket", "soap", "sse", "socketio"],
+      "enum": ["http", "graphql", "grpc", "websocket", "soap", "sse", "socketio", "mqtt"],
       "description": "Protocol used to send the request."
     },
     "method": {
@@ -57,6 +57,19 @@
       "description": "json/xml/html/javascript/graphql/text: the body is the file next to this one (.body.json, .body.xml, .body.html, .body.js, .body.graphql or .body.txt), chosen from the Content-Type header. graphql: an operation, with its variables in .variables.json, sent as JSON {query, variables, operationName}. urlencoded/multipart: the fields in form. file: the workspace file in bodyFile."
     },
     "operationName": { "type": "string", "description": "GraphQL: the operation of the query to run, when it has several." },
+    "mqtt": {
+      "type": "object",
+      "description": "MQTT (mqtt://, mqtts:// or ws(s):// URL): session settings; the saved messages are publications (name = topic, body = payload).",
+      "additionalProperties": false,
+      "properties": {
+        "clientId": { "type": "string" },
+        "username": { "type": "string" },
+        "password": { "type": "string", "description": "Better a {{variable}} kept as a secret." },
+        "subscribe": { "type": "array", "items": { "type": "string" }, "description": "Topic filters (+ and # wildcards)." },
+        "qos": { "enum": [0, 1], "default": 0 },
+        "retain": { "type": "boolean", "default": false }
+      }
+    },
     "socketio": {
       "type": "object",
       "description": "Socket.IO (v4): where to connect; the saved messages are events (name = event, body = data).",

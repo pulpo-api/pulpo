@@ -127,6 +127,17 @@ pub fn resolve_request(
             operation_name: g.operation_name.clone(),
         }),
         soap: request.soap.clone(),
+        mqtt: request.mqtt.as_ref().map(|t| crate::mqtt::MqttTarget {
+            client_id: resolve_text(&t.client_id, vars, &mut missing),
+            username: resolve_text(&t.username, vars, &mut missing),
+            password: resolve_text(&t.password, vars, &mut missing),
+            subscribe: t
+                .subscribe
+                .iter()
+                .map(|s| resolve_text(s, vars, &mut missing))
+                .collect(),
+            ..t.clone()
+        }),
         socketio: request
             .socketio
             .as_ref()
@@ -142,7 +153,12 @@ pub fn resolve_request(
             .messages
             .iter()
             .map(|m| crate::websocket::WsMessage {
-                name: m.name.clone(),
+                // An MQTT topic may hold variables too (`orders/{{orderId}}`).
+                name: if request.mqtt.is_some() {
+                    resolve_text(&m.name, vars, &mut missing)
+                } else {
+                    m.name.clone()
+                },
                 body: resolve_text(&m.body, vars, &mut missing),
             })
             .collect(),

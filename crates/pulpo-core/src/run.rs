@@ -572,6 +572,7 @@ pub async fn run_in(
             | Protocol::Grpc
             | Protocol::Soap
             | Protocol::Socketio
+            | Protocol::Mqtt
     ) {
         report.error = Some(SendError::Other(format!(
             "{} requests arrive in phase 4",
@@ -676,7 +677,13 @@ pub async fn run_in(
             let stream = crate::sse::is_event_stream(&resolved);
             let grpc = crate::grpc::is_grpc_url(&resolved.url);
             let socketio = resolved.socketio.clone();
-            let mut sent = if let Some(target) = &socketio {
+            let mqtt = resolved
+                .mqtt
+                .clone()
+                .or_else(|| crate::mqtt::is_mqtt_url(&resolved.url).then(Default::default));
+            let mut sent = if let Some(target) = &mqtt {
+                crate::mqtt::exchange(&with_auth(&resolved), target).await
+            } else if let Some(target) = &socketio {
                 crate::socketio::exchange(&with_auth(&resolved), target).await
             } else if grpc {
                 crate::grpc::invoke(root, &with_auth(&resolved)).await
@@ -692,6 +699,7 @@ pub async fn run_in(
                 && !stream
                 && !grpc
                 && socketio.is_none()
+                && mqtt.is_none()
                 && retryable(&sent)
                 && report.attempts <= options.retries
             {

@@ -677,6 +677,7 @@ pub(super) fn document(doc: &Value) -> Result<ImportPlan, ImportError> {
                         grpc: None,
                         soap: None,
                         socketio: None,
+                        mqtt: None,
                         disabled_params: Vec::new(),
                         path_params: Vec::new(),
                         auth,

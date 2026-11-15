@@ -34,6 +34,7 @@ pub mod link;
 pub mod load;
 pub mod local;
 pub mod mcp;
+pub mod mqtt;
 pub mod oauth;
 pub mod organize;
 pub mod query;
@@ -64,11 +65,12 @@ pub enum Protocol {
     Soap,
     Sse,
     Socketio,
+    Mqtt,
 }
 
 impl Protocol {
     /// All protocols, in the order shown in the UI.
-    pub const ALL: [Protocol; 7] = [
+    pub const ALL: [Protocol; 8] = [
         Protocol::Http,
         Protocol::Graphql,
         Protocol::Grpc,
@@ -76,6 +78,7 @@ impl Protocol {
         Protocol::Soap,
         Protocol::Sse,
         Protocol::Socketio,
+        Protocol::Mqtt,
     ];
 
     /// Short label used in the UI and in files.
@@ -88,6 +91,7 @@ impl Protocol {
             Protocol::Soap => "soap",
             Protocol::Sse => "sse",
             Protocol::Socketio => "socketio",
+            Protocol::Mqtt => "mqtt",
         }
     }
 }
@@ -181,7 +185,8 @@ mod tests {
                 "websocket",
                 "soap",
                 "sse",
-                "socketio"
+                "socketio",
+                "mqtt"
             ]
         );
     }

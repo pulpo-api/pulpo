@@ -245,6 +245,14 @@ pm.test("welcomed", () => pm.expect(got[0].event).to.eql("welcome"));
 
 Runs listen at most 5 seconds after sending (WebSocket, Socket.IO and SSE alike), so chatty servers do not hold them up.
 
+## MQTT
+
+`mqtt://broker:1883` and `mqtts://broker:8883` URLs talk MQTT 3.1.1 (press **MQTT** for a broker over `ws://`/`wss://`). In **Topics** set what to subscribe to (`orders/#`, `sensors/+/temp`), QoS 0 or 1, retain and the credentials (a `{{secret}}` for the password); **Connect** shows every message with its topic (retained ones marked) and **Publish** sends one. Saved publications (name = topic, `{{variables}}` allowed) go out in order with `pulpo run`, and tests get what arrived:
+
+```js
+const got = pm.response.json();   // [{ "topic": "orders/7", "payload": { "status": "paid" }, "qos": 1, "retain": false }]
+```
+
 ## Server-Sent Events
 
 Press **SSE** next to the URL (it sets `Accept: text/event-stream`) and **Listen**: events arrive as they come, with their name, id and time; JSON opens formatted. Headers, auth, `{{variables}}` and a body work as in any request, so `POST` streams (like text generation APIs) work too.

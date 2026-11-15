@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import { HTTP_METHODS, bodyMode, isEventStream, isGrpcUrl, isWebSocketUrl, type HttpRequest } from "../core";
+import { HTTP_METHODS, bodyMode, isEventStream, isGrpcUrl, isMqtt, isWebSocketUrl, type HttpRequest } from "../core";
 import type { InheritedAuth, InheritedSettings, Scripts } from "../workspace";
 import type { Header } from "../core";
 import HeadersEditor from "./HeadersEditor.vue";
@@ -41,6 +41,22 @@ const tab = ref<"params" | "auth" | "body" | "headers" | "settings" | "pre" | "t
 );
 /** `ws://`/`wss://`: no method or Send; the Body tab holds the saved messages. */
 const websocket = computed(() => isWebSocketUrl(props.request.url));
+/** MQTT: a broker session; the saved messages are publications (name = topic). */
+const mqtt = computed(() => isMqtt(props.request));
+function toggleMqtt() {
+  props.request.mqtt = props.request.mqtt ? null : { subscribe: [], qos: 0 };
+}
+const subscribeText = computed({
+  get: () => (props.request.mqtt?.subscribe ?? []).join(", "),
+  set: (v: string) => {
+    if (!props.request.mqtt) props.request.mqtt = {};
+    props.request.mqtt.subscribe = v.split(",").map((t) => t.trim()).filter(Boolean);
+  },
+});
+function ensureMqtt() {
+  if (!props.request.mqtt) props.request.mqtt = { subscribe: [], qos: 0 };
+  return props.request.mqtt;
+}
 /** Socket.IO: a WebSocket with its own protocol; the saved messages are events. */
 const socketio = computed(() => !!props.request.socketio);
 function toggleSocketIo() {
@@ -128,7 +144,8 @@ const inheritedCount = computed(
 <template>
   <section class="card editor">
     <div class="urlbar">
-      <span v-if="socketio" class="method ws" title="Socket.IO: connect below">SIO</span>
+      <span v-if="mqtt" class="method mqtt" title="MQTT: connect below">MQTT</span>
+      <span v-else-if="socketio" class="method ws" title="Socket.IO: connect below">SIO</span>
       <span v-else-if="websocket" class="method ws" title="WebSocket: connect below">WS</span>
       <span v-else-if="grpc" class="method grpc" title="gRPC: pick the method in Message">gRPC</span>
       <select v-else v-model="request.method" class="method" :class="`m-${request.method.toLowerCase()}`">
@@ -144,7 +161,16 @@ const inheritedCount = computed(
         @save="emit('save')"
       />
       <button
-        v-if="!grpc"
+        v-if="!grpc && !/^\s*mqtts?:\/\//i.test(request.url)"
+        class="stream"
+        :class="{ on: !!request.mqtt }"
+        :title="request.mqtt ? 'MQTT: click to go back to a plain request' : 'Talk MQTT to this broker (ws:// or wss://); mqtt:// URLs are MQTT already'"
+        @click="toggleMqtt"
+      >
+        MQTT
+      </button>
+      <button
+        v-if="!grpc && !mqtt"
         class="stream"
         :class="{ on: socketio }"
         :title="socketio ? 'Socket.IO: click to go back to a plain request' : 'Talk Socket.IO (v4) to this server'"
@@ -153,7 +179,7 @@ const inheritedCount = computed(
         SIO
       </button>
       <button
-        v-if="!websocket && !grpc && !socketio"
+        v-if="!websocket && !grpc && !socketio && !mqtt"
         class="stream"
         :class="{ on: stream }"
         :title="stream ? 'Listening to Server-Sent Events: click to send it as a normal request' : 'Listen to it as Server-Sent Events (Accept: text/event-stream)'"
@@ -161,7 +187,7 @@ const inheritedCount = computed(
       >
         SSE
       </button>
-      <button v-if="!websocket && !stream && !socketio" class="send" :disabled="sending || !supported" @click="emit('send')">
+      <button v-if="!websocket && !stream && !socketio && !mqtt" class="send" :disabled="sending || !supported" @click="emit('send')">
         {{ sending ? "Sending…" : "Send" }}
       </button>
     </div>
@@ -182,6 +208,9 @@ const inheritedCount = computed(
       </button>
       <button v-if="grpc" :class="{ on: tab === 'body' }" @click="tab = 'body'">
         Message <span v-if="request.grpc?.method" class="count">{{ request.grpc.method.split("/").pop() }}</span>
+      </button>
+      <button v-else-if="mqtt" :class="{ on: tab === 'body' }" @click="(ensureMqtt(), (tab = 'body'))">
+        Topics <span v-if="request.mqtt?.subscribe?.length" class="count">{{ request.mqtt.subscribe.length }}</span>
       </button>
       <button v-else-if="socketio" :class="{ on: tab === 'body' }" @click="tab = 'body'">
         Events <span v-if="request.messages?.length" class="count">{{ request.messages.length }}</span>
@@ -247,6 +276,23 @@ const inheritedCount = computed(
       @send="emit('send')"
       @save="emit('save')"
     />
+
+    <div v-else-if="tab === 'body' && mqtt && request.mqtt" class="sio">
+      <div class="sio-row">
+        <label class="grow">Subscribe to <input v-model="subscribeText" placeholder="orders/#, sensors/+/temp" spellcheck="false" /></label>
+        <label>QoS
+          <select v-model.number="request.mqtt.qos"><option :value="0">0</option><option :value="1">1</option></select>
+        </label>
+        <label>Retain <input v-model="request.mqtt.retain" type="checkbox" /></label>
+      </div>
+      <div class="sio-row">
+        <label>Client id <input v-model="request.mqtt.clientId" placeholder="(made up)" spellcheck="false" /></label>
+        <label>User <input v-model="request.mqtt.username" spellcheck="false" /></label>
+        <label>Password <input v-model="request.mqtt.password" placeholder="{{mqttPassword}}" spellcheck="false" /></label>
+      </div>
+      <p class="hint">Saved publications: the name is the topic, the body the payload. <code>pulpo run</code> publishes them and collects what arrives.</p>
+      <WsMessagesEditor :request="request" @save="emit('save')" />
+    </div>
 
     <div v-else-if="tab === 'body' && socketio && request.socketio" class="sio">
       <div class="sio-row">
@@ -365,6 +411,12 @@ const inheritedCount = computed(
 .sio-row .grow {
   flex: 1;
   min-width: 200px;
+}
+.method.mqtt {
+  display: inline-flex;
+  align-items: center;
+  color: var(--p-mqtt, #7a9a3a);
+  cursor: default;
 }
 .method.grpc {
   display: inline-flex;

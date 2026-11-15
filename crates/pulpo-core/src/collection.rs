@@ -338,6 +338,9 @@ struct RequestFileV1 {
     /// Socket.IO: namespace, path and auth.
     #[serde(default)]
     socketio: Option<crate::socketio::SocketIoTarget>,
+    /// MQTT: client id, credentials, subscriptions.
+    #[serde(default)]
+    mqtt: Option<crate::mqtt::MqttTarget>,
 }
 
 /// GraphQL variables of a request live next to it, as JSON.
@@ -645,6 +648,28 @@ fn request_yaml(entry: &RequestEntry, body: Option<BodyKind>) -> String {
             out.push_str(&format!("operationName: {}\n", quote(name)));
         }
     }
+    if let Some(t) = &entry.request.mqtt {
+        out.push_str("mqtt:\n");
+        if !t.client_id.is_empty() {
+            out.push_str(&format!("  clientId: {}\n", quote(&t.client_id)));
+        }
+        if !t.username.is_empty() {
+            out.push_str(&format!("  username: {}\n", quote(&t.username)));
+        }
+        if !t.password.is_empty() {
+            out.push_str(&format!("  password: {}\n", quote(&t.password)));
+        }
+        if !t.subscribe.is_empty() {
+            out.push_str("  subscribe:\n");
+            for s in &t.subscribe {
+                out.push_str(&format!("    - {}\n", quote(s)));
+            }
+        }
+        out.push_str(&format!("  qos: {}\n", t.qos));
+        if t.retain {
+            out.push_str("  retain: true\n");
+        }
+    }
     if let Some(t) = &entry.request.socketio {
         out.push_str("socketio:\n");
         out.push_str(&format!("  namespace: {}\n", quote(&t.namespace)));
@@ -690,6 +715,9 @@ pub(crate) fn protocol_of(entry: &RequestEntry) -> Protocol {
     if crate::grpc::is_grpc_url(&entry.request.url) {
         return Protocol::Grpc;
     }
+    if entry.request.mqtt.is_some() || crate::mqtt::is_mqtt_url(&entry.request.url) {
+        return Protocol::Mqtt;
+    }
     if entry.request.socketio.is_some() {
         return Protocol::Socketio;
     }
@@ -712,7 +740,8 @@ pub(crate) fn protocol_of(entry: &RequestEntry) -> Protocol {
         | Protocol::Sse
         | Protocol::Grpc
         | Protocol::Soap
-        | Protocol::Socketio => Protocol::Http,
+        | Protocol::Socketio
+        | Protocol::Mqtt => Protocol::Http,
         p => p,
     }
 }
@@ -1286,6 +1315,7 @@ fn load_request_file(root: &Path, path: &Path) -> Result<RequestEntry, Collectio
             grpc: file.grpc,
             soap: file.soap,
             socketio: file.socketio,
+            mqtt: file.mqtt,
         },
         scripts: read_scripts(path, &stem_of(path))?,
     })
@@ -1537,6 +1567,7 @@ mod tests {
                 grpc: None,
                 soap: None,
                 socketio: None,
+                mqtt: None,
                 disabled_params: vec![Param::new("debug", "true")],
                 path_params: vec![Param::new("tenant", "{{tenantId}}")],
                 auth: Some(Auth::Bearer {

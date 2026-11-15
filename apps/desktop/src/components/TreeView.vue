@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { nextTick, ref, watch } from "vue";
 import type { RequestEntry, TreeNode } from "../workspace";
-import { isEventStream } from "../core";
+import { isEventStream, isMqtt } from "../core";
 import {
   draftName,
   dragging,
@@ -44,6 +44,7 @@ const WS_URL = /^\s*wss?:\/\//i;
 const GRPC_URL = /^\s*grpcs?:\/\//i;
 
 function badge(node: RequestEntry): string {
+  if (node.protocol === "mqtt" || isMqtt(node.request)) return "MQTT";
   if (node.protocol === "socketio" || node.request.socketio) return "SIO";
   if (node.protocol === "websocket" || WS_URL.test(node.request.url)) return "WS";
   if (node.protocol === "grpc" || GRPC_URL.test(node.request.url)) return "gRPC";
@@ -55,6 +56,7 @@ function badge(node: RequestEntry): string {
 }
 
 function badgeClass(node: RequestEntry): string {
+  if (node.protocol === "mqtt" || isMqtt(node.request)) return "p-mqtt";
   if (node.protocol === "socketio" || node.request.socketio) return "p-websocket";
   if (node.protocol === "websocket" || WS_URL.test(node.request.url)) return "p-websocket";
   if (node.protocol === "grpc" || GRPC_URL.test(node.request.url)) return "p-grpc";
@@ -342,4 +344,5 @@ function hintClass(node: TreeNode) {
 .p-websocket { color: var(--p-websocket); }
 .p-soap { color: var(--p-soap); }
 .p-sse { color: var(--p-sse); }
+.p-mqtt { color: var(--p-mqtt, #7a9a3a); }
 </style>

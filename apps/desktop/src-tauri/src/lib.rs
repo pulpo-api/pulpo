@@ -208,6 +208,78 @@ async fn grpc_schema(
     pulpo_core::grpc::schema(&root, &request).await
 }
 
+/// Live MQTT sessions by id.
+#[derive(Default)]
+struct Brokers(std::sync::Mutex<std::collections::HashMap<String, pulpo_core::mqtt::Live>>);
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BrokerMessage {
+    id: String,
+    message: pulpo_core::mqtt::MqttMessage,
+}
+
+/// Connects to an MQTT broker and subscribes; messages arrive as `mqtt-message`.
+#[tauri::command]
+async fn mqtt_connect(
+    app: tauri::AppHandle,
+    brokers: tauri::State<'_, Brokers>,
+    root: String,
+    entry: RequestEntry,
+    environment_id: Option<String>,
+) -> Result<String, String> {
+    let root = PathBuf::from(root);
+    let (request, _) = run::prepare(&root, &entry, environment_id.as_deref(), &Keychain).await?;
+    let target = request.mqtt.clone().unwrap_or_default();
+    let id = format!("{}-{}", entry.id, uuid_like());
+    let message_id = id.clone();
+    let live = pulpo_core::mqtt::open(&request, &target, move |message| {
+        let _ = app.emit(
+            "mqtt-message",
+            BrokerMessage {
+                id: message_id.clone(),
+                message,
+            },
+        );
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    brokers
+        .0
+        .lock()
+        .map_err(|e| e.to_string())?
+        .insert(id.clone(), live);
+    Ok(id)
+}
+
+/// Publishes on a live MQTT session.
+#[tauri::command]
+fn mqtt_publish(
+    brokers: tauri::State<'_, Brokers>,
+    id: String,
+    topic: String,
+    payload: String,
+    qos: u8,
+    retain: bool,
+) -> Result<(), String> {
+    let map = brokers.0.lock().map_err(|e| e.to_string())?;
+    let live = map.get(&id).ok_or("the connection is closed")?;
+    if live.publish(topic, payload, qos, retain) {
+        Ok(())
+    } else {
+        Err("the connection is closed".into())
+    }
+}
+
+/// Disconnects a live MQTT session.
+#[tauri::command]
+fn mqtt_close(brokers: tauri::State<'_, Brokers>, id: String) -> Result<(), String> {
+    if let Some(live) = brokers.0.lock().map_err(|e| e.to_string())?.remove(&id) {
+        live.close();
+    }
+    Ok(())
+}
+
 /// Live event streams (SSE) by id.
 #[derive(Default)]
 struct Streams(std::sync::Mutex<std::collections::HashMap<String, pulpo_core::sse::Live>>);
@@ -1051,6 +1123,7 @@ pub fn run() {
         .manage(LoadStop::default())
         .manage(Sockets::default())
         .manage(Streams::default())
+        .manage(Brokers::default())
         .manage(StartupLinks(std::sync::Mutex::new(links_in(
             std::env::args().skip(1),
         ))))
@@ -1154,6 +1227,9 @@ pub fn run() {
             sse_stop,
             grpc_schema,
             soap_operations,
+            mqtt_connect,
+            mqtt_publish,
+            mqtt_close,
             flow_usage,
             run_flow,
             scan_contracts,

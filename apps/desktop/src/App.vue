@@ -6,6 +6,7 @@ import RequestEditor from "./components/RequestEditor.vue";
 import ResponseViewer from "./components/ResponseViewer.vue";
 import WebSocketPanel from "./components/WebSocketPanel.vue";
 import SsePanel from "./components/SsePanel.vue";
+import MqttPanel from "./components/MqttPanel.vue";
 import EnvironmentPanel from "./components/EnvironmentPanel.vue";
 import CookiesPanel from "./components/CookiesPanel.vue";
 import TokensPanel from "./components/TokensPanel.vue";
@@ -19,7 +20,7 @@ import FlowView from "./components/FlowView.vue";
 import ContractsPanel from "./components/ContractsPanel.vue";
 import { resolveText } from "./variables";
 import { applyPathParams } from "./params";
-import { applyAuth, asSendError, coreInfo, isEventStream, isWebSocketUrl, resolveAuth, type CoreInfo, type HttpResponse, type SendError } from "./core";
+import { applyAuth, asSendError, coreInfo, isEventStream, isMqtt, isWebSocketUrl, resolveAuth, type CoreInfo, type HttpResponse, type SendError } from "./core";
 import {
   asCollectionError,
   backend,
@@ -1009,7 +1010,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
           @auxclick.middle.prevent="closeTab(tab.id)"
         >
           <span class="badge" :class="`m-${tab.request.method.toLowerCase()}`">{{
-            tab.request.socketio ? "SIO" : isWebSocketUrl(tab.request.url) ? "WS" : /^\s*grpcs?:\/\//i.test(tab.request.url) ? "gRPC" : isEventStream(tab.request) ? "SSE" : tab.request.soap ? "SOAP" : tab.request.graphql ? "GQL" : tab.protocol === "http" ? tab.request.method : tab.protocol.toUpperCase().slice(0, 4)
+            isMqtt(tab.request) ? "MQTT" : tab.request.socketio ? "SIO" : isWebSocketUrl(tab.request.url) ? "WS" : /^\s*grpcs?:\/\//i.test(tab.request.url) ? "gRPC" : isEventStream(tab.request) ? "SSE" : tab.request.soap ? "SOAP" : tab.request.graphql ? "GQL" : tab.protocol === "http" ? tab.request.method : tab.protocol.toUpperCase().slice(0, 4)
           }}</span>
           <span class="tab-name">{{ tab.name }}</span>
           <span v-if="dirty.has(tab.id)" class="dirty" title="Unsaved changes"></span>
@@ -1067,7 +1068,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         :request="selected.request"
         :scripts="selected.scripts"
         :sending="result.sending"
-        :supported="['http', 'graphql', 'websocket', 'sse', 'grpc', 'soap', 'socketio'].includes(selected.protocol) || isWebSocketUrl(selected.request.url)"
+        :supported="['http', 'graphql', 'websocket', 'sse', 'grpc', 'soap', 'socketio', 'mqtt'].includes(selected.protocol) || isWebSocketUrl(selected.request.url) || isMqtt(selected.request)"
         :preview="preview"
         :inherited-auth="selectedInheritedAuth"
         :inherited-settings="selectedInheritedSettings"
@@ -1081,8 +1082,19 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         @save="save()"
       />
 
+      <MqttPanel
+        v-if="isMqtt(selected.request)"
+        :key="`mqtt-${selected.id}`"
+        :request="selected.request"
+        :scripts="selected.scripts"
+        :request-id="selected.id"
+        :name="selected.name"
+        :root="workspace?.root ?? ''"
+        :environment-id="activeEnvId"
+      />
+
       <WebSocketPanel
-        v-if="isWebSocketUrl(selected.request.url) || selected.request.socketio"
+        v-else-if="isWebSocketUrl(selected.request.url) || selected.request.socketio"
         :key="`ws-${selected.id}-${!!selected.request.socketio}`"
         :request="selected.request"
         :scripts="selected.scripts"

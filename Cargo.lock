@@ -4003,6 +4003,7 @@ dependencies = [
  "reqwest 0.12.28",
  "roxmltree",
  "rquickjs",
+ "rustls",
  "serde",
  "serde_json",
  "serde_json_path",
@@ -4011,6 +4012,7 @@ dependencies = [
  "sha2 0.10.9",
  "tempfile",
  "tokio",
+ "tokio-rustls",
  "tokio-stream",
  "tokio-tungstenite",
  "tonic",
@@ -4019,6 +4021,7 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "uuid",
+ "webpki-roots 1.0.9",
 ]
 
 [[package]]

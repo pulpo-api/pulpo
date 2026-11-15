@@ -356,6 +356,22 @@ export interface HttpRequest {
   soap?: SoapTarget | null;
   /** Socket.IO requests: namespace, path and auth; the saved messages are events. */
   socketio?: { namespace: string; path: string; auth?: string } | null;
+  /** MQTT requests: client id, credentials, subscriptions; saved messages are publications (name = topic). */
+  mqtt?: MqttTarget | null;
+}
+
+export interface MqttTarget {
+  clientId?: string;
+  username?: string;
+  password?: string;
+  subscribe?: string[];
+  qos?: number;
+  retain?: boolean;
+}
+
+/** `mqtt://` and `mqtts://` URLs (and requests with MQTT settings) talk MQTT. */
+export function isMqtt(request: Pick<HttpRequest, "url" | "mqtt">): boolean {
+  return !!request.mqtt || /^\s*mqtts?:\/\//i.test(request.url);
 }
 
 export interface SoapTarget {

@@ -16,7 +16,7 @@ import { sampleEnvironments, sampleWorkspace } from "./sample";
 import { resolveText } from "./variables";
 import { base64ToBytes } from "./responseFiles";
 
-export type Protocol = "http" | "graphql" | "grpc" | "websocket" | "soap" | "sse" | "socketio";
+export type Protocol = "http" | "graphql" | "grpc" | "websocket" | "soap" | "sse" | "socketio" | "mqtt";
 
 export interface Scripts {
   pre: string;
@@ -491,6 +491,21 @@ export interface GrpcSchema {
   methods: GrpcMethod[];
 }
 
+/** A line of an MQTT session: a message received or sent, or Pulpo's own `info`/`error`. */
+export interface MqttMessage {
+  direction: "received" | "sent" | "info" | "error";
+  topic: string;
+  payload: string;
+  qos?: number;
+  retain?: boolean;
+  atMs: number;
+}
+
+export interface MqttSession {
+  publish(topic: string, payload: string, qos: number, retain: boolean): Promise<void>;
+  close(): Promise<void>;
+}
+
 /** One event of a Server-Sent Events stream; `info`/`error` are Pulpo's own lines. */
 export interface SseEvent {
   event: string;
@@ -646,6 +661,16 @@ export function canonicalRequest(r: HttpRequest): HttpRequest {
     socketio: r.socketio
       ? { namespace: r.socketio.namespace ?? "/", path: r.socketio.path ?? "/socket.io", auth: r.socketio.auth ?? "" }
       : null,
+    mqtt: r.mqtt
+      ? {
+          clientId: r.mqtt.clientId ?? "",
+          username: r.mqtt.username ?? "",
+          password: r.mqtt.password ?? "",
+          subscribe: [...(r.mqtt.subscribe ?? [])],
+          qos: r.mqtt.qos ?? 0,
+          retain: r.mqtt.retain ?? false,
+        }
+      : null,
   };
 }
 
@@ -738,6 +763,8 @@ export interface WorkspaceBackend {
   deleteFlow?(root: string, id: string): Promise<void>;
   addFlowStep?(root: string, flowId: string, requestId: string): Promise<Flow>;
   moveFlowStep?(root: string, flowId: string, from: number, to: number): Promise<Flow>;
+  /** Connects to an MQTT broker and subscribes; every message goes to `onMessage`. */
+  mqttConnect?(root: string, entry: RequestEntry, environmentId: string, onMessage: (m: MqttMessage) => void): Promise<MqttSession>;
   /** The SOAP operations of a WSDL (workspace file or URL), with sample envelopes. */
   soapOperations?(root: string, wsdl: string): Promise<SoapOperation[]>;
   /** The methods of a gRPC request: by reflection, or from its `.proto` files. */
@@ -890,6 +917,31 @@ const tauriBackend: WorkspaceBackend = {
   graphqlSchema: (root, entry, environmentId, refresh) =>
     invoke<GraphqlSchema | null>("graphql_schema", { root, entry, environmentId: environmentId || null, refresh }),
   soapOperations: (root, wsdl) => invoke<SoapOperation[]>("soap_operations", { root, wsdl }),
+  async mqttConnect(root, entry, environmentId, onMessage) {
+    const { listen } = await import("@tauri-apps/api/event");
+    let id: string | null = null;
+    const early: { id: string; message: MqttMessage }[] = [];
+    const deliver = (m: MqttMessage) => {
+      onMessage(m);
+      if (m.direction === "error" || (m.direction === "info" && /^(Disconnected|Closed)/.test(m.payload))) unlisten();
+    };
+    const unlisten = await listen<{ id: string; message: MqttMessage }>("mqtt-message", (e) => {
+      if (id === null) early.push(e.payload);
+      else if (e.payload.id === id) deliver(e.payload.message);
+    });
+    try {
+      id = await invoke<string>("mqtt_connect", { root, entry, environmentId: environmentId || null });
+    } catch (e) {
+      unlisten();
+      throw e;
+    }
+    for (const e of early) if (e.id === id) deliver(e.message);
+    const session = id;
+    return {
+      publish: (topic, payload, qos, retain) => invoke<void>("mqtt_publish", { id: session, topic, payload, qos, retain }),
+      close: () => invoke<void>("mqtt_close", { id: session }),
+    };
+  },
   grpcSchema: (root, entry, environmentId) =>
     invoke<GrpcSchema>("grpc_schema", { root, entry, environmentId: environmentId || null }),
   async sseListen(root, entry, environmentId, onEvent) {
@@ -1353,6 +1405,78 @@ function memoryBackend(): WorkspaceBackend {
         report.error = asSendError(e);
       }
       return report;
+    },
+    async mqttConnect(_root, entry, environmentId, onMessage) {
+      const vars = environmentId ? this.browserVariables!(environmentId) : {};
+      const missing = new Set<string>();
+      const r = (t: string) => resolveText(t, vars, missing);
+      const url = r(entry.request.url);
+      const target = entry.request.mqtt ?? {};
+      const username = r(target.username ?? "");
+      const password = r(target.password ?? "");
+      const topics = (target.subscribe ?? []).map(r).filter(Boolean);
+      if (missing.size) throw `unresolved variables: ${[...missing].sort().join(", ")}`;
+      if (!/^wss?:\/\//i.test(url)) {
+        throw "The browser preview reaches brokers over WebSocket only (ws:// or wss://); mqtt:// and mqtts:// work in the desktop app.";
+      }
+      const mqtt = await import("./mqtt");
+      const started = performance.now();
+      const at = () => Math.round(performance.now() - started);
+      const socket = new WebSocket(url, ["mqtt"]);
+      socket.binaryType = "arraybuffer";
+      await new Promise<void>((resolve, reject) => {
+        socket.onopen = () => resolve();
+        socket.onerror = () => reject(`could not connect to ${url}`);
+      });
+      const reader = new mqtt.MqttReader();
+      const qos = target.qos ?? 0;
+      let nextId = 1;
+      let ready: (() => void) | null = null;
+      let failed: ((e: string) => void) | null = null;
+      const acked = new Promise<void>((resolve, reject) => {
+        ready = resolve;
+        failed = reject;
+      });
+      socket.onmessage = (event) => {
+        for (const p of reader.feed(new Uint8Array(event.data as ArrayBuffer))) {
+          if (p.kind === "connack") {
+            if (p.code !== 0) {
+              // A refused attempt ends here, quietly: its close is not part of the next one.
+              socket.onclose = null;
+              socket.close();
+              failed?.(`the broker refused the connection: ${mqtt.CONNACK_REASONS[p.code] ?? "refused"}`);
+            }
+            else if (topics.length) socket.send(mqtt.subscribePacket(nextId++, topics, qos));
+            else ready?.();
+          } else if (p.kind === "suback") {
+            ready?.();
+          } else if (p.kind === "publish") {
+            if (p.id !== null) socket.send(mqtt.pubackPacket(p.id));
+            onMessage({ direction: "received", topic: p.topic, payload: p.payload, qos: p.qos, retain: p.retain, atMs: at() });
+          }
+        }
+      };
+      socket.onclose = () => onMessage({ direction: "info", topic: "", payload: "Closed", atMs: at() });
+      const clientId = r(target.clientId ?? "") || `pulpo-${Math.random().toString(16).slice(2, 10)}`;
+      socket.send(mqtt.connectPacket(clientId, username, password));
+      await acked;
+      onMessage({ direction: "info", topic: "", payload: `Connected to ${url}`, atMs: at() });
+      if (topics.length) onMessage({ direction: "info", topic: "", payload: `Subscribed to ${topics.join(", ")}`, atMs: at() });
+      const ping = setInterval(() => socket.readyState === WebSocket.OPEN && socket.send(mqtt.PINGREQ), 15000);
+      return {
+        async publish(topic, payload, q, retain) {
+          const t = resolveText(topic, vars, missing);
+          const body = resolveText(payload, vars, missing);
+          if (missing.size) throw `unresolved variables: ${[...missing].sort().join(", ")}`;
+          socket.send(mqtt.publishPacket(nextId++, t, body, q, retain));
+          onMessage({ direction: "sent", topic: t, payload: body, qos: q, retain, atMs: at() });
+        },
+        async close() {
+          clearInterval(ping);
+          if (socket.readyState === WebSocket.OPEN) socket.send(mqtt.DISCONNECT);
+          socket.close();
+        },
+      };
     },
     async sseListen(_root, entry, environmentId, onEvent) {
       const vars = environmentId ? this.browserVariables!(environmentId) : {};

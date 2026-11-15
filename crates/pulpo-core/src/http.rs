@@ -313,6 +313,10 @@ pub struct HttpRequest {
     /// Socket.IO requests: namespace, path and auth; the saved messages are events.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub socketio: Option<crate::socketio::SocketIoTarget>,
+    /// MQTT requests: client id, credentials and subscriptions; saved messages are
+    /// publications (name = topic).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mqtt: Option<crate::mqtt::MqttTarget>,
 }
 
 /// A GraphQL operation as it is edited: the query and its variables (JSON text).
@@ -435,6 +439,7 @@ impl HttpRequest {
             grpc: None,
             soap: None,
             socketio: None,
+            mqtt: None,
         }
     }
 }

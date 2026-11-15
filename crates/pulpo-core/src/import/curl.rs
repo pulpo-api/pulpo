@@ -301,6 +301,7 @@ pub fn parse_curl(command: &str) -> Result<(HttpRequest, Vec<String>), ImportErr
             grpc: None,
             soap: None,
             socketio: None,
+            mqtt: None,
             disabled_params: Vec::new(),
             path_params: Vec::new(),
             auth,
