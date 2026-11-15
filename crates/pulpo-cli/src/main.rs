@@ -64,6 +64,17 @@ COMMANDS:
                in a loop for DURATION (default 30s; 45, 45s or 2m) and the
                percentiles are printed. With --data, user N uses row N.
                Nothing is saved to the workspace.
+    scan [-w DIR]
+               Find the API contracts of the workspace's repository (OpenAPI,
+               .proto, WSDL, GraphQL) and the folders made from them
+    sync [FOLDER] [-w DIR] [--from FILE] [--apply] [--remove] [--exit-code]
+               Compare folders made from an OpenAPI file with it: new
+               operations, gone ones, requests missing a required param,
+               header or body. Without FOLDER, every linked folder. --from
+               links FOLDER to FILE first (e.g. a collection from Postman).
+               --apply adds and completes requests (never changes what you
+               wrote); --remove also deletes the gone ones. --exit-code
+               exits with 1 when something drifted (for CI).
     flow ls [-w DIR]
                List the flows of the workspace (flows/*.flow.yaml)
     flow show <FLOW> [-w DIR]
@@ -140,6 +151,8 @@ fn main() -> ExitCode {
         Some("link") => run_link(&args[1..]),
         Some("mcp") => run_mcp(&args[1..]),
         Some("flow") => run_flow_command(&args[1..]),
+        Some("scan") => run_scan(&args[1..]),
+        Some("sync") => run_sync(&args[1..]),
         Some("run") => run_run(&args[1..]),
         Some("load") => run_load(&args[1..]),
         Some("code") => run_code(&args[1..]),
@@ -369,6 +382,122 @@ fn run_secret(args: &[String]) -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(e) => fail(e),
+    }
+}
+
+fn run_scan(args: &[String]) -> ExitCode {
+    let dir = match args {
+        [] => PathBuf::from("."),
+        [flag, dir] if flag == "-w" || flag == "--workspace" => PathBuf::from(dir),
+        _ => return usage_error("scan: expected [-w DIR]"),
+    };
+    let found = match pulpo_core::sync::scan(&dir) {
+        Ok(found) => found,
+        Err(e) => return fail(e),
+    };
+    if found.is_empty() {
+        println!("No API contracts found (OpenAPI, .proto, WSDL, GraphQL).");
+        return ExitCode::SUCCESS;
+    }
+    for c in &found {
+        let state = match (&c.folder, c.supported) {
+            (Some(folder), _) => format!("→ {folder}"),
+            (None, true) => "not imported: pulpo import <file>".to_string(),
+            (None, false) => c.note.clone().unwrap_or_default(),
+        };
+        println!(
+            "{:<8} {:>4}  {}  ({})  {state}",
+            c.kind, c.operations, c.path, c.title
+        );
+    }
+    ExitCode::SUCCESS
+}
+
+fn run_sync(args: &[String]) -> ExitCode {
+    use pulpo_core::sync;
+    const USAGE: &str =
+        "sync: expected [FOLDER] [-w DIR] [--from FILE] [--apply] [--remove] [--exit-code]";
+    let mut folder: Option<String> = None;
+    let mut dir = PathBuf::from(".");
+    let mut from: Option<PathBuf> = None;
+    let (mut apply, mut remove, mut exit_code) = (false, false, false);
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        match arg.as_str() {
+            "-w" | "--workspace" => match rest.next() {
+                Some(d) => dir = PathBuf::from(d),
+                None => return usage_error("sync: -w needs a DIR"),
+            },
+            "--from" => match rest.next() {
+                Some(f) => from = Some(PathBuf::from(f)),
+                None => return usage_error("sync: --from needs a FILE"),
+            },
+            "--apply" => apply = true,
+            "--remove" => remove = true,
+            "--exit-code" => exit_code = true,
+            other if !other.starts_with('-') && folder.is_none() => {
+                folder = Some(other.replace('\\', "/").trim_matches('/').to_string())
+            }
+            _ => return usage_error(USAGE),
+        }
+    }
+    let folders: Vec<String> = match (&folder, &from) {
+        (Some(f), Some(file)) => match sync::link(&dir, f, file) {
+            Ok(_) => vec![f.clone()],
+            Err(e) => return fail(e),
+        },
+        (None, Some(_)) => return usage_error("sync: --from needs a FOLDER to link"),
+        (Some(f), None) => vec![f.clone()],
+        (None, None) => match sync::sources(&dir) {
+            Ok(list) if list.is_empty() => {
+                println!("No folder is linked to a contract. Import an OpenAPI file, or: pulpo sync <FOLDER> --from <file>");
+                return ExitCode::SUCCESS;
+            }
+            Ok(list) => list.into_iter().map(|(id, _)| id).collect(),
+            Err(e) => return fail(e),
+        },
+    };
+    let mut drifted = false;
+    let mut failed = false;
+    for id in folders {
+        let drift = match sync::drift(&dir, &id, None) {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("error: {e}");
+                failed = true;
+                continue;
+            }
+        };
+        print!("{}", sync::to_text(&drift));
+        drifted |= !drift.is_empty();
+        if apply && !drift.is_empty() {
+            let mut selection = sync::Selection::safe(&drift);
+            if remove {
+                selection.remove = drift.removed.iter().map(|d| d.target.clone()).collect();
+            }
+            match sync::apply(&dir, &id, &selection) {
+                Ok(done) => println!(
+                    "Applied: {} added, {} completed, {} removed{}\n",
+                    done.added.len(),
+                    done.updated.len(),
+                    done.removed.len(),
+                    if !remove && !drift.removed.is_empty() {
+                        " (gone ones kept: add --remove to delete them)"
+                    } else {
+                        ""
+                    }
+                ),
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    failed = true;
+                }
+            }
+        }
+    }
+    if failed || (exit_code && drifted && !apply) {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
     }
 }
 
@@ -717,6 +846,14 @@ fn run_import(args: &[String]) -> ExitCode {
     };
     match import::apply(&dir, &folder, &plan, &Keychain) {
         Ok(summary) => {
+            if source != "-" {
+                pulpo_core::sync::remember(
+                    &dir,
+                    &summary.folder_id,
+                    plan.format,
+                    Path::new(source),
+                );
+            }
             println!(
                 "Imported {}: {} requests, {} folders{}{}",
                 plan.format.label(),

@@ -271,6 +271,31 @@ Request by request, not line by line: moved and renamed requests are recognised,
 
 In the desktop app, **⑂** next to the collection name opens the git panel: the same request-by-request changes since the last commit (click one to open it), commit, switch or create a branch, pull and push. It uses your own `git` and its credentials, and only ever commits files of the workspace.
 
+## The collection follows the code
+
+Your repository already describes its API. Pulpo finds those contracts and keeps the collection in step with them.
+
+```bash
+pulpo scan                                   # OpenAPI, .proto, WSDL and GraphQL files of the repo
+pulpo import services/orders/openapi.yaml    # the new folder stays linked to the file
+pulpo sync                                   # after a git pull: what changed in each contract
+pulpo sync --apply                           # add new operations, complete what requests miss
+pulpo sync "Orders" --from ../api/orders.yaml   # link a folder made by hand or from Postman
+pulpo sync --exit-code                       # in CI: fail when the collection is behind the code
+```
+
+```
+Orders vs ../api/orders.yaml (Orders API): 2 new, 1 gone, 3 to update, 18 in step (+4 repeated calls)
++ POST    Withdraw a proposal  (POST /api/v2/proposals/{}/withdraw)
+- GET     Can it be amended?  …/30-can-it-be-amended.pulpo.yaml
+      maybe moved to GET /api/v2/agreements/{}/amendment-availability
+~ POST    Create proposal  misses required header Idempotency-Key
+```
+
+- Requests are matched by method and path, whatever the server variable or parameter style (`{id}`, `:id`, `{{id}}`), so hand-made collections link too. Calling an endpoint twice (a lifecycle folder) is fine.
+- Applying only adds: new operations land in a folder per tag, and existing requests get the required query params, headers or body they miss. Names, scripts and values you wrote are never changed. Gone requests are deleted only when you tick them (or `--remove`).
+- In the app, **⟲** next to the collection name lists the contracts of the repository and shows a badge when a linked folder is out of step (checked on opening and after a pull).
+
 ## Flows: features made of requests you already have
 
 A folder groups endpoints; a **flow** tells a feature: log in, pick a doctor, see the free hours, book. Flows reference the requests of the collection (they never copy them), so changing a request changes every flow that uses it, and a flow can reuse another one.

@@ -181,6 +181,21 @@ fn tools() -> Value {
             }, "required": ["name", "steps"] }
         },
         {
+            "name": "scan_contracts",
+            "description": "Find the API contracts of the repository (OpenAPI, .proto, WSDL, GraphQL) and which collection folder each one feeds.",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "sync_contract",
+            "description": "Compare a folder with the OpenAPI document it comes from: new operations, gone ones, requests missing a required param, header or body. Optionally link the folder first (from) and apply: apply adds and completes requests without changing what people wrote; remove also deletes the gone ones (ask the person first).",
+            "inputSchema": { "type": "object", "properties": {
+                "folder": { "type": "string", "description": "Folder id; omit for every linked folder." },
+                "from": { "type": "string", "description": "OpenAPI file (relative to the workspace) to link the folder to." },
+                "apply": { "type": "boolean" },
+                "remove": { "type": "boolean" }
+            } }
+        },
+        {
             "name": "collection_diff",
             "description": "What changed in the collection between two git revisions (or a revision and the files on disk), request by request, as Markdown.",
             "inputSchema": { "type": "object", "properties": {
@@ -448,6 +463,72 @@ impl<'a> Server<'a> {
                 );
                 for p in problems {
                     out.push_str(&format!("\n✗ {p}"));
+                }
+                Ok(out)
+            }
+            "scan_contracts" => {
+                let found = crate::sync::scan(&self.root).map_err(|e| e.to_string())?;
+                if found.is_empty() {
+                    return Ok("No API contracts found in the repository.".into());
+                }
+                Ok(found
+                    .iter()
+                    .map(|c| {
+                        format!(
+                            "- {} `{}` ({}, {} operations){}",
+                            c.kind,
+                            c.path,
+                            c.title,
+                            c.operations,
+                            match (&c.folder, c.supported) {
+                                (Some(f), _) => format!(" → folder {f}"),
+                                (None, true) => " → not imported yet (import_collection or sync_contract with from)".into(),
+                                (None, false) => format!(" → {}", c.note.clone().unwrap_or_default()),
+                            }
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"))
+            }
+            "sync_contract" => {
+                let folders: Vec<String> = match (arg(args, "folder"), arg(args, "from")) {
+                    (Some(folder), Some(from)) => {
+                        crate::sync::link(&self.root, folder, &self.root.join(from))?;
+                        vec![folder.to_string()]
+                    }
+                    (None, Some(_)) => return Err("from needs a folder to link".into()),
+                    (Some(folder), None) => vec![folder.to_string()],
+                    (None, None) => crate::sync::sources(&self.root)
+                        .map_err(|e| e.to_string())?
+                        .into_iter()
+                        .map(|(id, _)| id)
+                        .collect(),
+                };
+                if folders.is_empty() {
+                    return Ok("No folder is linked to a contract. Use from to link one.".into());
+                }
+                let apply = args.get("apply").and_then(|a| a.as_bool()).unwrap_or(false);
+                let remove = args
+                    .get("remove")
+                    .and_then(|a| a.as_bool())
+                    .unwrap_or(false);
+                let mut out = String::new();
+                for id in folders {
+                    let d = crate::sync::drift(&self.root, &id, None)?;
+                    out.push_str(&crate::sync::to_text(&d));
+                    if apply && !d.is_empty() {
+                        let mut selection = crate::sync::Selection::safe(&d);
+                        if remove {
+                            selection.remove = d.removed.iter().map(|i| i.target.clone()).collect();
+                        }
+                        let done = crate::sync::apply(&self.root, &id, &selection)?;
+                        out.push_str(&format!(
+                            "Applied: {} added, {} completed, {} removed.\n",
+                            done.added.len(),
+                            done.updated.len(),
+                            done.removed.len()
+                        ));
+                    }
                 }
                 Ok(out)
             }
@@ -929,7 +1010,7 @@ mod tests {
             .collect();
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0]["result"]["serverInfo"]["name"], "pulpo");
-        assert_eq!(lines[1]["result"]["tools"].as_array().unwrap().len(), 13);
+        assert_eq!(lines[1]["result"]["tools"].as_array().unwrap().len(), 15);
 
         // Create, list, read and run a request.
         let (text, error) = call(

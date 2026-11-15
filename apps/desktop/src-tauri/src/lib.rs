@@ -403,13 +403,81 @@ async fn import_into(
     path: Option<String>,
     text: Option<String>,
 ) -> Result<ImportSummary, String> {
-    let plan = match (path, text) {
-        (Some(path), None) => import::parse_file(Path::new(&path)),
+    let plan = match (&path, text) {
+        (Some(path), None) => import::parse_file(Path::new(path)),
         (None, Some(text)) => import::parse(&text),
         _ => return Err("give either a file or pasted text".into()),
     }
     .map_err(|e| e.to_string())?;
-    import::apply(Path::new(&root), &folder_id, &plan, &Keychain).map_err(|e| e.to_string())
+    let summary =
+        import::apply(Path::new(&root), &folder_id, &plan, &Keychain).map_err(|e| e.to_string())?;
+    if let Some(path) = path {
+        pulpo_core::sync::remember(
+            Path::new(&root),
+            &summary.folder_id,
+            plan.format,
+            Path::new(&path),
+        );
+    }
+    Ok(summary)
+}
+
+/// API contracts in the workspace's repository.
+#[tauri::command]
+async fn scan_contracts(root: String) -> Result<Vec<pulpo_core::sync::Contract>, String> {
+    blocking(move || pulpo_core::sync::scan(Path::new(&root)).map_err(|e| e.to_string())).await
+}
+
+/// Drift of every folder linked to a contract (errors are reported per folder).
+#[tauri::command]
+async fn sync_status(root: String) -> Result<Vec<Result<pulpo_core::sync::Drift, String>>, String> {
+    blocking(move || {
+        let root = PathBuf::from(root);
+        let linked = pulpo_core::sync::sources(&root).map_err(|e| e.to_string())?;
+        Ok(linked
+            .into_iter()
+            .map(|(id, _)| pulpo_core::sync::drift(&root, &id, None))
+            .collect())
+    })
+    .await
+}
+
+/// Links a folder ("" = the workspace) to a contract file (relative to the workspace).
+#[tauri::command]
+async fn sync_link(
+    root: String,
+    folder_id: String,
+    contract: String,
+) -> Result<pulpo_core::sync::Drift, String> {
+    blocking(move || {
+        let root = PathBuf::from(root);
+        let file = root.join(&contract);
+        pulpo_core::sync::link(&root, &folder_id, &file)
+    })
+    .await
+}
+
+/// Imports a contract into a new folder linked to it.
+#[tauri::command]
+async fn sync_import(root: String, contract: String) -> Result<ImportSummary, String> {
+    blocking(move || {
+        let root = PathBuf::from(root);
+        let file = root.join(&contract);
+        let plan = import::parse_file(&file).map_err(|e| e.to_string())?;
+        let summary = import::apply(&root, "", &plan, &Keychain).map_err(|e| e.to_string())?;
+        pulpo_core::sync::remember(&root, &summary.folder_id, plan.format, &file);
+        Ok(summary)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn sync_apply(
+    root: String,
+    folder_id: String,
+    selection: pulpo_core::sync::Selection,
+) -> Result<pulpo_core::sync::Applied, String> {
+    blocking(move || pulpo_core::sync::apply(Path::new(&root), &folder_id, &selection)).await
 }
 
 /// Gets a new OAuth 2.0 token (browser login for the authorization code grant) and caches it.
@@ -853,7 +921,12 @@ pub fn run() {
             delete_flow,
             add_flow_step,
             flow_usage,
-            run_flow
+            run_flow,
+            scan_contracts,
+            sync_status,
+            sync_link,
+            sync_import,
+            sync_apply
         ])
         .run(tauri::generate_context!())
         .expect("error while running Pulpo");

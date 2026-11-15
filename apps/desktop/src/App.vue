@@ -14,6 +14,7 @@ import ImportDialog from "./components/ImportDialog.vue";
 import ExportDialog from "./components/ExportDialog.vue";
 import GitPanel from "./components/GitPanel.vue";
 import FlowView from "./components/FlowView.vue";
+import ContractsPanel from "./components/ContractsPanel.vue";
 import { resolveText } from "./variables";
 import { applyPathParams } from "./params";
 import { applyAuth, asSendError, coreInfo, resolveAuth, type CoreInfo, type HttpResponse, type SendError } from "./core";
@@ -94,6 +95,29 @@ const showImport = ref(false);
 /** Folder being exported ("" = the whole collection); null = dialog closed. */
 const exporting = ref<string | null>(null);
 const showGit = ref(false);
+
+// ---- API contracts
+const showContracts = ref(false);
+/** Folders out of step with their contract (checked in the background on open). */
+const driftCount = ref(0);
+async function checkDrift() {
+  const ws = workspace.value;
+  if (!ws || !backend.syncStatus) return;
+  try {
+    const status = await backend.syncStatus(ws.root);
+    driftCount.value = status.filter(
+      (s) => "Ok" in s && (s.Ok.added.length || s.Ok.removed.length || s.Ok.changed.length),
+    ).length;
+  } catch {
+    driftCount.value = 0;
+  }
+}
+watch(() => workspace.value?.root, () => void checkDrift(), { immediate: true });
+async function afterContracts() {
+  await organize(async () => {});
+  await loadFlows();
+  await checkDrift();
+}
 
 // ---- flows
 const flows = ref<Flow[]>([]);
@@ -885,6 +909,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       @import="showImport = true"
       @export="exporting = $event"
       @git="showGit = true"
+      :drift-count="driftCount"
+      @contracts="showContracts = true"
       :flows="flows"
       :open-flow-id="flowView"
       @open-flow="openFlow"
@@ -1127,13 +1153,21 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       </div>
     </div>
 
+    <ContractsPanel
+      v-if="showContracts && workspace"
+      :workspace="workspace"
+      @changed="afterContracts"
+      @open="(id) => { showContracts = false; openRequestFromFlow(id); }"
+      @close="showContracts = false"
+    />
+
     <GitPanel
       v-if="showGit && workspace"
       :root="workspace.root"
       :unsaved="dirty.size"
       :names="requestNames"
       @open="(id) => { showGit = false; openFromTokens(id); }"
-      @reload="organize(async () => {})"
+      @reload="organize(async () => {}).then(checkDrift)"
       @close="showGit = false"
     />
 

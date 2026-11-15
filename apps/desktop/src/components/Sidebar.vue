@@ -13,6 +13,8 @@ const props = defineProps<{
   /** Flows of the workspace, and the one open in the main area. */
   flows: Flow[];
   openFlowId: string | null;
+  /** Folders whose contract changed. */
+  driftCount: number;
 }>();
 const newFlowName = ref<string | null>(null);
 function startFlow() {
@@ -43,6 +45,7 @@ const emit = defineEmits<{
   runFolder: [id: string];
   export: [id: string];
   git: [];
+  contracts: [];
   openFlow: [id: string];
   newFlow: [name: string];
   addToFlow: [requestId: string];
@@ -224,6 +227,14 @@ function confirm() {
         <button class="icon" title="Collection headers, auth, settings and scripts" @click="emit('editFolder', '')">⚙</button>
         <button class="icon" title="Export as Postman, OpenAPI or a .http file" @click="emit('export', '')">⇪</button>
         <button v-if="persistent" class="icon" title="Git: changes, commit, branches, pull and push" @click="emit('git')">⑂</button>
+        <button
+          v-if="persistent"
+          class="icon contracts-btn"
+          :title="driftCount ? `${driftCount} folder(s) out of step with their API contract` : 'API contracts of this repository'"
+          @click="emit('contracts')"
+        >
+          ⟲<span v-if="driftCount" class="badge">{{ driftCount }}</span>
+        </button>
         <button v-if="persistent" class="icon" title="Open another folder" @click="emit('open')">⇄</button>
       </div>
       <div class="actions">
@@ -546,5 +557,22 @@ footer {
   margin-left: auto;
   font-size: 11px;
   color: var(--muted);
+}
+.contracts-btn {
+  position: relative;
+}
+.badge {
+  position: absolute;
+  top: -4px;
+  right: -6px;
+  min-width: 14px;
+  height: 14px;
+  border-radius: 7px;
+  background: var(--m-delete);
+  color: #fff;
+  font-size: 10px;
+  line-height: 14px;
+  text-align: center;
+  padding: 0 3px;
 }
 </style>

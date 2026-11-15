@@ -395,6 +395,37 @@ export interface Cookie {
 
 export type ExportFormat = "postman" | "openApi" | "http";
 
+export interface Contract {
+  path: string;
+  kind: "openapi" | "swagger" | "proto" | "wsdl" | "graphql";
+  title: string;
+  operations: number;
+  supported: boolean;
+  folder: string | null;
+  note?: string;
+}
+
+export interface DriftItem {
+  key: string;
+  name: string;
+  method: string;
+  url: string;
+  target: string;
+  changes: string[];
+}
+
+export interface Drift {
+  folder: string;
+  source: string;
+  title: string;
+  added: DriftItem[];
+  removed: DriftItem[];
+  changed: DriftItem[];
+  unchanged: number;
+  repeated: number;
+  warnings: string[];
+}
+
 export interface Flow {
   id: string;
   version: number;
@@ -598,6 +629,16 @@ export interface WorkspaceBackend {
   exportCollection?(root: string, folderId: string, format: ExportFormat): Promise<Exported>;
   /** Desktop only: an environment as a Postman environment. */
   exportEnvironment?(root: string, environmentId: string): Promise<Exported>;
+  /** Desktop only: API contracts of the repository and the folders made from them. */
+  scanContracts?(root: string): Promise<Contract[]>;
+  syncStatus?(root: string): Promise<({ Ok: Drift } | { Err: string })[]>;
+  syncLink?(root: string, folderId: string, contract: string): Promise<Drift>;
+  syncImport?(root: string, contract: string): Promise<ImportSummary>;
+  syncApply?(root: string, folderId: string, selection: { add: string[]; update: string[]; remove: string[] }): Promise<{
+    added: string[];
+    updated: string[];
+    removed: string[];
+  }>;
   /** Desktop only: flows (features told as a sequence of requests). */
   listFlows?(root: string): Promise<Flow[]>;
   flowPlan?(root: string, id: string): Promise<FlowPlanNode[]>;
@@ -730,6 +771,11 @@ const tauriBackend: WorkspaceBackend = {
   },
   stopLoadTest: () => invoke<void>("stop_load_test"),
   importInto: (root, folderId, source) => invoke<ImportSummary>("import_into", { root, folderId, ...source }),
+  scanContracts: (root) => invoke<Contract[]>("scan_contracts", { root }),
+  syncStatus: (root) => invoke<({ Ok: Drift } | { Err: string })[]>("sync_status", { root }),
+  syncLink: (root, folderId, contract) => invoke<Drift>("sync_link", { root, folderId, contract }),
+  syncImport: (root, contract) => invoke<ImportSummary>("sync_import", { root, contract }),
+  syncApply: (root, folderId, selection) => invoke("sync_apply", { root, folderId, selection }),
   listFlows: (root) => invoke<Flow[]>("list_flows", { root }),
   flowPlan: (root, id) => invoke<FlowPlanNode[]>("flow_plan", { root, id }),
   flowYaml: (root, id) => invoke<string>("flow_yaml", { root, id }),

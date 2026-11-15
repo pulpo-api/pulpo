@@ -271,6 +271,8 @@ struct WorkspaceFileV1 {
     auth: Option<Auth>,
     #[serde(default)]
     settings: Settings,
+    #[serde(default)]
+    source: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -284,6 +286,8 @@ struct FolderFileV1 {
     auth: Option<Auth>,
     #[serde(default)]
     settings: Settings,
+    #[serde(default)]
+    source: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -533,8 +537,13 @@ fn headers_yaml(headers: &[Header]) -> String {
 
 /// `pulpo.yaml` and `_folder.yaml` share one canonical form.
 fn meta_yaml(meta: &FolderMeta) -> String {
+    let source = meta
+        .source
+        .as_ref()
+        .map(|s| format!("source: {}\n", quote(s)))
+        .unwrap_or_default();
     format!(
-        "version: {FORMAT_VERSION}\nname: {}\n{}{}{}",
+        "version: {FORMAT_VERSION}\nname: {}\n{source}{}{}{}",
         quote(&meta.name),
         headers_yaml(&meta.headers),
         auth_yaml(meta.auth.as_ref()),
@@ -704,6 +713,10 @@ pub struct FolderMeta {
     pub auth: Option<Auth>,
     #[serde(default)]
     pub settings: Settings,
+    /// The contract this folder is generated from (an OpenAPI file), relative to the
+    /// workspace; `pulpo sync` compares the two.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 /// Reads a folder's meta (`""` = the workspace). A folder without `_folder.yaml` is named
@@ -717,6 +730,7 @@ pub(crate) fn read_meta(root: &Path, folder_id: &str) -> Result<FolderMeta, Coll
             headers: parsed.headers,
             auth: parsed.auth,
             settings: parsed.settings,
+            source: parsed.source,
         });
     }
     let dir = resolve(root, folder_id)?;
@@ -739,6 +753,7 @@ pub(crate) fn read_meta(root: &Path, folder_id: &str) -> Result<FolderMeta, Coll
         headers: parsed.headers,
         auth: parsed.auth,
         settings: parsed.settings,
+        source: parsed.source,
     })
 }
 
@@ -753,6 +768,17 @@ pub(crate) fn write_meta(
         resolve(root, folder_id)?.join(FOLDER_FILE)
     };
     fs::write(&file, meta_yaml(meta)).map_err(|e| io_error(&file, e))
+}
+
+/// Links a folder (`""` = the workspace) to the contract it is generated from.
+pub fn set_folder_source(
+    root: &Path,
+    folder_id: &str,
+    source: Option<&str>,
+) -> Result<(), CollectionError> {
+    let mut meta = read_meta(root, folder_id)?;
+    meta.source = source.map(str::to_string);
+    write_meta(root, folder_id, &meta)
 }
 
 /// What a folder (`""` = the workspace) sets for the requests inside.
@@ -773,6 +799,7 @@ pub fn save_folder_meta(
         folder_id,
         &FolderMeta {
             name: current.name,
+            source: current.source,
             ..meta.clone()
         },
     )
@@ -1210,12 +1237,7 @@ pub fn format_workspace(root: &Path, check: bool) -> Result<Vec<String>, Collect
     let ws_file = root.join(WORKSPACE_FILE);
     rewrite(
         &ws_file,
-        &meta_yaml(&FolderMeta {
-            name: workspace.name.clone(),
-            headers: workspace.headers.clone(),
-            auth: workspace.auth.clone(),
-            settings: workspace.settings.clone(),
-        }),
+        &meta_yaml(&read_meta(root, "")?),
         check,
         root,
         &mut changed,
@@ -1243,14 +1265,10 @@ fn format_nodes(
             } => {
                 let file = resolve(root, id)?.join(FOLDER_FILE);
                 if file.is_file() {
+                    let _ = (name, auth, settings, headers);
                     rewrite(
                         &file,
-                        &meta_yaml(&FolderMeta {
-                            name: name.clone(),
-                            headers: headers.clone(),
-                            auth: auth.clone(),
-                            settings: settings.clone(),
-                        }),
+                        &meta_yaml(&read_meta(root, id)?),
                         check,
                         root,
                         changed,
