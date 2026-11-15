@@ -175,12 +175,12 @@ async function link(c: Contract) {
 
         <h3 class="section">Contracts in this repository</h3>
         <p v-if="!contracts.length" class="note">
-          No OpenAPI, .proto, WSDL or GraphQL files found in the repository of this workspace.
+          No OpenAPI, .proto, WSDL or GraphQL files, nor Spring, NestJS, Express, FastAPI, Next.js or Nuxt routes, found in the repository of this workspace.
         </p>
         <div v-for="c in openapi" :key="c.path" class="contract">
           <div>
-            <b>{{ c.title }}</b> <span class="muted small">{{ c.operations }} operations</span>
-            <div class="muted small"><code>{{ c.path }}</code></div>
+            <b>{{ c.title }}</b> <span class="muted small">{{ c.operations }} {{ c.note ? "endpoints" : "operations" }}</span>
+            <div class="muted small"><code>{{ c.path }}</code><template v-if="c.note"> · {{ c.kind }} code</template></div>
             <div v-if="c.folder !== null && c.folder !== undefined" class="small">→ {{ folderName(c.folder) }}</div>
           </div>
           <div v-if="c.folder === null || c.folder === undefined" class="actions">

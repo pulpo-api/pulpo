@@ -10,6 +10,7 @@ use std::str::FromStr;
 pub mod certificates;
 pub mod chain;
 pub mod codegen;
+pub mod codescan;
 pub mod collection;
 pub mod contract;
 pub mod cookies;

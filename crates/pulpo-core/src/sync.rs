@@ -282,6 +282,22 @@ pub fn scan(root: &Path) -> Result<Vec<Contract>, CollectionError> {
             })
         })
         .collect();
+    // The code itself: modules whose controllers or routes expose endpoints.
+    for module in crate::codescan::find_modules(&base) {
+        let folder = linked
+            .iter()
+            .find(|(_, source)| same_file(root, source, &module.dir))
+            .map(|(id, _)| id.clone());
+        out.push(Contract {
+            path: relative_path(root, &module.dir),
+            kind: module.framework.clone(),
+            title: module.name.clone(),
+            operations: module.endpoints.len(),
+            supported: true,
+            folder,
+            note: Some("from the code".into()),
+        });
+    }
     out.sort_by(|a, b| {
         (!a.supported, a.kind.as_str(), a.path.as_str()).cmp(&(
             !b.supported,
@@ -398,7 +414,7 @@ struct Operation {
 
 fn operations_of(spec: &Path) -> Result<(String, Vec<Operation>, Vec<String>), String> {
     let plan = import::parse_file(spec).map_err(|e| e.to_string())?;
-    if plan.format != ImportFormat::OpenApi {
+    if plan.format != ImportFormat::OpenApi && plan.format != ImportFormat::Code {
         return Err(format!(
             "{} is a {}, not an OpenAPI document",
             spec.display(),
@@ -513,7 +529,7 @@ pub fn drift(root: &Path, folder_id: &str, source: Option<&str>) -> Result<Drift
             })?,
     };
     let spec = spec_path(root, &source);
-    if !spec.is_file() {
+    if !spec.exists() {
         return Err(format!(
             "the contract {source} does not exist (moved or deleted?)"
         ));
@@ -847,14 +863,14 @@ pub fn apply(root: &Path, folder_id: &str, selection: &Selection) -> Result<Appl
 /// After importing an OpenAPI file, links the new folder to it so `pulpo sync` can
 /// follow the contract from then on.
 pub fn remember(root: &Path, folder_id: &str, format: ImportFormat, file: &Path) {
-    if format == ImportFormat::OpenApi {
+    if format == ImportFormat::OpenApi || format == ImportFormat::Code {
         let _ = collection::set_folder_source(root, folder_id, Some(&relative_path(root, file)));
     }
 }
 
 /// Links a folder to a contract and returns the drift.
 pub fn link(root: &Path, folder_id: &str, contract: &Path) -> Result<Drift, String> {
-    if !contract.is_file() {
+    if !contract.exists() {
         return Err(format!("{} does not exist", contract.display()));
     }
     let source = relative_path(root, contract);

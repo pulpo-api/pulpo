@@ -69,6 +69,8 @@ pub enum ImportFormat {
     Hoppscotch,
     Har,
     HttpFile,
+    /// Endpoints read from source code (Spring, NestJS, Express, FastAPI, Next.js, Nuxt).
+    Code,
 }
 
 impl ImportFormat {
@@ -83,6 +85,7 @@ impl ImportFormat {
             ImportFormat::Hoppscotch => "Hoppscotch collection",
             ImportFormat::Har => "HAR file",
             ImportFormat::HttpFile => ".http file",
+            ImportFormat::Code => "source code",
         }
     }
 }
@@ -142,7 +145,15 @@ const EXPECTED: &str = "expected a Postman, Insomnia, Bruno or Hoppscotch collec
 pub fn parse_file(path: &Path) -> Result<ImportPlan, ImportError> {
     // A Bruno collection is a folder: pick it or its bruno.json.
     if path.is_dir() {
-        return bruno::folder(path);
+        if path.join("bruno.json").is_file() {
+            return bruno::folder(path);
+        }
+        return crate::codescan::plan_dir(path).ok_or_else(|| {
+            ImportError::UnknownFormat(format!(
+                "{}: no Bruno collection and no endpoints found in its code (Spring, NestJS, Express, FastAPI, Next.js, Nuxt)",
+                path.display()
+            ))
+        });
     }
     if path.file_name().is_some_and(|n| n == "bruno.json") {
         return bruno::folder(path.parent().unwrap_or_else(|| Path::new(".")));

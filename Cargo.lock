@@ -3759,6 +3759,7 @@ dependencies = [
  "md4",
  "p12-keystore",
  "rcgen",
+ "regex",
  "reqwest 0.12.28",
  "rquickjs",
  "serde",
