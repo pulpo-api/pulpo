@@ -52,8 +52,9 @@ pub enum Step {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Flow {
-    /// File name without `.flow.yaml`; set when loaded.
-    #[serde(default, skip_serializing)]
+    /// File name without `.flow.yaml`; set when loaded. The app needs it, so it is
+    /// serialized; the file itself is written by `to_yaml`, which leaves it out.
+    #[serde(default)]
     pub id: String,
     #[serde(default = "one")]
     pub version: u32,
@@ -632,6 +633,11 @@ mod tests {
             .tree
             .iter()
             .all(|n| !matches!(n, collection::TreeNode::Folder { name, .. } if name == "flows")));
+
+        // What the app receives carries the id; the file does not.
+        let listed = serde_json::to_value(list_flows(root).unwrap()).unwrap();
+        assert_eq!(listed[0]["id"], "log-in");
+        assert!(!text.contains("id:"), "{text}");
 
         let nodes = plan(root, &profile.id).unwrap();
         let paths: Vec<(&str, &str)> = nodes
