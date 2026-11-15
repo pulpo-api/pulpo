@@ -456,6 +456,23 @@ export interface WsFrame {
   atMs: number;
 }
 
+export interface SoapOperation {
+  /** `Service/Port/Operation`. */
+  path: string;
+  service: string;
+  port: string;
+  name: string;
+  address: string;
+  soapAction: string;
+  version: string;
+  style: string;
+  /** `{namespace}name` of the Body's first element. */
+  bodyElement: string;
+  envelope: string;
+  headers: [string, string][];
+  documentation?: string;
+}
+
 export interface GrpcMethod {
   /** `package.Service/Method`. */
   path: string;
@@ -625,6 +642,7 @@ export function canonicalRequest(r: HttpRequest): HttpRequest {
       : null,
     messages: (r.messages ?? []).map((m) => ({ name: m.name, body: m.body })),
     grpc: r.grpc ? { method: r.grpc.method ?? "", protoFiles: [...(r.grpc.protoFiles ?? [])] } : null,
+    soap: r.soap ? { wsdl: r.soap.wsdl ?? "", operation: r.soap.operation ?? "" } : null,
   };
 }
 
@@ -717,6 +735,8 @@ export interface WorkspaceBackend {
   deleteFlow?(root: string, id: string): Promise<void>;
   addFlowStep?(root: string, flowId: string, requestId: string): Promise<Flow>;
   moveFlowStep?(root: string, flowId: string, from: number, to: number): Promise<Flow>;
+  /** The SOAP operations of a WSDL (workspace file or URL), with sample envelopes. */
+  soapOperations?(root: string, wsdl: string): Promise<SoapOperation[]>;
   /** The methods of a gRPC request: by reflection, or from its `.proto` files. */
   grpcSchema?(root: string, entry: RequestEntry, environmentId: string): Promise<GrpcSchema>;
   /** Listens to a request's event stream (SSE); every event goes to `onEvent`. */
@@ -866,6 +886,7 @@ const tauriBackend: WorkspaceBackend = {
   moveFlowStep: (root, flowId, from, to) => invoke<Flow>("move_flow_step", { root, flowId, from, to }),
   graphqlSchema: (root, entry, environmentId, refresh) =>
     invoke<GraphqlSchema | null>("graphql_schema", { root, entry, environmentId: environmentId || null, refresh }),
+  soapOperations: (root, wsdl) => invoke<SoapOperation[]>("soap_operations", { root, wsdl }),
   grpcSchema: (root, entry, environmentId) =>
     invoke<GrpcSchema>("grpc_schema", { root, entry, environmentId: environmentId || null }),
   async sseListen(root, entry, environmentId, onEvent) {

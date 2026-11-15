@@ -57,6 +57,15 @@
       "description": "json/xml/html/javascript/graphql/text: the body is the file next to this one (.body.json, .body.xml, .body.html, .body.js, .body.graphql or .body.txt), chosen from the Content-Type header. graphql: an operation, with its variables in .variables.json, sent as JSON {query, variables, operationName}. urlencoded/multipart: the fields in form. file: the workspace file in bodyFile."
     },
     "operationName": { "type": "string", "description": "GraphQL: the operation of the query to run, when it has several." },
+    "soap": {
+      "type": "object",
+      "description": "SOAP: where the operation comes from. The envelope is the body (XML).",
+      "additionalProperties": false,
+      "properties": {
+        "wsdl": { "type": "string", "description": "A workspace file (found by name too) or a URL." },
+        "operation": { "type": "string", "description": "Service/Port/Operation" }
+      }
+    },
     "grpc": {
       "type": "object",
       "description": "gRPC (grpc:// or grpcs:// URL): the method and where its descriptors come from. The message is the body (JSON).",

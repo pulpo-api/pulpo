@@ -264,6 +264,13 @@ grpc:
 body: "json"                    # the message, in 01-get.body.json
 ```
 
+## SOAP
+
+Pick **SOAP** as the body, give the WSDL (a workspace file or a URL) and **Load operations**: pick one and Pulpo writes the envelope from the WSDL's schema (SoapUI style: `?` for text, `<!--Optional:-->` marks) and the `Content-Type`/`SOAPAction` headers. Document and rpc styles, SOAP 1.1 and 1.2.
+
+- The envelope is checked as you type: valid XML, a SOAP Envelope of the right version, and the operation's element first in the Body.
+- `pulpo import service.wsdl` creates a request per operation; `{{variables}}` work anywhere in the envelope.
+
 ## Run collections
 
 In the app, **▶** (or right-click a folder → Run folder…) opens the runner: pick requests, iterations, a CSV or JSON data file, delay, retries; watch the progress, re-run only the failed ones, export HTML or JUnit, and accept a changed snapshot with one click. From the terminal:

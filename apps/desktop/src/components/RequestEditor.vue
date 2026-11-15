@@ -61,6 +61,7 @@ const BODY_BADGES: Partial<Record<ReturnType<typeof bodyMode>, string>> = {
   multipart: "Form",
   file: "File",
   graphql: "GraphQL",
+  soap: "SOAP",
 };
 const examplesNew = ref(false);
 const examplesEditor = ref<InstanceType<typeof ExamplesEditor> | null>(null);

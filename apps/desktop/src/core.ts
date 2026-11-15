@@ -317,10 +317,11 @@ export interface Form {
 }
 
 /** How the body is sent; derived from which of `form`, `bodyFile` and `body` is set. */
-export type BodyMode = "none" | "raw" | "graphql" | FormKind | "file";
+export type BodyMode = "none" | "raw" | "graphql" | "soap" | FormKind | "file";
 
 export function bodyMode(request: HttpRequest): BodyMode {
   if (request.graphql) return "graphql";
+  if (request.soap) return "soap";
   if (request.form) return request.form.kind;
   if (request.bodyFile != null) return "file";
   return request.body != null ? "raw" : "none";
@@ -351,6 +352,43 @@ export interface HttpRequest {
   messages?: WsMessage[];
   /** gRPC requests (`grpc://`, `grpcs://`): the method and its `.proto` files (none = reflection). */
   grpc?: GrpcTarget | null;
+  /** SOAP requests: the WSDL and the operation; the envelope is the (XML) body. */
+  soap?: SoapTarget | null;
+}
+
+export interface SoapTarget {
+  /** A workspace file or a URL. */
+  wsdl: string;
+  /** `Service/Port/Operation`. */
+  operation: string;
+}
+
+export const SOAP_ENVELOPE_11 = "http://schemas.xmlsoap.org/soap/envelope/";
+export const SOAP_ENVELOPE_12 = "http://www.w3.org/2003/05/soap-envelope";
+
+/** What is wrong with an envelope: not XML, not an Envelope, no Body, or a Body whose
+ * first element is not the operation's (`{namespace}name`). `{{variables}}` are fine. */
+export function checkEnvelope(xml: string, version?: string, bodyElement?: string): string[] {
+  if (!xml.trim()) return ["The envelope is empty."];
+  const doc = new DOMParser().parseFromString(xml.replace(/\{\{[^}]+\}\}/g, "x"), "application/xml");
+  const error = doc.getElementsByTagName("parsererror")[0];
+  if (error) return [`Not valid XML: ${(error.textContent ?? "").split("\n")[0].slice(0, 160)}`];
+  const root = doc.documentElement;
+  const out: string[] = [];
+  const ns = root.namespaceURI ?? "";
+  if (root.localName !== "Envelope" || (ns !== SOAP_ENVELOPE_11 && ns !== SOAP_ENVELOPE_12)) {
+    return ["The root is not a SOAP Envelope."];
+  }
+  if (version === "1.1" && ns !== SOAP_ENVELOPE_11) out.push("The operation is SOAP 1.1 but the envelope is 1.2.");
+  if (version === "1.2" && ns !== SOAP_ENVELOPE_12) out.push("The operation is SOAP 1.2 but the envelope is 1.1.");
+  const body = [...root.children].find((c) => c.localName === "Body" && c.namespaceURI === ns);
+  if (!body) return [...out, "The envelope has no Body."];
+  if (bodyElement) {
+    const first = body.firstElementChild;
+    const got = first ? `{${first.namespaceURI ?? ""}}${first.localName}` : "nothing";
+    if (got !== bodyElement) out.push(`The Body starts with ${got}; the operation expects ${bodyElement}.`);
+  }
+  return out;
 }
 
 export interface GrpcTarget {

@@ -307,6 +307,9 @@ pub struct HttpRequest {
     /// gRPC requests (`grpc://`, `grpcs://`): the method and where its descriptors are.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grpc: Option<crate::grpc::GrpcTarget>,
+    /// SOAP requests: the WSDL and the operation (the envelope is the body).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub soap: Option<crate::soap::SoapTarget>,
 }
 
 /// A GraphQL operation as it is edited: the query and its variables (JSON text).
@@ -427,6 +430,7 @@ impl HttpRequest {
             graphql: None,
             messages: Vec::new(),
             grpc: None,
+            soap: None,
         }
     }
 }

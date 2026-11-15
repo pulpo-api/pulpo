@@ -4,6 +4,7 @@ import { bodyMode, type BodyMode, type FormField, type HttpRequest } from "../co
 import { backend, toWorkspacePath, type Scripts } from "../workspace";
 import CodeEditor, { type Language } from "./CodeEditor.vue";
 import GraphqlEditor from "./GraphqlEditor.vue";
+import SoapEditor from "./SoapEditor.vue";
 import VarInput from "./VarInput.vue";
 
 const props = defineProps<{
@@ -20,6 +21,7 @@ const MODES: { mode: BodyMode; label: string }[] = [
   { mode: "none", label: "None" },
   { mode: "raw", label: "Raw" },
   { mode: "graphql", label: "GraphQL" },
+  { mode: "soap", label: "SOAP" },
   { mode: "urlencoded", label: "URL encoded" },
   { mode: "multipart", label: "Form data" },
   { mode: "file", label: "File" },
@@ -65,9 +67,15 @@ function setMode(next: BodyMode) {
   if (r.bodyFile != null) kept.file = r.bodyFile;
   if (r.graphql) kept.graphql = r.graphql;
   r.graphql = next === "graphql" ? (kept.graphql ?? { query: "", variables: "" }) : null;
+  r.soap = next === "soap" ? (r.soap ?? { wsdl: "", operation: "" }) : null;
+  if (next === "soap" && (r.method === "GET" || r.method === "HEAD")) r.method = "POST";
+  // SOAP 1.1 by default; picking a 1.2 operation from the WSDL replaces it.
+  if (next === "soap" && !r.headers.some((h) => h.enabled && isContentType(h))) {
+    r.headers.push({ name: "Content-Type", value: "text/xml; charset=utf-8", enabled: true });
+  }
   // GraphQL goes as a JSON body; over GET it would need the query in the URL.
   if (next === "graphql" && (r.method === "GET" || r.method === "HEAD")) r.method = "POST";
-  r.body = next === "raw" ? (kept.raw ?? "") : null;
+  r.body = next === "raw" || next === "soap" ? (kept.raw ?? "") : null;
   r.bodyFile = next === "file" ? kept.file : null;
   if (next === "urlencoded" || next === "multipart") {
     // Urlencoded forms cannot carry files.
@@ -218,9 +226,11 @@ async function pick(apply: (path: string) => void) {
       <button v-if="mode === 'raw' && rawKind === 'json'" class="link" @click="formatJson">Format JSON</button>
     </div>
 
-    <p v-if="!hasBody && mode !== 'none' && mode !== 'graphql'" class="warn">{{ request.method }} requests usually have no body; servers may ignore it.</p>
+    <p v-if="!hasBody && mode !== 'none' && mode !== 'graphql' && mode !== 'soap'" class="warn">{{ request.method }} requests usually have no body; servers may ignore it.</p>
 
     <p v-if="mode === 'none'" class="empty">This request sends no body.</p>
+
+    <SoapEditor v-else-if="mode === 'soap'" :request="request" :root="root" @send="emit('send')" @save="emit('save')" />
 
     <GraphqlEditor
       v-else-if="mode === 'graphql'"

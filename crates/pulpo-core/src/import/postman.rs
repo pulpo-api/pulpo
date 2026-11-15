@@ -374,6 +374,7 @@ fn request_of(item: &Value, warnings: &mut Vec<String>, at: &str) -> Option<Http
         graphql: None,
         messages: Vec::new(),
         grpc: None,
+        soap: None,
         disabled_params: params_of("query", |i| {
             i.get("disabled").and_then(|d| d.as_bool()).unwrap_or(false)
         }),

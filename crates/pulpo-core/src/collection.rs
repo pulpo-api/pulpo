@@ -332,6 +332,9 @@ struct RequestFileV1 {
     /// gRPC: method and `.proto` files.
     #[serde(default)]
     grpc: Option<crate::grpc::GrpcTarget>,
+    /// SOAP: WSDL and operation.
+    #[serde(default)]
+    soap: Option<crate::soap::SoapTarget>,
 }
 
 /// GraphQL variables of a request live next to it, as JSON.
@@ -583,7 +586,10 @@ fn request_yaml(entry: &RequestEntry, body: Option<BodyKind>) -> String {
     out.push_str(&format!("name: {}\n", quote(&entry.name)));
     let protocol = protocol_of(entry);
     out.push_str(&format!("protocol: {}\n", quote(protocol.as_str())));
-    if matches!(protocol, Protocol::Http | Protocol::Graphql | Protocol::Sse) {
+    if matches!(
+        protocol,
+        Protocol::Http | Protocol::Graphql | Protocol::Sse | Protocol::Soap
+    ) {
         out.push_str(&format!(
             "method: {}\n",
             quote(&entry.request.method.to_string())
@@ -636,6 +642,11 @@ fn request_yaml(entry: &RequestEntry, body: Option<BodyKind>) -> String {
             out.push_str(&format!("operationName: {}\n", quote(name)));
         }
     }
+    if let Some(s) = &entry.request.soap {
+        out.push_str("soap:\n");
+        out.push_str(&format!("  wsdl: {}\n", quote(&s.wsdl)));
+        out.push_str(&format!("  operation: {}\n", quote(&s.operation)));
+    }
     if let Some(g) = &entry.request.grpc {
         out.push_str("grpc:\n");
         out.push_str(&format!("  method: {}\n", quote(&g.method)));
@@ -666,6 +677,9 @@ pub(crate) fn protocol_of(entry: &RequestEntry) -> Protocol {
     if crate::grpc::is_grpc_url(&entry.request.url) {
         return Protocol::Grpc;
     }
+    if entry.request.soap.is_some() {
+        return Protocol::Soap;
+    }
     let ws = crate::websocket::is_websocket_url(&entry.request.url);
     let stream = crate::sse::is_event_stream(&entry.request);
     let graphql = entry.request.graphql.is_some();
@@ -678,7 +692,7 @@ pub(crate) fn protocol_of(entry: &RequestEntry) -> Protocol {
         }
         Protocol::Http | Protocol::Websocket | Protocol::Sse if graphql => Protocol::Graphql,
         Protocol::Graphql if !graphql => Protocol::Http,
-        Protocol::Websocket | Protocol::Sse | Protocol::Grpc => Protocol::Http,
+        Protocol::Websocket | Protocol::Sse | Protocol::Grpc | Protocol::Soap => Protocol::Http,
         p => p,
     }
 }
@@ -1152,6 +1166,7 @@ fn load_request_file(root: &Path, path: &Path) -> Result<RequestEntry, Collectio
         }
         (Protocol::Graphql, method) => method.unwrap_or(HttpMethod::Post),
         (Protocol::Sse, method) => method.unwrap_or(HttpMethod::Get),
+        (Protocol::Soap, method) => method.unwrap_or(HttpMethod::Post),
         (_, _) => HttpMethod::Get,
     };
     let invalid = |why: &str| CollectionError::InvalidFile(format!("{}: {why}", path.display()));
@@ -1249,6 +1264,7 @@ fn load_request_file(root: &Path, path: &Path) -> Result<RequestEntry, Collectio
             graphql,
             messages: file.messages,
             grpc: file.grpc,
+            soap: file.soap,
         },
         scripts: read_scripts(path, &stem_of(path))?,
     })
@@ -1498,6 +1514,7 @@ mod tests {
                 graphql: None,
                 messages: Vec::new(),
                 grpc: None,
+                soap: None,
                 disabled_params: vec![Param::new("debug", "true")],
                 path_params: vec![Param::new("tenant", "{{tenantId}}")],
                 auth: Some(Auth::Bearer {

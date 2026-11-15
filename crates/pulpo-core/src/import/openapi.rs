@@ -675,6 +675,7 @@ pub(super) fn document(doc: &Value) -> Result<ImportPlan, ImportError> {
                         graphql: None,
                         messages: Vec::new(),
                         grpc: None,
+                        soap: None,
                         disabled_params: Vec::new(),
                         path_params: Vec::new(),
                         auth,

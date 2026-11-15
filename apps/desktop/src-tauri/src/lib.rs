@@ -186,6 +186,16 @@ fn ws_close(sockets: tauri::State<'_, Sockets>, id: String) -> Result<(), String
     Ok(())
 }
 
+/// The SOAP operations of a WSDL (a workspace file or a URL), with sample envelopes.
+#[tauri::command]
+async fn soap_operations(
+    root: String,
+    wsdl: String,
+) -> Result<Vec<pulpo_core::soap::SoapOperation>, String> {
+    let text = pulpo_core::soap::load(Path::new(&root), &wsdl).await?;
+    pulpo_core::soap::operations(&text)
+}
+
 /// The methods of a gRPC request's server (reflection) or `.proto` files.
 #[tauri::command]
 async fn grpc_schema(
@@ -1143,6 +1153,7 @@ pub fn run() {
             sse_listen,
             sse_stop,
             grpc_schema,
+            soap_operations,
             flow_usage,
             run_flow,
             scan_contracts,

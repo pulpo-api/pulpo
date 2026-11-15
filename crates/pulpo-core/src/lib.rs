@@ -42,6 +42,7 @@ pub mod run;
 pub mod script;
 pub mod signing;
 pub mod snapshot;
+pub mod soap;
 pub mod sse;
 pub mod sync;
 mod timing;

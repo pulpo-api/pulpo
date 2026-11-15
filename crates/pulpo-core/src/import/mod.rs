@@ -71,6 +71,8 @@ pub enum ImportFormat {
     HttpFile,
     /// Endpoints read from source code (Spring, NestJS, Express, FastAPI, Next.js, Nuxt).
     Code,
+    /// SOAP operations of a WSDL.
+    Wsdl,
 }
 
 impl ImportFormat {
@@ -86,6 +88,7 @@ impl ImportFormat {
             ImportFormat::Har => "HAR file",
             ImportFormat::HttpFile => ".http file",
             ImportFormat::Code => "source code",
+            ImportFormat::Wsdl => "WSDL",
         }
     }
 }
@@ -161,6 +164,13 @@ pub fn parse_file(path: &Path) -> Result<ImportPlan, ImportError> {
     let text = std::fs::read_to_string(path)
         .map_err(|e| ImportError::Invalid(format!("{}: {e}", path.display())))?;
     let trimmed = text.trim_start_matches('\u{feff}').trim();
+    if trimmed.starts_with('<') && crate::soap::is_wsdl(trimmed) {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        return crate::soap::plan(trimmed, &name).map_err(ImportError::Invalid);
+    }
     let value = if trimmed.starts_with("curl") {
         None
     } else if trimmed.starts_with('{') {
@@ -344,6 +354,8 @@ fn write_nodes(
                 let mut request = request.clone();
                 let protocol = if request.promote_graphql() {
                     Protocol::Graphql
+                } else if request.soap.is_some() {
+                    Protocol::Soap
                 } else {
                     Protocol::Http
                 };

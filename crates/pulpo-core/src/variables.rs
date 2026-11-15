@@ -126,6 +126,7 @@ pub fn resolve_request(
             variables: resolve_text(&g.variables, vars, &mut missing),
             operation_name: g.operation_name.clone(),
         }),
+        soap: request.soap.clone(),
         grpc: request.grpc.as_ref().map(|g| crate::grpc::GrpcTarget {
             method: g.method.clone(),
             proto_files: g.proto_files.clone(),

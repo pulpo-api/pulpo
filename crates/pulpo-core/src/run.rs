@@ -565,7 +565,12 @@ pub async fn run_in(
     };
     if !matches!(
         entry.protocol,
-        Protocol::Http | Protocol::Graphql | Protocol::Websocket | Protocol::Sse | Protocol::Grpc
+        Protocol::Http
+            | Protocol::Graphql
+            | Protocol::Websocket
+            | Protocol::Sse
+            | Protocol::Grpc
+            | Protocol::Soap
     ) {
         report.error = Some(SendError::Other(format!(
             "{} requests arrive in phase 4",
