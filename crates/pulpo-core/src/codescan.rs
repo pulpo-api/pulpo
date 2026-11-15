@@ -360,6 +360,7 @@ fn spring(file: &str, text: &str, out: &mut Vec<Endpoint>) {
         let signature = &decl[..sig_end];
         // Strip annotations to find `name(`.
         let mut plain = String::new();
+        let mut params_at = None;
         let mut i = 0;
         let sbytes = signature.as_bytes();
         while i < signature.len() {
@@ -376,6 +377,9 @@ fn spring(file: &str, text: &str, out: &mut Vec<Endpoint>) {
                     continue;
                 }
             }
+            if sbytes[i] == b'(' && params_at.is_none() {
+                params_at = Some(i);
+            }
             plain.push(sbytes[i] as char);
             i += 1;
         }
@@ -384,7 +388,6 @@ fn spring(file: &str, text: &str, out: &mut Vec<Endpoint>) {
             .captures(&plain)
             .map(|c| c[1].to_string())
             .unwrap_or_default();
-        let params_at = signature.find('(');
         let params = params_at
             .and_then(|p| balanced(signature, p))
             .map(|(_, p)| p.to_string())
@@ -1008,6 +1011,20 @@ fn base_url(module: &Path, framework: &str) -> String {
             .and_then(|r| r.captures(text))
             .map(|c| c[1].to_string())
     };
+    // Outside Spring, the port of the `.env` files wins over the default in the code.
+    if framework != "spring" {
+        let env_port = [".env", ".env.local", ".env.development", ".env.example"]
+            .iter()
+            .find_map(|f| {
+                port_in(
+                    &read(module.join(f)),
+                    r"(?m)^\s*(?:export\s+)?PORT\s*=\s*['\x22]?(\d{2,5})",
+                )
+            });
+        if let Some(port) = env_port {
+            return format!("http://localhost:{port}");
+        }
+    }
     match framework {
         "spring" => {
             let resources = module.join("src/main/resources");
@@ -1385,7 +1402,7 @@ public class AccountConsentsController {
         write(
             dir.path(),
             "pay/src/main/java/x/MethodsController.java",
-            "@RestController\n@RequestMapping(\"/methods\")\nclass MethodsController {\n  @GetMapping\n  @Operation(summary = \"First\")\n  List<X> list() { return null; }\n  @PutMapping\n  @Operation(summary = \"Second\")\n  void replace(@RequestBody X x) {}\n}\n",
+            "@RestController\n@RequestMapping(\"/methods\")\nclass MethodsController {\n  @GetMapping\n  @Operation(summary = \"First\")\n  List<X> list() { return null; }\n  @PutMapping\n  @Operation(summary = \"Second\")\n  void replace(@RequestBody X x, @RequestParam String code) {}\n}\n",
         );
         let m = &find_modules(dir.path())[0];
         let names: Vec<(String, String)> = m
@@ -1400,6 +1417,8 @@ public class AccountConsentsController {
                 ("PUT".into(), "Second".into())
             ]
         );
+        assert_eq!(m.endpoints[1].query, vec!["code".to_string()]);
+        assert!(m.endpoints[1].body);
     }
 
     #[test]
@@ -1414,6 +1433,12 @@ public class AccountConsentsController {
         let m = &modules[0];
         assert_eq!(m.framework, "express");
         assert_eq!(m.base_url, "http://localhost:4100");
+        write(
+            r,
+            "svc/.env.example",
+            "NODE_ENV=dev\nPORT=3333\nDB_PORT=5432\n",
+        );
+        assert_eq!(find_modules(r)[0].base_url, "http://localhost:3333");
         let e: Vec<(String, String, String, String)> = m
             .endpoints
             .iter()
