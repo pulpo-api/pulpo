@@ -33,9 +33,10 @@ COMMANDS:
                Postman environment, an OpenAPI 3 document, a HAR or .http file
                or a curl command (use - to read it from stdin). For Bruno, give
                its bruno.json.
-    export <postman|openapi|http> [FOLDER] [-w DIR] [-o FILE]
+    export <postman|openapi|http|html> [FOLDER] [-w DIR] [-o FILE]
                Export the workspace (or one folder) as a Postman v2.1
-               collection, an OpenAPI 3 document or a .http file. Prints it,
+               collection, an OpenAPI 3 document, a .http file or HTML
+               documentation (one page, ready for GitHub Pages). Prints it,
                or writes FILE.
     diff [FROM] [TO] [-w DIR] [--markdown] [--exit-code]
                What changed in the collection between two commits, branches
@@ -907,7 +908,7 @@ fn run_diff(args: &[String]) -> ExitCode {
 
 fn run_export(args: &[String]) -> ExitCode {
     const USAGE: &str =
-        "export: expected <postman|openapi|http> [FOLDER] [-w DIR] [-o FILE] or env <ENV> [-w DIR] [-o FILE]";
+        "export: expected <postman|openapi|http|html> [FOLDER] [-w DIR] [-o FILE] or env <ENV> [-w DIR] [-o FILE]";
     let Some(kind) = args.first() else {
         return usage_error(USAGE);
     };

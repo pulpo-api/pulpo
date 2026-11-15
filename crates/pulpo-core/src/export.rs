@@ -15,6 +15,8 @@ pub enum ExportFormat {
     Postman,
     OpenApi,
     Http,
+    /// Documentation: one self-contained HTML page.
+    Html,
 }
 
 impl ExportFormat {
@@ -23,6 +25,7 @@ impl ExportFormat {
             "postman" => Some(ExportFormat::Postman),
             "openapi" | "oas" => Some(ExportFormat::OpenApi),
             "http" | "rest" => Some(ExportFormat::Http),
+            "html" | "docs" => Some(ExportFormat::Html),
             _ => None,
         }
     }
@@ -32,6 +35,7 @@ impl ExportFormat {
             ExportFormat::Postman => "postman_collection.json",
             ExportFormat::OpenApi => "openapi.yaml",
             ExportFormat::Http => "http",
+            ExportFormat::Html => "html",
         }
     }
 }
@@ -48,14 +52,14 @@ pub struct Exported {
 
 /// What a folder carries down to the requests inside.
 #[derive(Clone, Default)]
-struct Inherited {
+pub(crate) struct Inherited {
     auth: Option<Auth>,
     headers: Vec<Header>,
     path: Vec<String>,
 }
 
 impl Inherited {
-    fn enter(&self, name: &str, auth: &Option<Auth>, headers: &[Header]) -> Inherited {
+    pub(crate) fn enter(&self, name: &str, auth: &Option<Auth>, headers: &[Header]) -> Inherited {
         let mut next = self.clone();
         if auth.is_some() {
             next.auth = auth.clone();
@@ -70,7 +74,7 @@ impl Inherited {
     }
 
     /// The request's auth and headers once the folders' are applied.
-    fn apply(&self, request: &HttpRequest) -> (Option<Auth>, Vec<Header>) {
+    pub(crate) fn apply(&self, request: &HttpRequest) -> (Option<Auth>, Vec<Header>) {
         let auth = request.auth.clone().or_else(|| self.auth.clone());
         let mut headers: Vec<Header> = self
             .headers
@@ -207,6 +211,12 @@ pub fn export(
             top.auth = root_auth.or(top.auth);
             top.headers.extend(root_headers);
             openapi(root, &name, &nodes, &top, &mut count, &mut warnings)?
+        }
+        ExportFormat::Html => {
+            let mut top = inherited.clone();
+            top.auth = root_auth.or(top.auth);
+            top.headers.extend(root_headers);
+            crate::docs::render(root, &name, &nodes, &top, &mut count)
         }
         ExportFormat::Http => {
             let mut top = inherited.clone();

@@ -396,7 +396,7 @@ export interface Cookie {
   sameSite: string | null;
 }
 
-export type ExportFormat = "postman" | "openApi" | "http";
+export type ExportFormat = "postman" | "openApi" | "http" | "html";
 
 export interface Contract {
   path: string;

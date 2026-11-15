@@ -19,6 +19,7 @@ pub mod contract;
 pub mod cookies;
 pub mod data;
 pub mod diff;
+pub mod docs;
 pub mod environment;
 pub mod examples;
 pub mod export;

@@ -17,6 +17,11 @@ const FORMATS: { value: ExportFormat; label: string; hint: string }[] = [
   { value: "postman", label: "Postman v2.1", hint: "Folders, auth, scripts and examples. Also opens in Insomnia and Bruno." },
   { value: "openApi", label: "OpenAPI 3", hint: "Paths, parameters, bodies and security, grouped by folder." },
   { value: "http", label: ".http file", hint: "For the VS Code REST Client and JetBrains HTTP Client." },
+  {
+    value: "html",
+    label: "HTML documentation",
+    hint: "One page with every request, its tests and saved responses; ready for GitHub Pages. Variable values are left out.",
+  },
 ];
 
 async function load() {
