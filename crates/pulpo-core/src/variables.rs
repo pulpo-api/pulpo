@@ -54,7 +54,21 @@ fn iso_timestamp(millis: u128) -> String {
 }
 
 /// Replaces every `{{name}}` in `text`. Unknown names are left untouched and reported.
+/// A value may use other variables (`base = {{host}}/v1`); a name that refers back to
+/// itself is left untouched and reported, like an unknown one.
 pub fn resolve_text(text: &str, vars: &Variables, missing: &mut BTreeSet<String>) -> String {
+    resolve_nested(text, vars, missing, &mut Vec::new())
+}
+
+/// How deep values may refer to other values before Pulpo stops following them.
+const MAX_DEPTH: usize = 16;
+
+fn resolve_nested(
+    text: &str,
+    vars: &Variables,
+    missing: &mut BTreeSet<String>,
+    using: &mut Vec<String>,
+) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(start) = rest.find("{{") {
@@ -63,7 +77,20 @@ pub fn resolve_text(text: &str, vars: &Variables, missing: &mut BTreeSet<String>
         match after.find("}}") {
             Some(end) => {
                 let name = after[..end].trim();
-                match vars.get(name).cloned().or_else(|| dynamic(name)) {
+                let looping = using.iter().any(|n| n == name) || using.len() >= MAX_DEPTH;
+                let value = match vars.get(name) {
+                    Some(_) if looping => None,
+                    // `name = {{name}}` keeps the variable as written (code generation does it).
+                    Some(value) if value.contains("{{") && *value != format!("{{{{{name}}}}}") => {
+                        using.push(name.to_string());
+                        let inner = resolve_nested(value, vars, missing, using);
+                        using.pop();
+                        Some(inner)
+                    }
+                    Some(value) => Some(value.clone()),
+                    None => dynamic(name),
+                };
+                match value {
                     Some(value) if !name.is_empty() => out.push_str(&value),
                     _ => {
                         if !name.is_empty() {
@@ -289,6 +316,39 @@ mod tests {
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect()
+    }
+
+    #[test]
+    fn values_can_use_other_variables() {
+        let v = vars(&[
+            ("host", "api.example.com"),
+            ("base", "https://{{host}}/v1"),
+            ("users", "{{base}}/users"),
+            ("auth", "Bearer {{token}}"),
+        ]);
+        let mut missing = BTreeSet::new();
+        assert_eq!(
+            resolve_text("{{users}}/1", &v, &mut missing),
+            "https://api.example.com/v1/users/1"
+        );
+        assert!(missing.is_empty());
+        assert_eq!(
+            resolve_text("{{auth}}", &v, &mut missing),
+            "Bearer {{token}}"
+        );
+        assert_eq!(missing, BTreeSet::from(["token".to_string()]));
+    }
+
+    #[test]
+    fn values_that_refer_to_themselves_are_left_alone() {
+        let v = vars(&[("a", "x{{b}}"), ("b", "y{{a}}"), ("self", "{{self}}!")]);
+        let mut missing = BTreeSet::new();
+        assert_eq!(resolve_text("{{a}}", &v, &mut missing), "xy{{a}}");
+        assert_eq!(resolve_text("{{self}}", &v, &mut missing), "{{self}}!");
+        assert_eq!(
+            missing,
+            BTreeSet::from(["a".to_string(), "self".to_string()])
+        );
     }
 
     #[test]

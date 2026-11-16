@@ -18,11 +18,23 @@ export const DYNAMIC_DESCRIPTIONS: Record<string, string> = {
   $randomInt: "Dynamic: a random integer from 0 to 1000",
 };
 
-export function resolveText(text: string, vars: Vars, missing: Set<string>, preview = false): string {
+/** How deep values may refer to other values before Pulpo stops following them. */
+const MAX_DEPTH = 16;
+
+/** A value may use other variables (`base = {{host}}/v1`); a name that refers back to
+ * itself is left untouched and reported, like an unknown one. */
+export function resolveText(text: string, vars: Vars, missing: Set<string>, preview = false, using: string[] = []): string {
   return text.replace(/\{\{([^{}]*)\}\}/g, (whole, raw: string) => {
     const name = raw.trim();
     if (!name) return whole;
-    if (name in vars) return vars[name];
+    if (name in vars) {
+      if (using.includes(name) || using.length >= MAX_DEPTH) {
+        missing.add(name);
+        return whole;
+      }
+      const value = vars[name];
+      return value.includes("{{") ? resolveText(value, vars, missing, preview, [...using, name]) : value;
+    }
     if (name in DYNAMIC) return preview ? `<${name}>` : DYNAMIC[name]();
     missing.add(name);
     return whole;

@@ -81,6 +81,10 @@ const tooltip = hoverTooltip((view, pos) => {
           const value = dom.appendChild(document.createElement("code"));
           value.textContent = info.value.length > 200 ? `${info.value.slice(0, 200)}…` : info.value;
         }
+        if (info.resolved !== undefined && info.resolved !== info.value) {
+          const resolved = dom.appendChild(document.createElement("code"));
+          resolved.textContent = `→ ${info.resolved.length > 200 ? `${info.resolved.slice(0, 200)}…` : info.resolved}`;
+        }
         const detail = dom.appendChild(document.createElement("div"));
         detail.className = "cm-var-tooltip-detail";
         detail.textContent = info.detail;

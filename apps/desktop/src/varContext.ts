@@ -1,6 +1,6 @@
 import { shallowRef } from "vue";
 import type { Variable } from "./workspace";
-import { DYNAMIC_DESCRIPTIONS } from "./variables";
+import { DYNAMIC_DESCRIPTIONS, resolveText } from "./variables";
 
 /** Where a `{{variable}}` gets its value. */
 export type VarSource = "local" | "environment" | "secret" | "dynamic" | "missing";
@@ -10,6 +10,8 @@ export interface VarInfo {
   source: VarSource;
   /** What to show; secrets are never shown. */
   value: string;
+  /** The value with the variables it uses filled in, when it uses any. */
+  resolved?: string;
   /** One line for the tooltip and the autocomplete list. */
   detail: string;
 }
@@ -22,11 +24,21 @@ export const varContext = shallowRef<{ environment: string; variables: Variable[
   local: {},
 });
 
+/** The value of a variable that uses others (`{{host}}/v1`), as it will be sent; secrets stay hidden. */
+function resolvedValue(value: string): string | undefined {
+  if (!value.includes("{{")) return undefined;
+  const { variables, local } = varContext.value;
+  const vars: Record<string, string> = {};
+  for (const v of variables) vars[v.name] = v.secret ? "••••••" : v.value;
+  Object.assign(vars, local);
+  return resolveText(value, vars, new Set(), true);
+}
+
 export function lookup(name: string): VarInfo {
   const { environment, variables, local } = varContext.value;
   const env = environment || "no environment";
   if (name in local) {
-    return { name, source: "local", value: local[name], detail: `Set by a script (local to this machine, ${env})` };
+    return { name, source: "local", value: local[name], resolved: resolvedValue(local[name]), detail: `Set by a script (local to this machine, ${env})` };
   }
   const variable = variables.find((v) => v.name === name);
   if (variable?.secret) {
@@ -34,7 +46,7 @@ export function lookup(name: string): VarInfo {
       ? { name, source: "secret", value: "••••••", detail: `Secret of ${env}, kept in the OS keychain` }
       : { name, source: "missing", value: "", detail: `Secret of ${env} without a value: set it in ⚙` };
   }
-  if (variable) return { name, source: "environment", value: variable.value, detail: `From ${env}` };
+  if (variable) return { name, source: "environment", value: variable.value, resolved: resolvedValue(variable.value), detail: `From ${env}` };
   if (name in DYNAMIC_DESCRIPTIONS) {
     return { name, source: "dynamic", value: "", detail: DYNAMIC_DESCRIPTIONS[name] };
   }
